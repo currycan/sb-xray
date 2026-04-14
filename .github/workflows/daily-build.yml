@@ -12,28 +12,43 @@ on:
         default: "false"
         type: boolean
 
+concurrency:
+  group: daily-build
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   check-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Check component versions
         id: versions
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
+          # 版本格式校验 (semver-like: 数字.数字.数字，可选预发布后缀)
+          validate_version() {
+            if [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?$ ]]; then
+              echo "$1"
+            else
+              echo ""
+            fi
+          }
+
           # 获取 latest release tag (去 v 前缀)
           get_release() {
             local tag
             tag=$(gh api "repos/$1/releases/latest" --jq '.tag_name' 2>/dev/null || echo "")
-            echo "${tag#v}"
+            validate_version "${tag#v}"
           }
 
           # 获取 latest stable tag (排除 rc/beta/alpha，去 v 前缀)
@@ -41,14 +56,14 @@ jobs:
             local tag
             tag=$(gh api "repos/$1/tags?per_page=100" \
               --jq '[.[] | select(.name | test("rc|beta|alpha") | not)] | .[0].name' 2>/dev/null || echo "")
-            echo "${tag#v}"
+            validate_version "${tag#v}"
           }
 
           # 获取 latest tag (去 v 前缀)
           get_tag() {
             local tag
             tag=$(gh api "repos/$1/tags?per_page=1" --jq '.[0].name' 2>/dev/null || echo "")
-            echo "${tag#v}"
+            validate_version "${tag#v}"
           }
 
           echo "::group::Fetching latest versions"
@@ -92,7 +107,7 @@ jobs:
               xray: $xray
             }')
 
-          # 检查是否有空版本 (API 失败)
+          # 检查是否有空版本 (API 失败或格式校验不通过)
           EMPTY_KEYS=$(echo "$NEW_VERSIONS" | jq -r 'to_entries[] | select(.value == "") | .key')
           if [ -n "$EMPTY_KEYS" ]; then
             echo "::warning::Failed to fetch versions for: $EMPTY_KEYS"
@@ -115,41 +130,47 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # 输出版本用于构建
-          echo "new_versions<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$NEW_VERSIONS" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          # 判断是否需要构建
+          FORCE="${{ inputs.force_build }}"
+          if [ "$DIFF" != "" ] || [ "$FORCE" = "true" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
 
-          # 输出各 build-arg
-          echo "shoutrrr=$(echo "$NEW_VERSIONS" | jq -r .shoutrrr)" >> "$GITHUB_OUTPUT"
-          echo "mihomo=$(echo "$NEW_VERSIONS" | jq -r .mihomo)" >> "$GITHUB_OUTPUT"
-          echo "http_meta=$(echo "$NEW_VERSIONS" | jq -r .http_meta)" >> "$GITHUB_OUTPUT"
-          echo "sub_front=$(echo "$NEW_VERSIONS" | jq -r .sub_store_frontend)" >> "$GITHUB_OUTPUT"
-          echo "sub_back=$(echo "$NEW_VERSIONS" | jq -r .sub_store_backend)" >> "$GITHUB_OUTPUT"
-          echo "s_ui=$(echo "$NEW_VERSIONS" | jq -r .s_ui)" >> "$GITHUB_OUTPUT"
-          echo "dufs=$(echo "$NEW_VERSIONS" | jq -r .dufs)" >> "$GITHUB_OUTPUT"
-          echo "cloudflared=$(echo "$NEW_VERSIONS" | jq -r .cloudflared)" >> "$GITHUB_OUTPUT"
-          echo "x_ui=$(echo "$NEW_VERSIONS" | jq -r .x_ui)" >> "$GITHUB_OUTPUT"
-          echo "sing_box=$(echo "$NEW_VERSIONS" | jq -r .sing_box)" >> "$GITHUB_OUTPUT"
-          echo "xray=$(echo "$NEW_VERSIONS" | jq -r .xray)" >> "$GITHUB_OUTPUT"
+          # 写入版本 JSON 到临时文件，避免表达式注入
+          echo "$NEW_VERSIONS" > /tmp/new_versions.json
+
+          # 输出各 build-arg (通过 jq 从文件读取，安全)
+          echo "shoutrrr=$(jq -r .shoutrrr /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "mihomo=$(jq -r .mihomo /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "http_meta=$(jq -r .http_meta /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "sub_front=$(jq -r .sub_store_frontend /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "sub_back=$(jq -r .sub_store_backend /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "s_ui=$(jq -r .s_ui /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "dufs=$(jq -r .dufs /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "cloudflared=$(jq -r .cloudflared /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "x_ui=$(jq -r .x_ui /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "sing_box=$(jq -r .sing_box /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "xray=$(jq -r .xray /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
-        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        if: steps.versions.outputs.should_build == 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        if: steps.versions.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        if: steps.versions.outputs.should_build == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
-        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        if: steps.versions.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -171,10 +192,11 @@ jobs:
             SING_BOX_VERSION=${{ steps.versions.outputs.sing_box }}
             XRAY_VERSION=${{ steps.versions.outputs.xray }}
 
+      # 仅在版本变化时更新 versions.json (force_build 不更新)
       - name: Update versions.json
         if: steps.versions.outputs.changed == 'true'
         run: |
-          echo '${{ steps.versions.outputs.new_versions }}' | jq -S . > versions.json
+          jq -S . /tmp/new_versions.json > versions.json
 
       - name: Commit updated versions
         if: steps.versions.outputs.changed == 'true'
@@ -185,9 +207,11 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
+            # 生成变更摘要到文件，避免注入
+            diff <(git show HEAD:versions.json | jq -S .) <(jq -S . versions.json) \
+              | grep '^[<>]' | sed 's/^</  -/;s/^>/  +/' > /tmp/diff_summary.txt || true
             git commit -m "chore: bump component versions
-
-          $(diff <(git show HEAD:versions.json | jq -S .) <(jq -S . versions.json) | grep '^[<>]' | sed 's/^</  -/;s/^>/  +/' || true)
+          $(cat /tmp/diff_summary.txt)
 
           🤖 Generated by GitHub Actions"
             git push
