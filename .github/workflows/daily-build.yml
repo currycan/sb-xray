@@ -1,0 +1,194 @@
+name: Daily Version Check & Build
+
+on:
+  schedule:
+    # 每天 UTC 2:00 (北京时间 10:00) 执行
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Force build even if no version changes"
+        required: false
+        default: "false"
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check component versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # 获取 latest release tag (去 v 前缀)
+          get_release() {
+            local tag
+            tag=$(gh api "repos/$1/releases/latest" --jq '.tag_name' 2>/dev/null || echo "")
+            echo "${tag#v}"
+          }
+
+          # 获取 latest stable tag (排除 rc/beta/alpha，去 v 前缀)
+          get_stable_tag() {
+            local tag
+            tag=$(gh api "repos/$1/tags?per_page=100" \
+              --jq '[.[] | select(.name | test("rc|beta|alpha") | not)] | .[0].name' 2>/dev/null || echo "")
+            echo "${tag#v}"
+          }
+
+          # 获取 latest tag (去 v 前缀)
+          get_tag() {
+            local tag
+            tag=$(gh api "repos/$1/tags?per_page=1" --jq '.[0].name' 2>/dev/null || echo "")
+            echo "${tag#v}"
+          }
+
+          echo "::group::Fetching latest versions"
+          SHOUTRRR=$(get_release "containrrr/shoutrrr")
+          MIHOMO=$(get_release "MetaCubeX/mihomo")
+          HTTP_META=$(get_release "xream/http-meta")
+          SUB_FRONT=$(get_release "sub-store-org/Sub-Store-Front-End")
+          SUB_BACK=$(get_release "sub-store-org/Sub-Store")
+          S_UI=$(get_release "alireza0/s-ui")
+          DUFS=$(get_stable_tag "sigoden/dufs")
+          CLOUDFLARED=$(get_stable_tag "cloudflare/cloudflared")
+          X_UI=$(get_stable_tag "MHSanaei/3x-ui")
+          SING_BOX=$(get_stable_tag "SagerNet/sing-box")
+          XRAY=$(get_tag "XTLS/Xray-core")
+          echo "::endgroup::"
+
+          # 构建新版本 JSON
+          NEW_VERSIONS=$(jq -n \
+            --arg shoutrrr "$SHOUTRRR" \
+            --arg mihomo "$MIHOMO" \
+            --arg http_meta "$HTTP_META" \
+            --arg sub_store_frontend "$SUB_FRONT" \
+            --arg sub_store_backend "$SUB_BACK" \
+            --arg s_ui "$S_UI" \
+            --arg dufs "$DUFS" \
+            --arg cloudflared "$CLOUDFLARED" \
+            --arg x_ui "$X_UI" \
+            --arg sing_box "$SING_BOX" \
+            --arg xray "$XRAY" \
+            '{
+              shoutrrr: $shoutrrr,
+              mihomo: $mihomo,
+              http_meta: $http_meta,
+              sub_store_frontend: $sub_store_frontend,
+              sub_store_backend: $sub_store_backend,
+              s_ui: $s_ui,
+              dufs: $dufs,
+              cloudflared: $cloudflared,
+              x_ui: $x_ui,
+              sing_box: $sing_box,
+              xray: $xray
+            }')
+
+          # 检查是否有空版本 (API 失败)
+          EMPTY_KEYS=$(echo "$NEW_VERSIONS" | jq -r 'to_entries[] | select(.value == "") | .key')
+          if [ -n "$EMPTY_KEYS" ]; then
+            echo "::warning::Failed to fetch versions for: $EMPTY_KEYS"
+            # 用旧版本填充失败的组件
+            for key in $EMPTY_KEYS; do
+              OLD_VAL=$(jq -r ".$key" versions.json)
+              NEW_VERSIONS=$(echo "$NEW_VERSIONS" | jq --arg k "$key" --arg v "$OLD_VAL" '.[$k] = $v')
+            done
+          fi
+
+          # 对比差异
+          DIFF=$(diff <(jq -S . versions.json) <(echo "$NEW_VERSIONS" | jq -S .) || true)
+
+          if [ -n "$DIFF" ]; then
+            echo "::notice::Version changes detected"
+            echo "$DIFF"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::All versions up to date"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # 输出版本用于构建
+          echo "new_versions<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NEW_VERSIONS" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          # 输出各 build-arg
+          echo "shoutrrr=$(echo "$NEW_VERSIONS" | jq -r .shoutrrr)" >> "$GITHUB_OUTPUT"
+          echo "mihomo=$(echo "$NEW_VERSIONS" | jq -r .mihomo)" >> "$GITHUB_OUTPUT"
+          echo "http_meta=$(echo "$NEW_VERSIONS" | jq -r .http_meta)" >> "$GITHUB_OUTPUT"
+          echo "sub_front=$(echo "$NEW_VERSIONS" | jq -r .sub_store_frontend)" >> "$GITHUB_OUTPUT"
+          echo "sub_back=$(echo "$NEW_VERSIONS" | jq -r .sub_store_backend)" >> "$GITHUB_OUTPUT"
+          echo "s_ui=$(echo "$NEW_VERSIONS" | jq -r .s_ui)" >> "$GITHUB_OUTPUT"
+          echo "dufs=$(echo "$NEW_VERSIONS" | jq -r .dufs)" >> "$GITHUB_OUTPUT"
+          echo "cloudflared=$(echo "$NEW_VERSIONS" | jq -r .cloudflared)" >> "$GITHUB_OUTPUT"
+          echo "x_ui=$(echo "$NEW_VERSIONS" | jq -r .x_ui)" >> "$GITHUB_OUTPUT"
+          echo "sing_box=$(echo "$NEW_VERSIONS" | jq -r .sing_box)" >> "$GITHUB_OUTPUT"
+          echo "xray=$(echo "$NEW_VERSIONS" | jq -r .xray)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        if: steps.versions.outputs.changed == 'true' || inputs.force_build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            currycan/sb-xray:${{ steps.versions.outputs.xray }}
+            currycan/sb-xray:latest
+          build-args: |
+            SHOUTRRR_VERSION=${{ steps.versions.outputs.shoutrrr }}
+            MIHOMO_VERSION=${{ steps.versions.outputs.mihomo }}
+            HTTP_META_VERSION=${{ steps.versions.outputs.http_meta }}
+            SUB_STORE_FRONTEND_VERSION=${{ steps.versions.outputs.sub_front }}
+            SUB_STORE_BACKEND_VERSION=${{ steps.versions.outputs.sub_back }}
+            SUI_VERSION=${{ steps.versions.outputs.s_ui }}
+            DUFS_VERSION=${{ steps.versions.outputs.dufs }}
+            CLOUDFLARED_VERSION=${{ steps.versions.outputs.cloudflared }}
+            XUI_VERSION=${{ steps.versions.outputs.x_ui }}
+            SING_BOX_VERSION=${{ steps.versions.outputs.sing_box }}
+            XRAY_VERSION=${{ steps.versions.outputs.xray }}
+
+      - name: Update versions.json
+        if: steps.versions.outputs.changed == 'true'
+        run: |
+          echo '${{ steps.versions.outputs.new_versions }}' | jq -S . > versions.json
+
+      - name: Commit updated versions
+        if: steps.versions.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: bump component versions
+
+          $(diff <(git show HEAD:versions.json | jq -S .) <(jq -S . versions.json) | grep '^[<>]' | sed 's/^</  -/;s/^>/  +/' || true)
+
+          🤖 Generated by GitHub Actions"
+            git push
+          fi
