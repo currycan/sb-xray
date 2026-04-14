@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+
+# Temporary files
+tmp/
+ag_output_*.txt
+
+# AI agent working directories
+.agents/
+.claude/
+.gemini/

@@ -1,0 +1,55 @@
+services:
+  sb-xray:
+    image: docker.io/currycan/sb-xray:latest
+    container_name: sb-xray
+    environment:
+      - DOMAIN=$domain
+      - CDNDOMAIN=$cdndomain
+      - DECODE=$code
+      - ACMESH_DEBUG=1
+      # zerossl/google
+      - ACMESH_SERVER_NAME=zerossl
+      - ACMESH_EAB_KID=$eab_kid  # 填入 Google EAB keyId
+      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key # 填入 Google EAB b64MacKey
+      - DEST_HOST=speed.cloudflare.com
+      - LISTENING_PORT=443
+      - DUFS_PATH_PREFIX=/myfiles
+      - XUI_WEBBASEPATH=3xadmin
+      # Gemini直连, true=直连, false=使用代理, 空=自动判断
+      - GEMINI_DIRECT=
+      #  ✈ 高速, 空=不添加额外节点后缀
+      - NODE_SUFFIX=
+      # ISP代理, US_ISP/LA_ISP/KR_ISP, 空=自动判断
+      - DEFAULT_ISP=
+      # # 配置provider，多个provider用换行分隔
+      # - |
+      #   PROVIDERS=第一个|https://<host>/api/v1/client/subscribe?token=c02d1e8f9cd19dcae0f146c4ed71541a&flag=clash.meta|优
+    ports:
+      - '443:443/tcp'
+      - '443:443/udp' # use UDP for usage of HTTP/3
+    volumes:
+      - ./pki:/pki
+      - ./acmecerts:/acmecerts
+      - ./.envs:/.env
+      - ./sb-xray:/sb-xray
+      - ./x-ui:/etc/x-ui/
+      - ./x-ui:/x-ui/db
+      - ./s-ui:/s-ui/db
+      - ./sub-store:/sub-store/data
+      - ./nginx/http:/etc/nginx/conf.d
+      - ./nginx/tcp:/etc/nginx/stream.d
+      - ./nginx-dhparam:/etc/nginx/dhparam
+      - ./data:/data
+      - ./logs:/var/log
+      # - /lib/modules:/lib/modules:ro
+    restart: always
+    tty: true
+    network_mode: host
+    # cap_add:
+    #   - NET_ADMIN
+    #   - SYS_MODULE
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65536
+        hard: 65536

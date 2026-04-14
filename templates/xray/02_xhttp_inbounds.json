@@ -1,0 +1,49 @@
+{
+    "inbounds": [
+        {
+            "listen": "/dev/shm/udsxhttp.sock,0666",
+            "protocol": "vless",
+            "tag": "XHTTP_IN",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "${XRAY_UUID}",
+                        "level": 0,
+                        "email": "vless@xhttp.reality"
+                    }
+                ],
+                "decryption": "mlkem768x25519plus.native.600s.${XRAY_MLKEM768_SEED}"
+            },
+            "streamSettings": {
+                "network": "xhttp",
+                "xhttpSettings": {
+                    "host": "",
+                    "path": "/${XRAY_URL_PATH}-xhttp",
+                    "mode": "auto",
+                    "extra": {
+                        "noSSEHeader": true,
+                        "scMaxEachPostBytes": 1000000,
+                        "scMaxBufferedPosts": 30,
+                        "xPaddingBytes": "100-1000"
+                    }
+                },
+                "sockopt": {
+                    "tcpFastOpen": true,
+                    "acceptProxyProtocol": false,
+                    "tcpcongestion": "bbr",
+                    "tcpMptcp": true,
+                    "tcpNoDelay": true
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls"
+                ],
+                "metadataOnly": false,
+                "routeOnly": true
+            }
+        }
+    ]
+}

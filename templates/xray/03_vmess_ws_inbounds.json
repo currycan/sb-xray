@@ -1,0 +1,42 @@
+{
+    "inbounds": [
+        {
+            "listen": "/dev/shm/udsvmessws.sock,0666",
+            "protocol": "vmess",
+            "tag": "VMESS_WS",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "${XRAY_UUID}",
+                        "level": 0,
+                        "email": "vmess@ws.tls",
+                        "alterId": 0
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {
+                    "path": "/${XRAY_URL_PATH}-vmessws"
+                },
+                "sockopt": {
+                    "tcpFastOpen": true,
+                    "acceptProxyProtocol": false,
+                    "tcpcongestion": "bbr",
+                    "tcpMptcp": true,
+                    "tcpNoDelay": true
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls"
+                ],
+                "metadataOnly": false,
+                "routeOnly": true
+            }
+        }
+    ]
+}

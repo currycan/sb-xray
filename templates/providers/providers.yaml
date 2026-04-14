@@ -1,0 +1,21 @@
+# GIST_CODE env var must be set to your GitHub Gist ID for provider subscriptions
+proxy-providers:
+  AllOne:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/AllOne-Common", override: {additional-prefix: "[AllOne] ", skip-cert-verify: false, udp: true, up: 2500 Mbps, down: 2500 Mbps}}
+
+  Nice云:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/NiceYun", override: {additional-prefix: "[Nice云] ", additional-suffix: " super"}}
+
+  优速通:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/YouSuTong", override: {additional-prefix: "[优速通] ", additional-suffix: " super"}}
+
+  SsrDog:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/ssrdog", override: {additional-prefix: "[SsrDog] ", additional-suffix: " super"}}
+
+  NiceCloud: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/NiceCloud", override: {additional-prefix: "[NiceCloud] ", additional-suffix: " super"}}
+
+  星链:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/XingLian", override: {additional-prefix: "[星链] ", dialer-proxy: 链式前置}}
+
+  牛逼:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/NiuBi", override: {additional-prefix: "[牛逼] "}}
+
+  火烧云:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/HuoShaoYun", override: {additional-prefix: "[火烧云] ", additional-suffix: " good"}}
+
+  多宝:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/DuoBao", override: {additional-prefix: "[多宝] ", additional-suffix: " good"}}
+
+  火麒麟:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/HuoQiLin", override: {additional-prefix: "[火麒麟] "}}

@@ -1,0 +1,32 @@
+{
+    "inbounds": [
+        {
+            "type": "hysteria2",
+            "tag": "sing-box hysteria2",
+            "listen": "::",
+            "listen_port": ${PORT_HYSTERIA2},
+            "obfs": {
+                "type": "salamander",
+                "password": "${SB_UUID}"
+            },
+            "users": [
+                {
+                    "password": "${SB_UUID}"
+                }
+            ],
+            "ignore_client_bandwidth": false,
+            "masquerade": "https://${DEST_HOST}",
+            "tls": {
+                "enabled": true,
+                "server_name": "${DOMAIN}",
+                "alpn": [
+                    "h3"
+                ],
+                "min_version": "1.3",
+                "max_version": "1.3",
+                "certificate_path": "${SSL_PATH}/sb_xray_bundle.crt",
+                "key_path": "${SSL_PATH}/sb_xray_bundle.key"
+            }
+        }
+    ]
+}

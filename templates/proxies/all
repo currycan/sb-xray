@@ -1,0 +1,193 @@
+proxies:
+  - name: ${FLAG_PREFIX}Hysteria2 ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: hysteria2
+    server: ${DOMAIN}
+    port: ${PORT_HYSTERIA2}
+    sni: ${DOMAIN}
+    obfs: salamander
+    obfs-password: ${SB_UUID}
+    alpn:
+      - h3
+    up: 2500 Mbps
+    down: 2500 Mbps
+    password: ${SB_UUID}
+    skip-cert-verify: false
+
+  - name: ${FLAG_PREFIX}TUIC ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: tuic
+    server: ${DOMAIN}
+    port: ${PORT_TUIC}
+    uuid: ${SB_UUID}
+    password: ${SB_UUID}
+    alpn:
+      - h3
+    sni: ${DOMAIN}
+    reduce-rtt: true
+    request-timeout: 8000
+    udp-relay-mode: native
+    congestion-controller: bbr
+    skip-cert-verify: false
+    version: 5
+
+  - name: ${FLAG_PREFIX}AnyTLS ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: anytls
+    server: ${DOMAIN}
+    port: ${PORT_ANYTLS}
+    password: ${SB_UUID}
+    client-fingerprint: chrome
+    udp: true
+    idle-session-check-interval: 30
+    idle-session-timeout: 30
+    skip-cert-verify: false
+
+  - name: ${FLAG_PREFIX}Vmess ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: vmess
+    server: ${CDNDOMAIN}
+    port: ${LISTENING_PORT}
+    uuid: ${XRAY_UUID}
+    alterId: 0
+    cipher: auto
+    tls: true
+    client-fingerprint: chrome
+    alpn:
+      - h2
+    skip-cert-verify: false
+    network: ws
+    ws-opts:
+      headers:
+        Host: ${CDNDOMAIN}
+      path: /${XRAY_URL_PATH}-vmessws
+    servername: ${CDNDOMAIN}
+
+  - name: ${FLAG_PREFIX}Reality ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: vless
+    server: ${DOMAIN}
+    port: ${LISTENING_PORT}
+    uuid: ${XRAY_UUID}
+    tls: true
+    flow: xtls-rprx-vision
+    client-fingerprint: chrome
+    skip-cert-verify: false
+    reality-opts:
+      public-key: ${XRAY_REALITY_PUBLIC_KEY}
+      short-id: ${XRAY_REALITY_SHORTID}
+      _spider-x: /
+    network: tcp
+    servername: ${DEST_HOST}
+
+  - name: ${FLAG_PREFIX}Xhttp+Reality直连 ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: vless
+    server: ${DOMAIN}
+    port: ${LISTENING_PORT}
+    uuid: ${XRAY_UUID}
+    tls: true
+    client-fingerprint: chrome
+    skip-cert-verify: false
+    reality-opts:
+      public-key: ${XRAY_REALITY_PUBLIC_KEY}
+      short-id: ${XRAY_REALITY_SHORTID}
+    network: xhttp
+    xhttp-opts:
+      path: /${XRAY_URL_PATH}-xhttp
+      mode: auto
+      extra-opts:
+        host: ""
+        path: /${XRAY_URL_PATH}-xhttp
+        mode: auto
+        xPaddingBytes: "100-1000"
+    servername: ${DEST_HOST}
+    encryption: mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}
+
+  - name: ${FLAG_PREFIX}上行Xhttp+TLS+CDN下行Xhttp+Reality ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: vless
+    server: ${CDNDOMAIN}
+    port: ${LISTENING_PORT}
+    uuid: ${XRAY_UUID}
+    tls: true
+    client-fingerprint: chrome
+    alpn:
+      - h2
+    skip-cert-verify: false
+    network: xhttp
+    xhttp-opts:
+      headers:
+      path: /${XRAY_URL_PATH}-xhttp
+      mode: auto
+      extra-opts:
+        xPaddingBytes: "100-1000"
+        downloadSettings:
+          address: ${DOMAIN}
+          port: ${LISTENING_PORT}
+          network: xhttp
+          security: reality
+          realitySettings:
+            show: false
+            serverName: ${DEST_HOST}
+            fingerprint: chrome
+            publicKey: ${XRAY_REALITY_PUBLIC_KEY}
+            shortId: ${XRAY_REALITY_SHORTID}
+            spiderX: /
+          xhttpSettings:
+            host: ""
+            path: /${XRAY_URL_PATH}-xhttp
+            mode: auto
+    servername: ${CDNDOMAIN}
+    encryption: mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}
+
+  - name: ${FLAG_PREFIX}上行Xhttp+Reality下行Xhttp+TLS+CDN ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: vless
+    server: ${DOMAIN}
+    port: ${LISTENING_PORT}
+    uuid: ${XRAY_UUID}
+    tls: true
+    client-fingerprint: chrome
+    alpn:
+      - h2
+    skip-cert-verify: false
+    reality-opts:
+      public-key: ${XRAY_REALITY_PUBLIC_KEY}
+      short-id: ${XRAY_REALITY_SHORTID}
+    network: xhttp
+    xhttp-opts:
+      path: /${XRAY_URL_PATH}-xhttp
+      mode: auto
+      extra-opts:
+        xPaddingBytes: "100-1000"
+        downloadSettings:
+          address: ${DOMAIN}
+          port: ${LISTENING_PORT}
+          network: xhttp
+          security: tls
+          tlsSettings:
+            serverName: ${DEST_HOST}
+            alpn:
+              - h2
+            fingerprint: chrome
+          xhttpSettings:
+            host: ${DOMAIN}
+            path: /${XRAY_URL_PATH}-xhttp
+            mode: auto
+    servername: ${DEST_HOST}
+    encryption: mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}
+
+  - name: ${FLAG_PREFIX}Xhttp+TLS+CDN上下行不分离 ✈ ${NODE_NAME}${NODE_SUFFIX}
+    type: vless
+    server: ${CDNDOMAIN}
+    port: ${LISTENING_PORT}
+    uuid: ${XRAY_UUID}
+    tls: true
+    client-fingerprint: chrome
+    alpn:
+      - h2
+    skip-cert-verify: false
+    reality-opts:
+      public-key: ${XRAY_REALITY_PUBLIC_KEY}
+      short-id: ${XRAY_REALITY_SHORTID}
+    network: xhttp
+    xhttp-opts:
+      path: /${XRAY_URL_PATH}-xhttp
+      mode: auto
+      extra-opts:
+        xPaddingBytes: "100-1000"
+    servername: ${CDNDOMAIN}
+    encryption: mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}

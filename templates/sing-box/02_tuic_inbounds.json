@@ -1,0 +1,29 @@
+{
+    "inbounds": [
+        {
+            "type": "tuic",
+            "tag": "sing-box tuic",
+            "listen": "::",
+            "listen_port": ${PORT_TUIC},
+            "users": [
+                {
+                    "uuid": "${SB_UUID}",
+                    "password": "${SB_UUID}"
+                }
+            ],
+            "congestion_control": "bbr",
+            "zero_rtt_handshake": false,
+            "tls": {
+                "enabled": true,
+                "server_name": "${DOMAIN}",
+                "alpn": [
+                    "h3"
+                ],
+                "min_version": "1.3",
+                "max_version": "1.3",
+                "certificate_path": "${SSL_PATH}/sb_xray_bundle.crt",
+                "key_path": "${SSL_PATH}/sb_xray_bundle.key"
+            }
+        }
+    ]
+}

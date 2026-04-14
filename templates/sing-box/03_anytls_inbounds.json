@@ -1,0 +1,23 @@
+{
+    "inbounds": [
+        {
+            "type": "anytls",
+            "tag": "sing-box anytls",
+            "listen": "::",
+            "listen_port": ${PORT_ANYTLS},
+            "users": [
+                {
+                    "password": "${SB_UUID}"
+                }
+            ],
+            "padding_scheme": [],
+            "tls": {
+                "enabled": true,
+                "min_version": "1.3",
+                "max_version": "1.3",
+                "certificate_path": "${SSL_PATH}/sb_xray_bundle.crt",
+                "key_path": "${SSL_PATH}/sb_xray_bundle.key"
+            }
+        }
+    ]
+}

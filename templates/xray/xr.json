@@ -1,0 +1,118 @@
+{
+    ${XRAY_OBSERVATORY_SECTION}
+    "log": {
+        "access": "${LOGDIR}/xray/access.log",
+        "error": "${LOGDIR}/xray/error.log",
+        "loglevel": "warning"
+    },
+    "dns": {
+        "servers": [
+            "https+local://cloudflare-dns.com/dns-query",
+            "1.1.1.1",
+            "1.0.0.1",
+            "8.8.8.8",
+            "8.8.4.4"
+        ]
+    },
+    "api": {
+        "tag": "api",
+        "services": [
+            "HandlerService",
+            "LoggerService",
+            "StatsService"
+        ]
+    },
+    "stats": {},
+    "policy": {
+        "levels": {
+            "0": {
+                "handshake": 8,
+                "connIdle": 797,
+                "uplinkOnly": 8,
+                "downlinkOnly": 11,
+                "statsUserUplink": true,
+                "statsUserDownlink": true
+            }
+        },
+        "system": {
+            "statsInboundUplink": true,
+            "statsInboundDownlink": true,
+            "statsOutboundUplink": true,
+            "statsOutboundDownlink": true
+        }
+    },
+    "routing": {
+        "domainStrategy": "IPIfNonMatch",
+        ${XRAY_BALANCERS_SECTION}
+        "rules": [
+            {
+                "type": "field",
+                "ruleTag": "api",
+                "inboundTag": [
+                    "api"
+                ],
+                "outboundTag": "api"
+            },
+            {
+                "type": "field",
+                "ruleTag": "bt",
+                "protocol": [
+                    "bittorrent"
+                ],
+                "marktag": "ban_bt",
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "ruleTag": "cn-ip",
+                "ip": [
+                    "geoip:cn"
+                ],
+                "marktag": "ban_geoip_cn",
+                "outboundTag": "block"
+            },
+            {
+                "type": "field",
+                "ruleTag": "ad-domain",
+                "domain": [
+                    "geosite:category-ads-all"
+                ],
+                "outboundTag": "block"
+            },
+            ${XRAY_SERVICE_RULES}
+            {
+                "type": "field",
+                "ruleTag": "private-ip",
+                "ip": [
+                    "geoip:private"
+                ],
+                "outboundTag": "block"
+            }
+        ]
+    },
+    "inbounds": [
+        {
+            "tag": "api",
+            "port": 7978,
+            "listen": "127.0.0.1",
+            "protocol": "dokodemo-door",
+            "settings": {
+                "address": "127.0.0.1"
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {
+                "domainStrategy": "UseIPv4v6"
+            }
+        },
+        ${CUSTOM_OUTBOUNDS}
+        {
+            "tag": "block",
+            "protocol": "blackhole"
+        }
+    ]
+}

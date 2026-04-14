@@ -1,0 +1,22 @@
+serve-path: ${DUFS_SERVE_PATH}
+bind: 127.0.0.1
+port: ${DUFS_PORT}
+path-prefix: ${DUFS_PATH_PREFIX}
+# hidden:
+#   - tmp
+#   - '*.log'
+#   - '*.lock'
+allow-all: true
+allow-upload: true
+allow-delete: true
+allow-search: true
+allow-symlink: true
+allow-archive: true
+enable-cors: true
+render-index: true
+render-try-index: true
+render-spa: true
+# assets: ./assets/
+log-format: '$remote_addr "$request" $status $http_user_agent'
+log-file: ${LOGDIR}/dufs/dufs.log
+compress: low
