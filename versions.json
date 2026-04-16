@@ -1,13 +1,13 @@
 {
-    "shoutrrr": "0.8.0",
-    "mihomo": "1.19.23",
-    "http_meta": "1.1.0",
-    "sub_store_frontend": "2.16.52",
-    "sub_store_backend": "2.21.95",
-    "s_ui": "1.4.1",
-    "dufs": "0.45.0",
-    "cloudflared": "2026.3.0",
-    "x_ui": "2.8.11",
-    "sing_box": "1.13.8",
-    "xray": "26.4.13"
+  "cloudflared": "2026.3.0",
+  "dufs": "0.45.0",
+  "http_meta": "1.1.0",
+  "mihomo": "1.19.23",
+  "s_ui": "1.4.1",
+  "shoutrrr": "0.8.0",
+  "sing_box": "1.13.8",
+  "sub_store_backend": "2.22.1",
+  "sub_store_frontend": "2.16.55",
+  "x_ui": "2.8.11",
+  "xray": "26.4.15"
 }
