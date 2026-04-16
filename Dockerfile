@@ -32,7 +32,7 @@ RUN set -ex; \
 
 # --- Sub-Store 后端 ---
 WORKDIR /sub-store
-ARG SUB_STORE_BACKEND_VERSION="2.21.94"
+ARG SUB_STORE_BACKEND_VERSION="2.21.95"
 RUN set -ex; \
   curl -fsSL --retry 5 --retry-delay 5 "https://github.com/sub-store-org/Sub-Store/releases/download/${SUB_STORE_BACKEND_VERSION}/sub-store.bundle.js" -o /sub-store/sub-store.bundle.js
 

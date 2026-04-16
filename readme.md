@@ -14,10 +14,10 @@
     </a>
     <img src="https://img.shields.io/badge/Platform-linux%2Famd64%20%7C%20linux%2Farm64-lightgrey?style=flat-square" alt="Platform">
     <a href="https://github.com/XTLS/Xray-core">
-      <img src="https://img.shields.io/badge/Engine-Xray--core--v1.8.x-9D4EDD?style=flat-square" alt="Xray-core">
+      <img src="https://img.shields.io/badge/Engine-Xray--core--v26.4.x-9D4EDD?style=flat-square" alt="Xray-core">
     </a>
     <a href="https://github.com/SagerNet/sing-box">
-      <img src="https://img.shields.io/badge/Engine-Sing--box--v1.8.x-10B981?style=flat-square" alt="Sing-box">
+      <img src="https://img.shields.io/badge/Engine-Sing--box--v1.13.x-10B981?style=flat-square" alt="Sing-box">
     </a>
     <img src="https://img.shields.io/badge/License-MIT-lightgrey?style=flat-square" alt="License">
   </p>
@@ -107,7 +107,7 @@ graph TD
 | 🔵 **安全加固与协议**   | [**👉 02. 协议详解与安全加密体系**](./docs/02-protocols-and-security.md)       | 涵盖全部 9 种协议配置手册、MLKEM 后量子加密理论与实践、Reality Fallback 回落机制、ACME 证书管家以及 TUN 模式进阶指南。 |
 | 🟡 **调度中枢与客户端** | [**👉 03. 智能路由策略与全平台客户端接入**](./docs/03-routing-and-clients.md)  | 详解 OpenClash Policy-Priority 六维加权评分体系、Sub-Store 深层节点清洗引擎，以及动态 ISP 链式落地的底层实现。         |
 | 🔴 **系统运维与监控**   | [**👉 04. 运维管理与故障排查手册**](./docs/04-ops-and-troubleshooting.md)      | 包含多面板入口导航、订阅端点双重认证安全防扫描策略、证书运维以及应对 502/404/证书失效等故障的汇总排错指南。            |
-| ⚙️ **构建部署指南**     | [**👉 05. 构建部署指南**](./docs/05-build-release.md)                                  | 详解 `build.sh` 自动构建脚本、四阶段 Dockerfile 架构、11 个组件的版本管理策略与常见构建问题 FAQ。                      |
+| ⚙️ **构建部署指南**     | [**👉 05. 构建部署指南**](./docs/05-build-release.md)                          | 详解 `build.sh` 自动构建脚本、四阶段 Dockerfile 架构、11 个组件的版本管理策略与常见构建问题 FAQ。                      |
 
 ---
 
@@ -159,7 +159,7 @@ services:
       - ./sub-store:/sub-store/data # Sub-Store 数据库
       - ./nginx/http:/etc/nginx/conf.d # 自定义 Nginx HTTP 配置
       - ./nginx/tcp:/etc/nginx/stream.d # 自定义 Nginx Stream 配置
-      - ./nginx/dhparam:/etc/nginx/dhparam # DH 密钥参数 (首次生成后缓存)
+      - ./nginx-dhparam:/etc/nginx/dhparam # DH 密钥参数 (首次生成后缓存)
       - ./data:/data # Dufs 文件服务数据存储
       - ./logs:/var/log # 全部日志文件
       # - /lib/modules:/lib/modules:ro              # 可选: 内核模块 (TUN 模式需要)
@@ -224,17 +224,17 @@ docker compose up -d
 | `ACMESH_REGISTER_EMAIL` | _空_      | ACME 注册邮箱                                  |
 | `ACMESH_EAB_KID`        | _空_      | Google CA EAB keyId（仅 Google CA 需要）       |
 | `ACMESH_EAB_HMAC_KEY`   | _空_      | Google CA EAB b64MacKey（仅 Google CA 需要）   |
-| `ACMESH_DEBUG`          | `0`       | 证书调试日志级别：`0`=关闭, `1`=基础, `2`=详细 |
+| `ACMESH_DEBUG`          | `2`       | 证书调试日志级别：`0`=关闭, `1`=基础, `2`=详细 |
 
 #### ISP 落地代理
 
-| 变量名          | 默认值   | 说明                                      |
-| :-------------- | :------- | :---------------------------------------- |
-| `DEFAULT_ISP`   | `LA_ISP` | 默认落地出口标签（如 `LA`、`KR`）         |
-| `XX_ISP_IP`     | _空_     | ISP 代理 IP 地址（`XX` 为自定义标签前缀） |
-| `XX_ISP_PORT`   | _空_     | ISP 代理端口                              |
-| `XX_ISP_USER`   | _空_     | ISP 代理用户名（可选）                    |
-| `XX_ISP_SECRET` | _空_     | ISP 代理密码（可选）                      |
+| 变量名          | 默认值   | 说明                                                    |
+| :-------------- | :------- | :------------------------------------------------------ |
+| `DEFAULT_ISP`   | `LA_ISP` | 默认落地出口标签（如 `LA_ISP`、`KR_ISP`），留空则不启用 |
+| `XX_ISP_IP`     | _空_     | ISP 代理 IP 地址（`XX` 为自定义标签前缀）               |
+| `XX_ISP_PORT`   | _空_     | ISP 代理端口                                            |
+| `XX_ISP_USER`   | _空_     | ISP 代理用户名（可选）                                  |
+| `XX_ISP_SECRET` | _空_     | ISP 代理密码（可选）                                    |
 
 #### AI 路由策略
 
@@ -279,11 +279,17 @@ sb-xray/
 ├── scripts/
 │   ├── entrypoint.sh         # 容器启动守护进程（五大生命周期扇区）
 │   ├── show-config.sh        # 查看当前运行配置
-│   └── geo_update.sh         # GeoIP/GeoSite 数据更新
+│   ├── geo_update.sh         # GeoIP/GeoSite 数据更新
+│   ├── check_ip_type.sh      # IP 类型检测
+│   ├── stop-supervisor.sh    # Supervisor 停止脚本
+│   └── test_entrypoint.sh    # 入口脚本测试
 ├── templates/
 │   ├── xray/                 # Xray 入站/出站/路由 JSON 模板
 │   ├── sing-box/             # Sing-box 入站/出站/路由 JSON 模板
 │   ├── nginx/                # Nginx 站点配置模板
+│   ├── dufs/                 # Dufs 文件服务配置模板
+│   ├── supervisord/          # Supervisor 进程管理配置模板
+│   ├── proxies/              # 代理节点配置模板
 │   ├── client_template/      # 客户端订阅模板 (Mihomo/OneSmartPro/Surge/Stash)
 │   └── providers/            # 订阅源提供者模板
 ├── docs/                     # 技术文档
@@ -292,19 +298,20 @@ sb-xray/
 
 ### 挂载卷说明
 
-| 挂载路径       | 容器路径                  | 用途                                  |
-| :------------- | :------------------------ | :------------------------------------ |
-| `./pki`        | `/pki`                    | TLS 证书存储                          |
-| `./acmecerts`  | `/acmecerts`              | ACME 账户与中间证书                   |
-| `./.envs`      | `/.env`                   | 运行时环境变量缓存（含 UUID、密钥等） |
-| `./sb-xray`    | `/sb-xray`                | 生成的订阅文件与客户端配置            |
-| `./data`       | `/data`                   | Dufs 文件服务的数据存储               |
-| `./x-ui`       | `/etc/x-ui/` + `/x-ui/db` | X-UI 数据库（持久化面板数据）         |
-| `./s-ui`       | `/s-ui/db`                | S-UI 数据库                           |
-| `./sub-store`  | `/sub-store/data`         | Sub-Store 数据库                      |
-| `./nginx/http` | `/etc/nginx/conf.d`       | 自定义 Nginx HTTP 配置                |
-| `./nginx/tcp`  | `/etc/nginx/stream.d`     | 自定义 Nginx Stream 配置              |
-| `./logs`       | `/var/log`                | 所有日志文件                          |
+| 挂载路径          | 容器路径                  | 用途                                  |
+| :---------------- | :------------------------ | :------------------------------------ |
+| `./pki`           | `/pki`                    | TLS 证书存储                          |
+| `./acmecerts`     | `/acmecerts`              | ACME 账户与中间证书                   |
+| `./.envs`         | `/.env`                   | 运行时环境变量缓存（含 UUID、密钥等） |
+| `./sb-xray`       | `/sb-xray`                | 生成的订阅文件与客户端配置            |
+| `./data`          | `/data`                   | Dufs 文件服务的数据存储               |
+| `./x-ui`          | `/etc/x-ui/` + `/x-ui/db` | X-UI 数据库（持久化面板数据）         |
+| `./s-ui`          | `/s-ui/db`                | S-UI 数据库                           |
+| `./sub-store`     | `/sub-store/data`         | Sub-Store 数据库                      |
+| `./nginx/http`    | `/etc/nginx/conf.d`       | 自定义 Nginx HTTP 配置                |
+| `./nginx/tcp`     | `/etc/nginx/stream.d`     | 自定义 Nginx Stream 配置              |
+| `./nginx-dhparam` | `/etc/nginx/dhparam`      | DH 密钥参数（首次生成后缓存）         |
+| `./logs`          | `/var/log`                | 所有日志文件                          |
 
 ### Provider（外部订阅源）配置
 
@@ -355,7 +362,7 @@ docker exec -it sb-xray bash
 
 ## 🛠️ 开发与跨平台构建 (Development)
 
-详细的构建说明请参阅 [**👉 05. 构建部署指南**](./docs/05-build.md)。
+详细的构建说明请参阅 [**👉 05. 构建部署指南**](./docs/05-build-release.md)。
 
 <details>
 <summary>点击查看快速构建命令</summary>
