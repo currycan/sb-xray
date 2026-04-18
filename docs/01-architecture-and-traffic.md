@@ -377,7 +377,7 @@ graph TD
 #### §13-15 配置渲染与流程启动层
 
 * **绝不测速发请求**：该阶段只读内存资源集
-* **客户端配置**：遍历 IP 环境变量拼凑出客户端需要的 YAML 切片 (`clash_proxies`)
+* **客户端配置**：遍历 IP 环境变量构建服务端出站配置
 * **服务端组配**：注入**全部** ISP 节点的 SOCKS5 出站 JSON（按测速速度降序排列），并生成 Sing-box `urltest` + Xray `observatory`/`balancer` 运行时健康检测配置
 * **动态路由规则**：`build_xray_service_rules()` 根据 `*_OUT` 变量值动态切换 `balancerTag`（isp-auto）或 `outboundTag`（direct/具体 tag）
 * **外显智能标识**：通过 `IS_8K_SMOOTH` 配合 `IP_TYPE` 判定，在外显订阅上动态渲染策略匹配后缀（住宅流畅标 ` ✈ super` 或代理流畅标 ` ✈ good`）

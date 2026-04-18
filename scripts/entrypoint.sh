@@ -1186,39 +1186,9 @@ build_client_and_server_configs() {
     log INFO "[阶段 4] 生成客户端/服务端配置片段..."
 
     export CUSTOM_OUTBOUNDS="" SB_CUSTOM_OUTBOUNDS="" SB_ISP_URLTEST="" \
-           XRAY_OBSERVATORY_SECTION="" XRAY_BALANCERS_SECTION="" XRAY_SERVICE_RULES="" \
-           CLASH_ISP_PROXIES="" SURGE_ISP_PROXIES="" clash_proxies="" surge_proxies=""
+           XRAY_OBSERVATORY_SECTION="" XRAY_BALANCERS_SECTION="" XRAY_SERVICE_RULES=""
 
     local env_vars; env_vars=$(env | grep "_ISP_IP=" | cut -d= -f1) || true
-
-    # 构建所有 ISP 节点的 Clash / Surge dialer 条目
-    for var in $env_vars; do
-        local prefix="${var%_IP}" ip="${!var}"
-        local port_var="${prefix}_PORT" user_var="${prefix}_USER" pass_var="${prefix}_SECRET"
-        local port="${!port_var:-}" user="${!user_var:-}" pass="${!pass_var:-}"
-        [[ -z "$ip" || -z "$port" ]] && continue
-
-        local name_prefix="${prefix%_ISP}"
-        local c_yaml
-        c_yaml=$(cat <<YAML
-  - name: ${name_prefix}-dialer
-    type: socks5
-    server: ${ip}
-    port: ${port}
-    username: ${user}
-    password: ${pass}
-    udp: true
-    dialer-proxy: 链式前置
-YAML
-)
-        local surge_ini="${name_prefix}-dialer = socks5, ${ip}, ${port}, username=${user}, password=${pass}, udp-relay=true"
-        clash_proxies="${clash_proxies:+${clash_proxies}
-}${c_yaml}"
-        surge_proxies="${surge_proxies:+${surge_proxies}
-}${surge_ini}"
-    done
-    export CLASH_ISP_PROXIES="${clash_proxies}"
-    export SURGE_ISP_PROXIES="${surge_proxies}"
 
     # 构建所有 ISP 的服务端出站 JSON（按测速结果速度降序排列）
     if [[ -n "${HAS_ISP_NODES:-}" ]]; then

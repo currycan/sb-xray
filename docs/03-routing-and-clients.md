@@ -273,7 +273,6 @@ graph LR
 | **FilterMedia**             | 匹配含 `流媒体`、`AllOne` 的节点                | 媒体-智选   |
 | **FilterAI**                | 匹配含 `AI`、`AllOne` 的节点                    | AI-智选     |
 | **FilterFAST**              | 匹配含 `高速` 的节点                            | 高速-智选   |
-| **FilterDialer**            | 匹配含 `🇭🇰`、`🇹🇼`、`🇨🇳` 且排除 `-dialer` 的节点 | 链式前置    |
 | **FilterHK/TW/JP/SG/KR/US** | 按各自地区正则匹配                              | 各地区-智选 |
 | **FilterOT**                | 排除以上所有已知地区的剩余节点                  | 其他-智选   |
 
@@ -339,15 +338,6 @@ _图解：当节点延迟差距小于 300ms 时，系统绝对服从高权重分
 # 地区偏好: 🇺🇸:20 > 🇯🇵:10 > 🇰🇷:8 > 🇸🇬:4 > 🇹🇼:2
 "高速:10;Reality:20;XTLS:8;Xhttp:5;Hysteria2:8;AnyTLS:5;TUIC:3;Vmess:2;super:30;good:10;🇺🇸:20;🇯🇵:10;🇰🇷:8;🇸🇬:4;🇹🇼:2"
 ```
-
-#### PolicyDialer（链式代理策略）
-
-```yaml
-# 地区偏好: 🇭🇰:20 > 🇹🇼:15 > 🇨🇳:15 > 🇰🇷:10 > 🇯🇵:6 > 🇸🇬:4 > 🇺🇸:2
-"高速:10;Reality:20;XTLS:8;Xhttp:5;Hysteria2:8;AnyTLS:5;TUIC:3;Vmess:2;super:30;good:10;🇭🇰:20;🇹🇼:15;🇨🇳:15;🇰🇷:10;🇯🇵:6;🇸🇬:4;🇺🇸:2"
-```
-
-> **PolicyDialer 适用场景**：当需要通过距离较近的节点（如香港、台湾）作为链式代理前置来连接远端服务器时，优先选择低延迟地区。
 
 ### 2.8 配置与实战案例推演
 
@@ -527,7 +517,6 @@ graph TD
 | `${XRAY_REALITY_PUBLIC_KEY}` | Reality 公钥         | `abcd1234...`     |
 | `${XRAY_URL_PATH}`           | WebSocket/XHTTP 路径 | `random32chars`   |
 | `${CLASH_PROXY_PROVIDERS}`   | 订阅源配置           | YAML 格式字符串   |
-| `${CLASH_ISP_PROXIES}`       | ISP 代理配置         | YAML 格式字符串   |
 
 ### 4.3 DNS 配置策略
 
