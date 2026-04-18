@@ -10,7 +10,7 @@ proxy-providers:
 
   NiceCloud: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/NiceCloud", override: {additional-prefix: "[NiceCloud] ", additional-suffix: " super"}}
 
-  星链:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/XingLian", override: {additional-prefix: "[星链] ", dialer-proxy: 链式前置}}
+  星链:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/XingLian", override: {additional-prefix: "[星链] "}}
 
   牛逼:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/NiuBi", override: {additional-prefix: "[牛逼] "}}
 

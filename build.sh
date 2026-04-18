@@ -193,14 +193,14 @@ check_version() {
 check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"           "0.8.0"
 check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"             "1.19.23"
 check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"          "1.1.0"
-check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION" "2.16.52"
-check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"  "2.21.95"
+check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION" "2.16.55"
+check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"  "2.22.1"
 check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"                "1.4.1"
 check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"               "0.45.0"
 check_version "Cloudflared"      "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSION"        "2026.3.0"
 check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"                "2.8.11"
 check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"           "1.13.8"
-check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"               "26.4.13"
+check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"               "26.4.17"
 
 # 当从 GitHub 获取版本后，自动更新脚本中的默认版本配置
 if [ "$USE_DEFAULT_VERSIONS" != "true" ]; then
