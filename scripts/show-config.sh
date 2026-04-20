@@ -2,7 +2,9 @@
 set -eou pipefail
 
 # Colors
-RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; BLUE="\033[34m"; MAGENTA="\033[35m"; CYAN="\033[36m"; PURPLE="\033[0;35m"; RESET="\033[0m"
+RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; BLUE="\033[34m"; MAGENTA="\033[35m"; CYAN="\033[36m"; PURPLE="\033[0;35m"
+BRIGHT_RED="\033[91m"; BRIGHT_GREEN="\033[92m"; BRIGHT_YELLOW="\033[93m"; BRIGHT_BLUE="\033[94m"; BRIGHT_MAGENTA="\033[95m"; BRIGHT_CYAN="\033[96m"
+BOLD="\033[1m"; DIM="\033[2m"; RESET="\033[0m"
 
 # Env
 ENV_FILE="/.env/sb-xray"
@@ -99,7 +101,9 @@ show_qrcode() {
 
 generate_links() {
     local region_name="${NODE_NAME}" h2_alpn="alpn=h3"
-    local vmes_json="{\"v\":\"2\",\"ps\":\"${FLAG_PREFIX}Vmess ✈ ${region_name}${NODE_SUFFIX}\",\"add\":\"${CDNDOMAIN}\",\"port\":\"${LISTENING_PORT}\",\"id\":\"${XRAY_UUID}\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${CDNDOMAIN}\",\"path\":\"/${XRAY_URL_PATH}-vmessws\",\"tls\":\"tls\",\"sni\":\"${CDNDOMAIN}\",\"alpn\":\"h2\",\"fp\":\"chrome\"}"
+    # VMess 传输为 WebSocket（nginx 反代用 HTTP/1.1 升级），ALPN 固定 http/1.1；
+    # 'h2' 会让 sing-box/Karing 等客户端尝试走 WS-over-H2（RFC 8441），兼容性差
+    local vmes_json="{\"v\":\"2\",\"ps\":\"${FLAG_PREFIX}Vmess ✈ ${region_name}${NODE_SUFFIX}\",\"add\":\"${CDNDOMAIN}\",\"port\":\"${LISTENING_PORT}\",\"id\":\"${XRAY_UUID}\",\"aid\":\"0\",\"scy\":\"auto\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${CDNDOMAIN}\",\"path\":\"/${XRAY_URL_PATH}-vmessws\",\"tls\":\"tls\",\"sni\":\"${CDNDOMAIN}\",\"alpn\":\"http/1.1\",\"fp\":\"chrome\"}"
 
     # 基础链接 (Clash 支持部分)
     local link_hysteria2="hysteria2://${SB_UUID}@${DOMAIN}:${PORT_HYSTERIA2}/?sni=${DOMAIN}&obfs=salamander&obfs-password=${SB_UUID}&${h2_alpn}#${FLAG_PREFIX}Hysteria2 ✈ ${region_name}${NODE_SUFFIX}"
@@ -123,6 +127,24 @@ generate_links() {
 
     local link_mix="vless://${XRAY_UUID}@${CDNDOMAIN}:${LISTENING_PORT}?encryption=mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}&security=tls&sni=${CDNDOMAIN}&alpn=h2&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY}&sid=${XRAY_REALITY_SHORTID}&type=xhttp&host=${CDNDOMAIN}&path=%2F${XRAY_URL_PATH}-xhttp&mode=auto#${FLAG_PREFIX}Xhttp+TLS+CDN上下行不分离 ✈ ${region_name}${NODE_SUFFIX}"
 
+    # ==================================================================
+    # Compat 变种（给不支持 VLESS mlkem 加密的客户端：mihomo/OpenClash、sing-box/Karing）
+    #   - encryption=none（走 decryption:none 的 xhttp-compat inbound）
+    #   - path=/XXX-xhttp-compat（对应第二个 xhttp inbound 的监听路径）
+    #   - mode=packet-up（RPRX 推荐 CDN/反代场景兼容性最强）
+    #   - 纯 CDN 节点不含 pbk/sid，避免 sub-store 据此合成错误的 reality-opts
+    # ==================================================================
+    local xhttp_base_compat="encryption=none&security=reality&sni=${DEST_HOST}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY}&sid=${XRAY_REALITY_SHORTID}&type=xhttp&path=%2F${XRAY_URL_PATH}-xhttp-compat&mode=packet-up"
+    local link_xhttp_reality_compat="vless://${XRAY_UUID}@${DOMAIN}:${LISTENING_PORT}?${xhttp_base_compat}#${FLAG_PREFIX}Xhttp+Reality直连 ✈ ${region_name}${NODE_SUFFIX}"
+
+    local down_settings_compat="%7B%22downloadSettings%22%3A%7B%22address%22%3A%22${DOMAIN}%22%2C%22port%22%3A${LISTENING_PORT}%2C%22network%22%3A%22xhttp%22%2C%22security%22%3A%22reality%22%2C%22realitySettings%22%3A%7B%22show%22%3Afalse%2C%22serverName%22%3A%22${DEST_HOST}%22%2C%22fingerprint%22%3A%22chrome%22%2C%22publicKey%22%3A%22${XRAY_REALITY_PUBLIC_KEY}%22%2C%22shortId%22%3A%22${XRAY_REALITY_SHORTID}%22%2C%22spiderX%22%3A%22%2F%22%7D%2C%22xhttpSettings%22%3A%7B%22host%22%3A%22%22%2C%22path%22%3A%22%2F${XRAY_URL_PATH}-xhttp-compat%22%2C%22mode%22%3A%22packet-up%22%7D%7D%7D"
+    local link_up_cdn_down_reality_compat="vless://${XRAY_UUID}@${CDNDOMAIN}:${LISTENING_PORT}?encryption=none&security=tls&sni=${CDNDOMAIN}&alpn=h2&fp=chrome&type=xhttp&host=${CDNDOMAIN}&path=%2F${XRAY_URL_PATH}-xhttp-compat&mode=packet-up&extra=${down_settings_compat}#${FLAG_PREFIX}上行Xhttp+TLS+CDN下行Xhttp+Reality ✈ ${region_name}${NODE_SUFFIX}"
+
+    local tls_settings_compat="%7B%22downloadSettings%22%3A%7B%22address%22%3A%22${DOMAIN}%22%2C%22port%22%3A${LISTENING_PORT}%2C%22network%22%3A%22xhttp%22%2C%22security%22%3A%22tls%22%2C%22tlsSettings%22%3A%7B%22serverName%22%3A%22${CDNDOMAIN}%22%2C%22alpn%22%3A%5B%22h2%22%5D%2C%22fingerprint%22%3A%22chrome%22%7D%2C%22xhttpSettings%22%3A%7B%22host%22%3A%22${CDNDOMAIN}%22%2C%22path%22%3A%22%2F${XRAY_URL_PATH}-xhttp-compat%22%2C%22mode%22%3A%22packet-up%22%7D%7D%7D"
+    local link_up_reality_down_cdn_compat="vless://${XRAY_UUID}@${DOMAIN}:${LISTENING_PORT}?encryption=none&security=reality&sni=${DEST_HOST}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY}&sid=${XRAY_REALITY_SHORTID}&type=xhttp&path=%2F${XRAY_URL_PATH}-xhttp-compat&mode=packet-up&extra=${tls_settings_compat}#${FLAG_PREFIX}上行Xhttp+Reality下行Xhttp+TLS+CDN ✈ ${region_name}${NODE_SUFFIX}"
+
+    local link_mix_compat="vless://${XRAY_UUID}@${CDNDOMAIN}:${LISTENING_PORT}?encryption=none&security=tls&sni=${CDNDOMAIN}&alpn=h2&fp=chrome&type=xhttp&host=${CDNDOMAIN}&path=%2F${XRAY_URL_PATH}-xhttp-compat&mode=packet-up#${FLAG_PREFIX}Xhttp+TLS+CDN上下行不分离 ✈ ${region_name}${NODE_SUFFIX}"
+
     # 加上注释 (保留原样格式)
     local part1="${link_hysteria2}
 ${link_tuic}
@@ -135,14 +157,19 @@ ${link_up_cdn_down_reality}
 ${link_up_reality_down_cdn}
 ${link_mix}"
 
-    CLASH_SUBSCRIBE="${part1}
-${part2}"
+    local part2_compat="${link_xhttp_reality_compat}
+${link_up_cdn_down_reality_compat}
+${link_up_reality_down_cdn_compat}
+${link_mix_compat}"
 
     V2RAYN_SUBSCRIBE="${part1}
 ${part2}"
+
+    V2RAYN_COMPAT_SUBSCRIBE="${part1}
+${part2_compat}"
     print_colored ${PURPLE} "V2RAYN 订阅链接内容如下:\n${V2RAYN_SUBSCRIBE}"
-    echo -n "$V2RAYN_SUBSCRIBE" | base64 -w0 > ${WORKDIR}/subscribe/v2rayn
-    echo -n "$CLASH_SUBSCRIBE" | base64 -w0 > ${WORKDIR}/subscribe/clashsub
+    echo -n "$V2RAYN_SUBSCRIBE"        | base64 -w0 > ${WORKDIR}/subscribe/v2rayn
+    echo -n "$V2RAYN_COMPAT_SUBSCRIBE" | base64 -w0 > ${WORKDIR}/subscribe/v2rayn-compat
 }
 
 show_info_links() {
@@ -151,50 +178,55 @@ show_info_links() {
         token_param="?token=${SUBSCRIBE_TOKEN}"
     fi
 
-    print_colored ${GREEN} "\n******************************************************************\n  *        Sing-box / Xray 多协议多传输客户端配置文件汇总         *\n"
-    print_colored ${RED} "Index:\nhttps://${CDNDOMAIN}/sb-xray/show-config${token_param}"
-    print_colored ${YELLOW} "全部订阅:\nhttps://${CDNDOMAIN}/sb-xray/proxies${token_param}"
-    print_colored ${MAGENTA} "Clash 订阅:\nhttps://${CDNDOMAIN}/sb-xray/clashsub${token_param}"
-    print_colored ${BLUE} "Stash 订阅:\nhttps://${CDNDOMAIN}/sb-xray/stash${token_param}"
-    print_colored ${CYAN} "V2rayN 订阅:\nhttps://${CDNDOMAIN}/sb-xray/v2rayn${token_param}"
+    local base="https://${CDNDOMAIN}/sb-xray"
+    local sep="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    # Client Templates
+    echo
+    echo -e "${BOLD}${GREEN}${sep}${RESET}"
+    echo -e "${BOLD}${GREEN}  Sing-box / Xray 多协议多传输客户端配置文件汇总${RESET}"
+    echo -e "${BOLD}${GREEN}${sep}${RESET}"
+    echo
+
+    # 通用索引
+    print_colored ${RED}            "📋 Index（订阅索引页）\n${base}/show-config${token_param}"
+
+    # v2rayN 双轨（mlkem 版本给 xray-core 客户端，compat 版本给 mihomo/Karing）
+    print_colored ${CYAN}           "🚀 V2rayN 订阅  ${DIM}[xray-core 客户端 · 含 ML-KEM-768 后量子加密]${RESET}${CYAN}\n${base}/v2rayn${token_param}"
+    print_colored ${BRIGHT_CYAN}    "🔓 V2rayN-Compat 订阅  ${DIM}[mihomo/OpenClash/Karing 用 · 无 VLESS 加密]${RESET}${BRIGHT_CYAN}\n${base}/v2rayn-compat${token_param}"
+
+    # Client Template YAML（每个一种颜色，循环）
+    local tpl_colors=("${BRIGHT_YELLOW}" "${BRIGHT_MAGENTA}" "${BRIGHT_GREEN}" "${BRIGHT_BLUE}" "${BRIGHT_RED}")
+    local tpl_idx=0
     for c in /templates/client_template/*.yaml; do
         if [ -f "$c" ]; then
-            local filename=$(basename "$c")
+            local filename; filename=$(basename "$c")
             local name="${filename%.yaml}"
-            print_colored ${PURPLE} "${name} 订阅:\nhttps://${CDNDOMAIN}/sb-xray/${filename}${token_param}"
+            local color="${tpl_colors[$((tpl_idx % ${#tpl_colors[@]}))]}"
+            print_colored "${color}" "📄 ${name} 订阅\n${base}/${filename}${token_param}"
+            tpl_idx=$((tpl_idx + 1))
         fi
     done
 
     if [ -f "/templates/client_template/surge.conf" ]; then
-        print_colored ${PURPLE} "Surge 订阅:\nhttps://${CDNDOMAIN}/sb-xray/surge.conf${token_param}"
+        print_colored ${PURPLE}     "🧭 Surge 订阅\n${base}/surge.conf${token_param}"
     fi
 
-    # 提示用户
+    # 认证提示
     if [ -n "$token_param" ]; then
-        echo -e "💡 \033[33m已自动附加安全认证 Token，可直接导入客户端使用。\033[0m"
-        echo -e "🔒 \033[33m基础认证用户: ${PUBLIC_USER:-未设置} / ${PUBLIC_PASSWORD:-未设置}\033[0m"
+        echo -e "  💡 ${YELLOW}已附加安全认证 Token，可直接导入客户端使用${RESET}"
+        echo -e "  🔒 ${YELLOW}Basic Auth: ${PUBLIC_USER:-未设置} / ${PUBLIC_PASSWORD:-未设置}${RESET}"
+        echo
     fi
 
-    print_colored ${GREEN} "\n*                                                                *\n *        Sing-box / Xray 多协议多传输客户端配置文件汇总         *\n******************************************************************"
+    echo -e "${BOLD}${GREEN}${sep}${RESET}"
 }
 
 main() {
     mkdir -p ${WORKDIR}/subscribe
     generate_links
 
-    # 批量处理简单模板
-    for t in all:proxies clash stash surge surge.conf; do
-        local src="${t%:*}" dst="${t#*:}"
-        local path="/templates/proxies/${src}"
-        [[ "$src" == "surge.conf" ]] && path="/templates/client_template/surge.conf"
-
-        [ -f "$path" ] && envsubst < "$path" > "${WORKDIR}/subscribe/${dst}"
-    done
-
-    # Client Templates
-    for c in /templates/client_template/*.yaml; do
+    # Client Templates (Clash YAML / Stash YAML / Surge conf — 带规则/分组的完整客户端配置)
+    for c in /templates/client_template/*.yaml /templates/client_template/surge.conf; do
         [ -f "$c" ] && envsubst < "$c" > "${WORKDIR}/subscribe/$(basename "$c")"
     done
 

@@ -1,0 +1,49 @@
+{
+    "inbounds": [
+        {
+            "listen": "/dev/shm/udsxhttp-compat.sock,0666",
+            "protocol": "vless",
+            "tag": "XHTTP_COMPAT_IN",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "${XRAY_UUID}",
+                        "level": 0,
+                        "email": "vless@xhttp.compat"
+                    }
+                ],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "xhttp",
+                "xhttpSettings": {
+                    "host": "",
+                    "path": "/${XRAY_URL_PATH}-xhttp-compat",
+                    "mode": "auto",
+                    "extra": {
+                        "noSSEHeader": true,
+                        "scMaxEachPostBytes": 1000000,
+                        "scMaxBufferedPosts": 30,
+                        "xPaddingBytes": "100-1000"
+                    }
+                },
+                "sockopt": {
+                    "tcpFastOpen": true,
+                    "acceptProxyProtocol": false,
+                    "tcpcongestion": "bbr",
+                    "tcpMptcp": true,
+                    "tcpNoDelay": true
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": [
+                    "http",
+                    "tls"
+                ],
+                "metadataOnly": false,
+                "routeOnly": true
+            }
+        }
+    ]
+}

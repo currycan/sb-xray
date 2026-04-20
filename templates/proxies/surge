@@ -1,6 +1,0 @@
-# Hysteria2
-${FLAG_PREFIX}Hysteria2 ✈ ${NODE_NAME}${NODE_SUFFIX}=hysteria2,${DOMAIN},${PORT_HYSTERIA2},password=${SB_UUID},obfs=salamander,obfs-password=${SB_UUID},skip-cert-verify=false,download-bandwidth=2500
-# TUICv5
-${FLAG_PREFIX}TUIC ✈ ${NODE_NAME}${NODE_SUFFIX}=tuic-v5,${DOMAIN},${PORT_TUIC},uuid=${SB_UUID},password=${SB_UUID},alpn=h3,sni=${DOMAIN},skip-cert-verify=false
-# VMESS TLS WS
-${FLAG_PREFIX}Vmess ✈ ${NODE_NAME}${NODE_SUFFIX}=vmess,${CDNDOMAIN},${LISTENING_PORT},username=${XRAY_UUID},tls=true,sni=${CDNDOMAIN},skip-cert-verify=false,ws=true,ws-path=/${XRAY_URL_PATH}-vmessws,ws-headers=Host:${CDNDOMAIN},vmess-aead=true,udp-relay=true
