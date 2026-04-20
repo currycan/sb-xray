@@ -14,3 +14,4 @@ ag_output_*.txt
 .agents/
 .claude/
 .gemini/
+.gstack/

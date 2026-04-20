@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+# 需要 BuildKit 1.7+ 以支持 --mount=type=cache（build.sh / CI 已使用 docker buildx）
 # ==========================================
 # 第一阶段: Sub-Store 构建层
 # 从源码构建 Sub-Store 的前端和后端
@@ -6,41 +8,75 @@ FROM node:alpine AS sub-store-builder
 
 ARG TARGETARCH
 
-RUN apk add --no-cache git curl build-base python3
+# apk 包缓存挂载：跨构建复用下载，节省 30-60s 冷构建时间
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    apk add git curl build-base python3
 
 # --- Shoutrrr ---
 ARG SHOUTRRR_VERSION="0.8.0"
-# arch=$(arch | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/' | sed 's/armv7l/armv6/' | sed 's/armv7/armv6/');
+# 完整性：从上游发布的 shoutrrr_${VER}_checksums.txt 校验
 RUN set -ex; \
-  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/containrrr/shoutrrr/releases/download/v${SHOUTRRR_VERSION}/shoutrrr_linux_${TARGETARCH}.tar.gz" | tar -xzC /tmp/; \
+  BINARY_FILE="shoutrrr_linux_${TARGETARCH}.tar.gz"; \
+  curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/${BINARY_FILE}" \
+    "https://github.com/containrrr/shoutrrr/releases/download/v${SHOUTRRR_VERSION}/${BINARY_FILE}"; \
+  curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/shoutrrr_checksums.txt" \
+    "https://github.com/containrrr/shoutrrr/releases/download/v${SHOUTRRR_VERSION}/shoutrrr_${SHOUTRRR_VERSION}_checksums.txt"; \
+  cd /tmp && grep "  ${BINARY_FILE}\$" shoutrrr_checksums.txt | sha256sum -c -; \
+  tar -xzf "/tmp/${BINARY_FILE}" -C /tmp/; \
   chmod +x /tmp/shoutrrr; \
-  mv /tmp/shoutrrr /usr/local/bin/
+  mv /tmp/shoutrrr /usr/local/bin/; \
+  rm -f "/tmp/${BINARY_FILE}" /tmp/shoutrrr_checksums.txt
 
 # --- Http-Meta ---
 WORKDIR /sub-store/http-meta
 ARG HTTP_META_VERSION="1.1.0"
+# 完整性：_SHA256 由 build.sh / CI 从 GitHub API .assets[].digest 填入
+ARG HTTP_META_BUNDLE_SHA256=""
+ARG HTTP_META_TPL_SHA256=""
 RUN set -ex; \
+  [ -n "${HTTP_META_BUNDLE_SHA256}" ] || { echo "ERROR: HTTP_META_BUNDLE_SHA256 build-arg required"; exit 1; }; \
+  [ -n "${HTTP_META_TPL_SHA256}" ]    || { echo "ERROR: HTTP_META_TPL_SHA256 build-arg required";    exit 1; }; \
   curl -fsSL --retry 5 --retry-delay 5 "https://github.com/xream/http-meta/releases/download/${HTTP_META_VERSION}/http-meta.bundle.js" -o /sub-store/http-meta.bundle.js; \
-  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/xream/http-meta/releases/download/${HTTP_META_VERSION}/tpl.yaml" -o /sub-store/http-meta/tpl.yaml
+  echo "${HTTP_META_BUNDLE_SHA256}  /sub-store/http-meta.bundle.js" | sha256sum -c -; \
+  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/xream/http-meta/releases/download/${HTTP_META_VERSION}/tpl.yaml" -o /sub-store/http-meta/tpl.yaml; \
+  echo "${HTTP_META_TPL_SHA256}  /sub-store/http-meta/tpl.yaml" | sha256sum -c -
 
 # --- Mihomo ---
 ARG MIHOMO_VERSION="1.19.23"
+ARG MIHOMO_AMD64_SHA256=""
+ARG MIHOMO_ARM64_SHA256=""
 RUN set -ex; \
-  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VERSION}/mihomo-linux-${TARGETARCH}-v${MIHOMO_VERSION}.gz" | gzip -d > /tmp/http-meta; \
+  case "${TARGETARCH}" in \
+    amd64) EXPECTED_SHA="${MIHOMO_AMD64_SHA256}";; \
+    arm64) EXPECTED_SHA="${MIHOMO_ARM64_SHA256}";; \
+    *)     echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
+  esac; \
+  [ -n "${EXPECTED_SHA}" ] || { echo "ERROR: MIHOMO_$(echo "${TARGETARCH}" | tr a-z A-Z)_SHA256 build-arg required"; exit 1; }; \
+  curl -fsSL --retry 5 --retry-delay 5 -o /tmp/mihomo.gz \
+    "https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VERSION}/mihomo-linux-${TARGETARCH}-v${MIHOMO_VERSION}.gz"; \
+  echo "${EXPECTED_SHA}  /tmp/mihomo.gz" | sha256sum -c -; \
+  gzip -d -c /tmp/mihomo.gz > /tmp/http-meta; \
+  rm -f /tmp/mihomo.gz; \
   chmod +x /tmp/http-meta; \
   mv /tmp/http-meta /sub-store/http-meta/
 
 # --- Sub-Store 后端 ---
 WORKDIR /sub-store
 ARG SUB_STORE_BACKEND_VERSION="2.21.95"
+ARG SUB_STORE_BACKEND_SHA256=""
 RUN set -ex; \
-  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/sub-store-org/Sub-Store/releases/download/${SUB_STORE_BACKEND_VERSION}/sub-store.bundle.js" -o /sub-store/sub-store.bundle.js
+  [ -n "${SUB_STORE_BACKEND_SHA256}" ] || { echo "ERROR: SUB_STORE_BACKEND_SHA256 build-arg required"; exit 1; }; \
+  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/sub-store-org/Sub-Store/releases/download/${SUB_STORE_BACKEND_VERSION}/sub-store.bundle.js" -o /sub-store/sub-store.bundle.js; \
+  echo "${SUB_STORE_BACKEND_SHA256}  /sub-store/sub-store.bundle.js" | sha256sum -c -
 
 # --- Sub-Store 前端 ---
 WORKDIR /app/frontend
 ARG SUB_STORE_FRONTEND_VERSION="2.16.52"
 ENV SUB_STORE_WEBBASEPATH="sub-store"
-RUN set -ex; \
+# pnpm store 缓存挂载 → 跨构建复用 npm 依赖下载
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+  set -ex; \
   (git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend || (sleep 5 && git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend)); \
   npm install -g pnpm; \
   pnpm install --frozen-lockfile; \
@@ -53,10 +89,13 @@ RUN set -ex; \
 # ==========================================
 FROM node:alpine AS s-ui-front-builder
 
-RUN apk add --no-cache git curl
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    apk add git curl
 
 ARG SUI_VERSION="1.4.1"
-RUN set -ex; \
+# npm 全局缓存挂载
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+  set -ex; \
   (git clone --depth 1 --branch v${SUI_VERSION} https://github.com/alireza0/s-ui /app/s-ui || (sleep 5 && git clone --depth 1 --branch v${SUI_VERSION} https://github.com/alireza0/s-ui /app/s-ui)); \
   (git clone --depth 1 --branch main https://github.com/alireza0/s-ui-frontend /app/s-ui-frontend || (sleep 5 && git clone --depth 1 --branch main https://github.com/alireza0/s-ui-frontend /app/s-ui-frontend)); \
   cd /app/s-ui-frontend && npm install && npm run build; \
@@ -70,26 +109,32 @@ FROM golang:1-alpine AS builder
 
 ARG TARGETARCH
 
-RUN apk --no-cache --update add \
-  ca-certificates \
-  build-base \
-  upx \
-  curl \
-  git \
-  gcc \
-  unzip; \
-  update-ca-certificates
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    apk -U add \
+      ca-certificates \
+      build-base \
+      upx \
+      curl \
+      git \
+      gcc \
+      unzip; \
+    update-ca-certificates
 
 ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
 ENV GOTOOLCHAIN=auto
-ENV GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
+# 默认 goproxy.cn 优先（国内构建友好）；CI 可用 --build-arg GOPROXY=... 覆盖为 proxy.golang.org
+ARG GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"
+ENV GOPROXY=${GOPROXY}
 
 WORKDIR /app
 
 # ===== 安装 crypctl =====
-# NOTE: crypctl source is in a private repo; fork users should provide their own implementation
-RUN set -ex; \
+# NOTE: crypctl source is in a public repo (currycan/key/docker/crypctl)
+# Go 构建/模块缓存挂载 → 跨构建复用
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+  set -ex; \
   (git clone --filter=blob:none --no-checkout https://github.com/currycan/key.git /app/key || (sleep 5 && git clone --filter=blob:none --no-checkout https://github.com/currycan/key.git /app/key)); \
   cd /app/key && git checkout HEAD -- docker/crypctl; \
   cd docker/crypctl && go build -ldflags="-s -w" -trimpath -o crypctl main.go; \
@@ -98,27 +143,45 @@ RUN set -ex; \
 
 # --- Dufs ---
 ARG DUFS_VERSION="0.45.0"
+ARG DUFS_AMD64_SHA256=""
+ARG DUFS_ARM64_SHA256=""
 RUN set -ex; \
   case "${TARGETARCH}" in \
-    amd64)   BINARY_FILE="dufs-v${DUFS_VERSION}-x86_64-unknown-linux-musl.tar.gz";; \
-    arm64)   BINARY_FILE="dufs-v${DUFS_VERSION}-arm-unknown-linux-musleabihf.tar.gz";; \
+    amd64)   BINARY_FILE="dufs-v${DUFS_VERSION}-x86_64-unknown-linux-musl.tar.gz"; EXPECTED_SHA="${DUFS_AMD64_SHA256}";; \
+    arm64)   BINARY_FILE="dufs-v${DUFS_VERSION}-arm-unknown-linux-musleabihf.tar.gz"; EXPECTED_SHA="${DUFS_ARM64_SHA256}";; \
     *)       echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
   esac; \
-  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/sigoden/dufs/releases/download/v${DUFS_VERSION}/${BINARY_FILE}" | tar -xzC /tmp/; \
+  [ -n "${EXPECTED_SHA}" ] || { echo "ERROR: DUFS_$(echo "${TARGETARCH}" | tr a-z A-Z)_SHA256 build-arg required"; exit 1; }; \
+  curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/${BINARY_FILE}" \
+    "https://github.com/sigoden/dufs/releases/download/v${DUFS_VERSION}/${BINARY_FILE}"; \
+  echo "${EXPECTED_SHA}  /tmp/${BINARY_FILE}" | sha256sum -c -; \
+  tar -xzf "/tmp/${BINARY_FILE}" -C /tmp/; \
+  rm -f "/tmp/${BINARY_FILE}"; \
   upx --lzma --best /tmp/dufs; \
   mv /tmp/dufs /usr/local/bin/
 
 # --- Cloudflared ---
 ARG CLOUDFLARED_VERSION="2026.3.0"
+ARG CLOUDFLARED_AMD64_SHA256=""
+ARG CLOUDFLARED_ARM64_SHA256=""
 RUN set -ex; \
+  case "${TARGETARCH}" in \
+    amd64) EXPECTED_SHA="${CLOUDFLARED_AMD64_SHA256}";; \
+    arm64) EXPECTED_SHA="${CLOUDFLARED_ARM64_SHA256}";; \
+    *)     echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
+  esac; \
+  [ -n "${EXPECTED_SHA}" ] || { echo "ERROR: CLOUDFLARED_$(echo "${TARGETARCH}" | tr a-z A-Z)_SHA256 build-arg required"; exit 1; }; \
   curl -fsSL --retry 5 --retry-delay 5 "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${TARGETARCH}" -o /tmp/cloudflared; \
+  echo "${EXPECTED_SHA}  /tmp/cloudflared" | sha256sum -c -; \
   chmod +x /tmp/cloudflared; \
   upx --lzma --best /tmp/cloudflared; \
   mv /tmp/cloudflared /usr/local/bin/
 
 # --- X-UI ---
 ARG XUI_VERSION="2.8.11"
-RUN set -ex; \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+  set -ex; \
   (git clone --recursive --depth 1 --shallow-submodules --branch v${XUI_VERSION} https://github.com/MHSanaei/3x-ui /app/xui || (sleep 5 && git clone --recursive --depth 1 --shallow-submodules --branch v${XUI_VERSION} https://github.com/MHSanaei/3x-ui /app/xui)); \
   cd /app/xui && go build -ldflags="-s -w" -trimpath -o x-ui main.go; \
   upx --lzma --best x-ui; \
@@ -126,7 +189,9 @@ RUN set -ex; \
 
 # --- S-UI ---
 COPY --from=s-ui-front-builder /app/s-ui /app/s-ui
-RUN set -ex; \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+  set -ex; \
   cd /app/s-ui; \
   go build -ldflags="-s -w" -trimpath -tags "with_quic,with_grpc,with_utls,with_acme,with_gvisor" -o sui main.go; \
   upx --lzma --best sui; \
@@ -134,12 +199,26 @@ RUN set -ex; \
 
 # --- Sing-box ---
 ARG SING_BOX_VERSION="1.13.8"
+ARG SING_BOX_AMD64_SHA256=""
+ARG SING_BOX_ARM64_SHA256=""
 RUN set -ex; \
-  curl -fsSL --retry 5 --retry-delay 5 "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${TARGETARCH}.tar.gz" | tar --strip-components=1 -xzC /tmp/; \
+  case "${TARGETARCH}" in \
+    amd64) EXPECTED_SHA="${SING_BOX_AMD64_SHA256}";; \
+    arm64) EXPECTED_SHA="${SING_BOX_ARM64_SHA256}";; \
+    *)     echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
+  esac; \
+  [ -n "${EXPECTED_SHA}" ] || { echo "ERROR: SING_BOX_$(echo "${TARGETARCH}" | tr a-z A-Z)_SHA256 build-arg required"; exit 1; }; \
+  BINARY_FILE="sing-box-${SING_BOX_VERSION}-linux-${TARGETARCH}.tar.gz"; \
+  curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/${BINARY_FILE}" \
+    "https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/${BINARY_FILE}"; \
+  echo "${EXPECTED_SHA}  /tmp/${BINARY_FILE}" | sha256sum -c -; \
+  tar --strip-components=1 -xzf "/tmp/${BINARY_FILE}" -C /tmp/; \
+  rm -f "/tmp/${BINARY_FILE}"; \
   mv /tmp/sing-box /usr/local/bin/
 
 # --- Xray ---
 ARG XRAY_VERSION="26.4.13"
+# 完整性：从上游发布的 ${BINARY_FILE}.dgst 文件中提取 SHA2-256 字段校验
 RUN set -ex; \
   case "${TARGETARCH}" in \
     amd64)   BINARY_FILE="Xray-linux-64.zip";; \
@@ -149,8 +228,13 @@ RUN set -ex; \
   mkdir -p /tmp/xray; \
   cd /tmp/xray; \
   curl -fsSLO --retry 5 --retry-delay 5 "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/${BINARY_FILE}"; \
+  curl -fsSL --retry 5 --retry-delay 5 -o "${BINARY_FILE}.dgst" \
+    "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/${BINARY_FILE}.dgst"; \
+  EXPECTED_SHA=$(awk -F'= ' '/^SHA2-256/ {print $2}' "${BINARY_FILE}.dgst"); \
+  [ -n "${EXPECTED_SHA}" ] || { echo "ERROR: Failed to extract SHA256 from ${BINARY_FILE}.dgst"; exit 1; }; \
+  echo "${EXPECTED_SHA}  ${BINARY_FILE}" | sha256sum -c -; \
   unzip "${BINARY_FILE}"; \
-  rm -f "${BINARY_FILE}" geoip.dat geosite.dat; \
+  rm -f "${BINARY_FILE}" "${BINARY_FILE}.dgst" geoip.dat geosite.dat; \
   upx --lzma --best xray; \
   mkdir -p /usr/local/bin/bin; \
   mv xray /usr/local/bin/bin/xray-linux-${TARGETARCH}; \
@@ -167,13 +251,15 @@ FROM docker.io/currycan/nginx:1.29.4
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 # 安装基础组件
-RUN set -ex; \
+# apk/pip 均走 cache mount；--virtual 仍保留便于日后统一 apk del
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+  set -ex; \
   runtime_pkgs="curl bash iproute2 net-tools tzdata bash-completion ca-certificates python3 py3-pip gettext libc6-compat gcompat vim libqrencode-tools jq sqlite nodejs grep sed coreutils dumb-init"; \
-  apk add -U --no-cache --virtual .runtime-deps ${runtime_pkgs}; \
+  apk -U add --virtual .runtime-deps ${runtime_pkgs}; \
   echo -e "[global]\nbreak-system-packages = true" > /etc/pip.conf; \
-  pip install --no-cache-dir -U pip supervisor; \
-  rm -rf /tmp/*; \
-  rm -rf /var/cache/apk/*
+  pip install -U pip supervisor; \
+  rm -rf /tmp/*
 
 # 安装 acme.sh
 ENV AUTO_UPGRADE=1
@@ -184,14 +270,14 @@ ENV PATH=/acme.sh/:$PATH
 RUN set -ex && curl -L https://get.acme.sh | sh
 
 # x-ui dependences
-RUN set -ex; \
-  apk add -U --no-cache fail2ban; \
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+  set -ex; \
+  apk -U add fail2ban; \
   rm -f /etc/fail2ban/jail.d/alpine-ssh.conf; \
   cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local; \
   sed -i "s/^\[ssh\]$/&\nenabled = false/" /etc/fail2ban/jail.local; \
   sed -i "s/^\[sshd\]$/&\nenabled = false/" /etc/fail2ban/jail.local; \
   sed -i "s/#allowipv6 = auto/allowipv6 = auto/g" /etc/fail2ban/fail2ban.conf; \
-  rm -rf /var/cache/apk/*; \
   rm -rf /tmp/*
 
 ENV WORKDIR=/sb-xray

@@ -63,6 +63,54 @@ get_latest_tag() {
     fi
 }
 
+# 辅助函数: 获取 GitHub Release JSON（按 repo@tag 文件缓存）
+# 相同 release 的多个 asset 只触发一次 API 调用，避免速率限额
+# 使用文件缓存而非关联数组，保持 bash 3.2 兼容（macOS /bin/bash）
+_RELEASE_CACHE_DIR="${TMPDIR:-/tmp}/sbxray-release-cache-$$"
+mkdir -p "$_RELEASE_CACHE_DIR"
+trap 'rm -rf "$_RELEASE_CACHE_DIR"' EXIT
+get_release_json() {
+    local repo=$1 tag=$2
+    local key
+    key=$(printf '%s@%s' "$repo" "$tag" | tr '/' '_')
+    local cache_file="$_RELEASE_CACHE_DIR/$key.json"
+    if [ ! -s "$cache_file" ]; then
+        fetch_url "https://api.github.com/repos/$repo/releases/tags/$tag" > "$cache_file"
+    fi
+    cat "$cache_file"
+}
+
+# 辅助函数: 从 GitHub Release 资产列表中获取某文件的 sha256 digest
+# 用法: get_asset_digest <repo> <tag> <asset_name>
+# 返回纯 64 位 hex；失败返回空
+get_asset_digest() {
+    local repo=$1 tag=$2 asset=$3
+    get_release_json "$repo" "$tag" | jq -r --arg n "$asset" '.assets[] | select(.name == $n) | .digest // empty' 2>/dev/null | sed -n 's|^sha256:||p'
+}
+
+# 辅助函数: 检查 GitHub API 速率限额；余额过低时提示设置 GITHUB_TOKEN
+check_gh_rate_limit() {
+    local need=$1  # 预计需要多少请求
+    local rate_json remaining reset
+    if [ -n "$GITHUB_TOKEN" ]; then
+        rate_json=$(curl -sSf -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/rate_limit" 2>/dev/null)
+    else
+        rate_json=$(curl -sSf "https://api.github.com/rate_limit" 2>/dev/null)
+    fi
+    remaining=$(echo "$rate_json" | jq -r '.rate.remaining // 0' 2>/dev/null)
+    reset=$(echo "$rate_json" | jq -r '.rate.reset // 0' 2>/dev/null)
+    if [ -z "$remaining" ] || [ "$remaining" -lt "$need" ] 2>/dev/null; then
+        local reset_human
+        reset_human=$(date -r "$reset" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
+        echo -e "${RED}✗ GitHub API 余额不足：剩 ${remaining}，需要 ${need}。重置时间：${reset_human}${NC}" >&2
+        if [ -z "$GITHUB_TOKEN" ]; then
+            echo -e "${YELLOW}  提示：export GITHUB_TOKEN=<token> 后上限从 60/h 提升到 5000/h${NC}" >&2
+        fi
+        exit 1
+    fi
+    echo -e "  ${BLUE}GitHub API 余额：${remaining} (需要 ≥${need})${NC}"
+}
+
 # 辅助函数: 获取最新 Stable Tag
 get_latest_stable_tag() {
     local repo=$1
@@ -163,6 +211,19 @@ check_version() {
     local arg_name=$3
     local default_version=$4
 
+    # 版本格式校验（与 .github/workflows/daily-build.yml 中 validate_version 保持一致）
+    # 拒绝含 shell 元字符的 tag，避免 $BUILD_ARGS 展开时注入 docker buildx 参数
+    _validate_semver() {
+        [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?$ ]]
+    }
+    if [ -n "$version" ] && [ "$version" != "null" ]; then
+        local stripped="${version#v}"
+        if ! _validate_semver "$stripped"; then
+            printf "%-25s ${RED}版本 %q 格式非法，拒绝构建（可能含注入字符）${NC}\n" "${name}:" "$version"
+            exit 1
+        fi
+    fi
+
     if [ -z "$version" ] || [ "$version" == "null" ]; then
         if [ -n "$default_version" ]; then
             if [ "$USE_DEFAULT_VERSIONS" == "true" ]; then
@@ -191,10 +252,10 @@ check_version() {
 }
 
 check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"           "0.8.0"
-check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"             "1.19.23"
+check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"             "1.19.24"
 check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"          "1.1.0"
-check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION" "2.16.55"
-check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"  "2.22.1"
+check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION" "2.16.56"
+check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"  "2.22.4"
 check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"                "1.4.1"
 check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"               "0.45.0"
 check_version "Cloudflared"      "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSION"        "2026.3.0"
@@ -225,6 +286,145 @@ if [ "$USE_DEFAULT_VERSIONS" != "true" ]; then
 fi
 
 TAG_VERSION=$XRAY_VERSION_FINAL
+
+# ============================================================
+# 下载完整性：为每个不自带 checksum 文件的组件从 GitHub API 取 digest
+# shoutrrr 和 xray 在 Dockerfile 内联使用上游 checksums/.dgst，不在此列
+# ============================================================
+echo -e "${BLUE}获取各组件发布文件的 SHA256...${NC}"
+
+# 11 个 digest key 列表（便于校验/遍历）
+DIGEST_KEYS="http_meta_bundle_sha256 http_meta_tpl_sha256 sub_store_backend_sha256 \
+  mihomo_amd64_sha256 mihomo_arm64_sha256 dufs_amd64_sha256 dufs_arm64_sha256 \
+  cloudflared_amd64_sha256 cloudflared_arm64_sha256 sing_box_amd64_sha256 sing_box_arm64_sha256"
+
+VERSIONS_JSON_PATH="$(cd "$(dirname "$0")" && pwd)/versions.json"
+
+# 从 versions.json 读取缓存的 digest（default 模式用）
+# 返回值通过 stdout；字段不存在或为空时返回空字符串
+get_cached_digest() {
+    local key=$1
+    [ -f "$VERSIONS_JSON_PATH" ] || { echo ""; return; }
+    jq -r --arg k "$key" '.digests[$k] // empty' "$VERSIONS_JSON_PATH" 2>/dev/null
+}
+
+# 校验：任何一项为空即拒绝构建
+_require_sha() {
+    local name=$1 val=$2
+    if [ -z "$val" ]; then
+        echo -e "${RED}✗ ${name} 未设置${NC}" >&2
+        exit 1
+    fi
+    printf "  %-32s ${GREEN}%s${NC}\n" "${name}:" "${val:0:12}…"
+}
+
+if [ "$USE_DEFAULT_VERSIONS" == "true" ]; then
+    # ---------- 默认模式：纯本地读取 versions.json，不触网 ----------
+    echo -e "  ${BLUE}从 ${VERSIONS_JSON_PATH#$PWD/} 读取缓存的 SHA256...${NC}"
+    HTTP_META_BUNDLE_SHA=$(get_cached_digest http_meta_bundle_sha256)
+    HTTP_META_TPL_SHA=$(get_cached_digest http_meta_tpl_sha256)
+    SUB_STORE_BACKEND_SHA=$(get_cached_digest sub_store_backend_sha256)
+    MIHOMO_AMD64_SHA=$(get_cached_digest mihomo_amd64_sha256)
+    MIHOMO_ARM64_SHA=$(get_cached_digest mihomo_arm64_sha256)
+    DUFS_AMD64_SHA=$(get_cached_digest dufs_amd64_sha256)
+    DUFS_ARM64_SHA=$(get_cached_digest dufs_arm64_sha256)
+    CLOUDFLARED_AMD64_SHA=$(get_cached_digest cloudflared_amd64_sha256)
+    CLOUDFLARED_ARM64_SHA=$(get_cached_digest cloudflared_arm64_sha256)
+    SING_BOX_AMD64_SHA=$(get_cached_digest sing_box_amd64_sha256)
+    SING_BOX_ARM64_SHA=$(get_cached_digest sing_box_arm64_sha256)
+
+    # 任一缺失则提示用户先跑一次非 default 模式
+    _missing=0
+    for key in $DIGEST_KEYS; do
+        if [ -z "$(get_cached_digest "$key")" ]; then _missing=1; break; fi
+    done
+    if [ $_missing -eq 1 ]; then
+        echo -e "${RED}✗ versions.json 中缺少缓存 digest${NC}" >&2
+        echo -e "${YELLOW}  先运行一次 \`./build.sh\`（不带 default）以从 GitHub API 获取并写回；或手动编辑 versions.json 的 .digests 字段${NC}" >&2
+        exit 1
+    fi
+else
+    # ---------- API 模式：从 GitHub API 获取（会写回 versions.json 缓存） ----------
+    check_gh_rate_limit 6
+
+    _extract_arg() { echo "$BUILD_ARGS" | grep -oE "$1=[^ ]+" | cut -d= -f2- | tail -1; }
+    MIHOMO_V=$(_extract_arg MIHOMO_VERSION)
+    HTTP_META_V=$(_extract_arg HTTP_META_VERSION)
+    SUB_STORE_BACKEND_V=$(_extract_arg SUB_STORE_BACKEND_VERSION)
+    DUFS_V=$(_extract_arg DUFS_VERSION)
+    CLOUDFLARED_V=$(_extract_arg CLOUDFLARED_VERSION)
+    SING_BOX_V=$(_extract_arg SING_BOX_VERSION)
+
+    HTTP_META_BUNDLE_SHA=$(get_asset_digest xream/http-meta "$HTTP_META_V" "http-meta.bundle.js")
+    HTTP_META_TPL_SHA=$(get_asset_digest xream/http-meta "$HTTP_META_V" "tpl.yaml")
+    SUB_STORE_BACKEND_SHA=$(get_asset_digest sub-store-org/Sub-Store "$SUB_STORE_BACKEND_V" "sub-store.bundle.js")
+    MIHOMO_AMD64_SHA=$(get_asset_digest MetaCubeX/mihomo "v$MIHOMO_V" "mihomo-linux-amd64-v${MIHOMO_V}.gz")
+    MIHOMO_ARM64_SHA=$(get_asset_digest MetaCubeX/mihomo "v$MIHOMO_V" "mihomo-linux-arm64-v${MIHOMO_V}.gz")
+    DUFS_AMD64_SHA=$(get_asset_digest sigoden/dufs "v$DUFS_V" "dufs-v${DUFS_V}-x86_64-unknown-linux-musl.tar.gz")
+    DUFS_ARM64_SHA=$(get_asset_digest sigoden/dufs "v$DUFS_V" "dufs-v${DUFS_V}-arm-unknown-linux-musleabihf.tar.gz")
+    CLOUDFLARED_AMD64_SHA=$(get_asset_digest cloudflare/cloudflared "$CLOUDFLARED_V" "cloudflared-linux-amd64")
+    CLOUDFLARED_ARM64_SHA=$(get_asset_digest cloudflare/cloudflared "$CLOUDFLARED_V" "cloudflared-linux-arm64")
+    SING_BOX_AMD64_SHA=$(get_asset_digest SagerNet/sing-box "v$SING_BOX_V" "sing-box-${SING_BOX_V}-linux-amd64.tar.gz")
+    SING_BOX_ARM64_SHA=$(get_asset_digest SagerNet/sing-box "v$SING_BOX_V" "sing-box-${SING_BOX_V}-linux-arm64.tar.gz")
+fi
+
+_require_sha "HTTP_META_BUNDLE_SHA256"  "$HTTP_META_BUNDLE_SHA"
+_require_sha "HTTP_META_TPL_SHA256"     "$HTTP_META_TPL_SHA"
+_require_sha "SUB_STORE_BACKEND_SHA256" "$SUB_STORE_BACKEND_SHA"
+_require_sha "MIHOMO_AMD64_SHA256"      "$MIHOMO_AMD64_SHA"
+_require_sha "MIHOMO_ARM64_SHA256"      "$MIHOMO_ARM64_SHA"
+_require_sha "DUFS_AMD64_SHA256"        "$DUFS_AMD64_SHA"
+_require_sha "DUFS_ARM64_SHA256"        "$DUFS_ARM64_SHA"
+_require_sha "CLOUDFLARED_AMD64_SHA256" "$CLOUDFLARED_AMD64_SHA"
+_require_sha "CLOUDFLARED_ARM64_SHA256" "$CLOUDFLARED_ARM64_SHA"
+_require_sha "SING_BOX_AMD64_SHA256"    "$SING_BOX_AMD64_SHA"
+_require_sha "SING_BOX_ARM64_SHA256"    "$SING_BOX_ARM64_SHA"
+
+# API 模式下把新获取的 digest 写回 versions.json，供后续 default 模式使用
+if [ "$USE_DEFAULT_VERSIONS" != "true" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
+    _tmp_versions=$(mktemp)
+    # 顺序与 build.sh 中 check_version 调用保持一致，便于人工检查
+    # 注意：不使用 -S（会按字母表排序破坏语义顺序）
+    jq \
+        --arg mihomo_amd64_sha256      "$MIHOMO_AMD64_SHA" \
+        --arg mihomo_arm64_sha256      "$MIHOMO_ARM64_SHA" \
+        --arg http_meta_bundle_sha256  "$HTTP_META_BUNDLE_SHA" \
+        --arg http_meta_tpl_sha256     "$HTTP_META_TPL_SHA" \
+        --arg sub_store_backend_sha256 "$SUB_STORE_BACKEND_SHA" \
+        --arg dufs_amd64_sha256        "$DUFS_AMD64_SHA" \
+        --arg dufs_arm64_sha256        "$DUFS_ARM64_SHA" \
+        --arg cloudflared_amd64_sha256 "$CLOUDFLARED_AMD64_SHA" \
+        --arg cloudflared_arm64_sha256 "$CLOUDFLARED_ARM64_SHA" \
+        --arg sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA" \
+        --arg sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA" \
+        '.digests = {
+            mihomo_amd64_sha256: $mihomo_amd64_sha256,
+            mihomo_arm64_sha256: $mihomo_arm64_sha256,
+            http_meta_bundle_sha256: $http_meta_bundle_sha256,
+            http_meta_tpl_sha256: $http_meta_tpl_sha256,
+            sub_store_backend_sha256: $sub_store_backend_sha256,
+            dufs_amd64_sha256: $dufs_amd64_sha256,
+            dufs_arm64_sha256: $dufs_arm64_sha256,
+            cloudflared_amd64_sha256: $cloudflared_amd64_sha256,
+            cloudflared_arm64_sha256: $cloudflared_arm64_sha256,
+            sing_box_amd64_sha256: $sing_box_amd64_sha256,
+            sing_box_arm64_sha256: $sing_box_arm64_sha256
+        }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
+    echo -e "  ${GREEN}✓ digests 已写回 versions.json（下次 default 模式可直接使用）${NC}"
+fi
+
+BUILD_ARGS="${BUILD_ARGS} \
+  --build-arg HTTP_META_BUNDLE_SHA256=${HTTP_META_BUNDLE_SHA} \
+  --build-arg HTTP_META_TPL_SHA256=${HTTP_META_TPL_SHA} \
+  --build-arg SUB_STORE_BACKEND_SHA256=${SUB_STORE_BACKEND_SHA} \
+  --build-arg MIHOMO_AMD64_SHA256=${MIHOMO_AMD64_SHA} \
+  --build-arg MIHOMO_ARM64_SHA256=${MIHOMO_ARM64_SHA} \
+  --build-arg DUFS_AMD64_SHA256=${DUFS_AMD64_SHA} \
+  --build-arg DUFS_ARM64_SHA256=${DUFS_ARM64_SHA} \
+  --build-arg CLOUDFLARED_AMD64_SHA256=${CLOUDFLARED_AMD64_SHA} \
+  --build-arg CLOUDFLARED_ARM64_SHA256=${CLOUDFLARED_ARM64_SHA} \
+  --build-arg SING_BOX_AMD64_SHA256=${SING_BOX_AMD64_SHA} \
+  --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA}"
 
 echo -e "${BLUE}开始构建 Docker 镜像...${NC}"
 echo -e "Tags: currycan/sb-xray:${TAG_VERSION}  currycan/sb-xray:latest"

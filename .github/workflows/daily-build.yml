@@ -19,13 +19,44 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  IMAGE_NAME: currycan/sb-xray
+
 jobs:
-  check-and-build:
+  # ============================================================
+  # Phase 1: 版本与完整性信息采集（单 runner、极轻量）
+  # ============================================================
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 5
+    outputs:
+      should_build: ${{ steps.versions.outputs.should_build }}
+      changed: ${{ steps.versions.outputs.changed }}
+      shoutrrr: ${{ steps.versions.outputs.shoutrrr }}
+      mihomo: ${{ steps.versions.outputs.mihomo }}
+      http_meta: ${{ steps.versions.outputs.http_meta }}
+      sub_front: ${{ steps.versions.outputs.sub_front }}
+      sub_back: ${{ steps.versions.outputs.sub_back }}
+      s_ui: ${{ steps.versions.outputs.s_ui }}
+      dufs: ${{ steps.versions.outputs.dufs }}
+      cloudflared: ${{ steps.versions.outputs.cloudflared }}
+      x_ui: ${{ steps.versions.outputs.x_ui }}
+      sing_box: ${{ steps.versions.outputs.sing_box }}
+      xray: ${{ steps.versions.outputs.xray }}
+      http_meta_bundle_sha256: ${{ steps.versions.outputs.http_meta_bundle_sha256 }}
+      http_meta_tpl_sha256: ${{ steps.versions.outputs.http_meta_tpl_sha256 }}
+      sub_store_backend_sha256: ${{ steps.versions.outputs.sub_store_backend_sha256 }}
+      mihomo_amd64_sha256: ${{ steps.versions.outputs.mihomo_amd64_sha256 }}
+      mihomo_arm64_sha256: ${{ steps.versions.outputs.mihomo_arm64_sha256 }}
+      dufs_amd64_sha256: ${{ steps.versions.outputs.dufs_amd64_sha256 }}
+      dufs_arm64_sha256: ${{ steps.versions.outputs.dufs_arm64_sha256 }}
+      cloudflared_amd64_sha256: ${{ steps.versions.outputs.cloudflared_amd64_sha256 }}
+      cloudflared_arm64_sha256: ${{ steps.versions.outputs.cloudflared_arm64_sha256 }}
+      sing_box_amd64_sha256: ${{ steps.versions.outputs.sing_box_amd64_sha256 }}
+      sing_box_arm64_sha256: ${{ steps.versions.outputs.sing_box_arm64_sha256 }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Check component versions
         id: versions
@@ -80,7 +111,7 @@ jobs:
           XRAY=$(get_tag "XTLS/Xray-core")
           echo "::endgroup::"
 
-          # 构建新版本 JSON
+          # 构建新版本 JSON（顺序与 build.sh 中 check_version 保持一致）
           NEW_VERSIONS=$(jq -n \
             --arg shoutrrr "$SHOUTRRR" \
             --arg mihomo "$MIHOMO" \
@@ -111,16 +142,13 @@ jobs:
           EMPTY_KEYS=$(echo "$NEW_VERSIONS" | jq -r 'to_entries[] | select(.value == "") | .key')
           if [ -n "$EMPTY_KEYS" ]; then
             echo "::warning::Failed to fetch versions for: $EMPTY_KEYS"
-            # 用旧版本填充失败的组件
             for key in $EMPTY_KEYS; do
               OLD_VAL=$(jq -r ".$key" versions.json)
               NEW_VERSIONS=$(echo "$NEW_VERSIONS" | jq --arg k "$key" --arg v "$OLD_VAL" '.[$k] = $v')
             done
           fi
 
-          # 对比差异
           DIFF=$(diff <(jq -S . versions.json) <(echo "$NEW_VERSIONS" | jq -S .) || true)
-
           if [ -n "$DIFF" ]; then
             echo "::notice::Version changes detected"
             echo "$DIFF"
@@ -130,7 +158,6 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # 判断是否需要构建
           FORCE="${{ inputs.force_build }}"
           if [ "$DIFF" != "" ] || [ "$FORCE" = "true" ]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
@@ -138,10 +165,9 @@ jobs:
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # 写入版本 JSON 到临时文件，避免表达式注入
           echo "$NEW_VERSIONS" > /tmp/new_versions.json
 
-          # 输出各 build-arg (通过 jq 从文件读取，安全)
+          # 版本号输出
           echo "shoutrrr=$(jq -r .shoutrrr /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "mihomo=$(jq -r .mihomo /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "http_meta=$(jq -r .http_meta /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
@@ -154,65 +180,249 @@ jobs:
           echo "sing_box=$(jq -r .sing_box /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "xray=$(jq -r .xray /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        if: steps.versions.outputs.should_build == 'true'
-        uses: docker/setup-qemu-action@v3
+          # ============================================================
+          # 下载完整性：从 GitHub Release API 抓取 .assets[].digest
+          # shoutrrr 和 xray 在 Dockerfile 内联校验上游 checksums/.dgst
+          # ============================================================
+          digest() {
+            gh api "repos/$1/releases/tags/$2" \
+              --jq ".assets[] | select(.name == \"$3\") | .digest // empty" \
+              2>/dev/null | sed -n 's|^sha256:||p'
+          }
+          require_sha() {
+            [ -n "$2" ] || { echo "::error::Failed to fetch digest for $1"; exit 1; }
+            echo "$1=$2" >> "$GITHUB_OUTPUT"
+          }
+          V_HTTP_META=$(jq -r .http_meta /tmp/new_versions.json)
+          V_SUB_BACK=$(jq -r .sub_store_backend /tmp/new_versions.json)
+          V_MIHOMO=$(jq -r .mihomo /tmp/new_versions.json)
+          V_DUFS=$(jq -r .dufs /tmp/new_versions.json)
+          V_CLOUDFLARED=$(jq -r .cloudflared /tmp/new_versions.json)
+          V_SING_BOX=$(jq -r .sing_box /tmp/new_versions.json)
+
+          echo "::group::Fetching asset digests"
+          HTTP_META_BUNDLE_SHA=$(digest xream/http-meta "$V_HTTP_META" http-meta.bundle.js)
+          HTTP_META_TPL_SHA=$(digest xream/http-meta "$V_HTTP_META" tpl.yaml)
+          SUB_STORE_BACKEND_SHA=$(digest sub-store-org/Sub-Store "$V_SUB_BACK" sub-store.bundle.js)
+          MIHOMO_AMD64_SHA=$(digest MetaCubeX/mihomo "v$V_MIHOMO" "mihomo-linux-amd64-v${V_MIHOMO}.gz")
+          MIHOMO_ARM64_SHA=$(digest MetaCubeX/mihomo "v$V_MIHOMO" "mihomo-linux-arm64-v${V_MIHOMO}.gz")
+          DUFS_AMD64_SHA=$(digest sigoden/dufs "v$V_DUFS" "dufs-v${V_DUFS}-x86_64-unknown-linux-musl.tar.gz")
+          DUFS_ARM64_SHA=$(digest sigoden/dufs "v$V_DUFS" "dufs-v${V_DUFS}-arm-unknown-linux-musleabihf.tar.gz")
+          CLOUDFLARED_AMD64_SHA=$(digest cloudflare/cloudflared "$V_CLOUDFLARED" cloudflared-linux-amd64)
+          CLOUDFLARED_ARM64_SHA=$(digest cloudflare/cloudflared "$V_CLOUDFLARED" cloudflared-linux-arm64)
+          SING_BOX_AMD64_SHA=$(digest SagerNet/sing-box "v$V_SING_BOX" "sing-box-${V_SING_BOX}-linux-amd64.tar.gz")
+          SING_BOX_ARM64_SHA=$(digest SagerNet/sing-box "v$V_SING_BOX" "sing-box-${V_SING_BOX}-linux-arm64.tar.gz")
+          require_sha http_meta_bundle_sha256  "$HTTP_META_BUNDLE_SHA"
+          require_sha http_meta_tpl_sha256     "$HTTP_META_TPL_SHA"
+          require_sha sub_store_backend_sha256 "$SUB_STORE_BACKEND_SHA"
+          require_sha mihomo_amd64_sha256      "$MIHOMO_AMD64_SHA"
+          require_sha mihomo_arm64_sha256      "$MIHOMO_ARM64_SHA"
+          require_sha dufs_amd64_sha256        "$DUFS_AMD64_SHA"
+          require_sha dufs_arm64_sha256        "$DUFS_ARM64_SHA"
+          require_sha cloudflared_amd64_sha256 "$CLOUDFLARED_AMD64_SHA"
+          require_sha cloudflared_arm64_sha256 "$CLOUDFLARED_ARM64_SHA"
+          require_sha sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA"
+          require_sha sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA"
+          echo "::endgroup::"
+
+          # 把 digest 合并回 /tmp/new_versions.json 的 .digests 字段
+          # 顺序与 build.sh check_version 一致；不使用 -S 避免字母表重排
+          _merged=$(mktemp)
+          jq \
+            --arg mihomo_amd64_sha256      "$MIHOMO_AMD64_SHA" \
+            --arg mihomo_arm64_sha256      "$MIHOMO_ARM64_SHA" \
+            --arg http_meta_bundle_sha256  "$HTTP_META_BUNDLE_SHA" \
+            --arg http_meta_tpl_sha256     "$HTTP_META_TPL_SHA" \
+            --arg sub_store_backend_sha256 "$SUB_STORE_BACKEND_SHA" \
+            --arg dufs_amd64_sha256        "$DUFS_AMD64_SHA" \
+            --arg dufs_arm64_sha256        "$DUFS_ARM64_SHA" \
+            --arg cloudflared_amd64_sha256 "$CLOUDFLARED_AMD64_SHA" \
+            --arg cloudflared_arm64_sha256 "$CLOUDFLARED_ARM64_SHA" \
+            --arg sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA" \
+            --arg sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA" \
+            '.digests = {
+              mihomo_amd64_sha256: $mihomo_amd64_sha256,
+              mihomo_arm64_sha256: $mihomo_arm64_sha256,
+              http_meta_bundle_sha256: $http_meta_bundle_sha256,
+              http_meta_tpl_sha256: $http_meta_tpl_sha256,
+              sub_store_backend_sha256: $sub_store_backend_sha256,
+              dufs_amd64_sha256: $dufs_amd64_sha256,
+              dufs_arm64_sha256: $dufs_arm64_sha256,
+              cloudflared_amd64_sha256: $cloudflared_amd64_sha256,
+              cloudflared_arm64_sha256: $cloudflared_arm64_sha256,
+              sing_box_amd64_sha256: $sing_box_amd64_sha256,
+              sing_box_arm64_sha256: $sing_box_arm64_sha256
+            }' /tmp/new_versions.json > "$_merged" && mv "$_merged" /tmp/new_versions.json
+
+      - name: Upload versions artifact
+        if: steps.versions.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: new-versions
+          path: /tmp/new_versions.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # ============================================================
+  # Phase 2: 多平台并行构建（amd64 + 原生 arm64 runner）
+  #   - 各 runner 单架构原生编译，无 QEMU 模拟
+  #   - 产物 push-by-digest，通过 artifact 传递到 merge job
+  #   - GitHub Actions cache (type=gha) 持久化 BuildKit 层
+  # ============================================================
+  build:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm # GitHub 原生 arm64 runner（公开 repo 免费）
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Prepare platform pair
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Set up Docker Buildx
-        if: steps.versions.outputs.should_build == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Login to Docker Hub
-        if: steps.versions.outputs.should_build == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
-        if: steps.versions.outputs.should_build == 'true'
-        uses: docker/build-push-action@v6
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            currycan/sb-xray:${{ steps.versions.outputs.xray }}
-            currycan/sb-xray:latest
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
           build-args: |
-            SHOUTRRR_VERSION=${{ steps.versions.outputs.shoutrrr }}
-            MIHOMO_VERSION=${{ steps.versions.outputs.mihomo }}
-            HTTP_META_VERSION=${{ steps.versions.outputs.http_meta }}
-            SUB_STORE_FRONTEND_VERSION=${{ steps.versions.outputs.sub_front }}
-            SUB_STORE_BACKEND_VERSION=${{ steps.versions.outputs.sub_back }}
-            SUI_VERSION=${{ steps.versions.outputs.s_ui }}
-            DUFS_VERSION=${{ steps.versions.outputs.dufs }}
-            CLOUDFLARED_VERSION=${{ steps.versions.outputs.cloudflared }}
-            XUI_VERSION=${{ steps.versions.outputs.x_ui }}
-            SING_BOX_VERSION=${{ steps.versions.outputs.sing_box }}
-            XRAY_VERSION=${{ steps.versions.outputs.xray }}
+            GOPROXY=https://proxy.golang.org,direct
+            SHOUTRRR_VERSION=${{ needs.check.outputs.shoutrrr }}
+            MIHOMO_VERSION=${{ needs.check.outputs.mihomo }}
+            HTTP_META_VERSION=${{ needs.check.outputs.http_meta }}
+            SUB_STORE_FRONTEND_VERSION=${{ needs.check.outputs.sub_front }}
+            SUB_STORE_BACKEND_VERSION=${{ needs.check.outputs.sub_back }}
+            SUI_VERSION=${{ needs.check.outputs.s_ui }}
+            DUFS_VERSION=${{ needs.check.outputs.dufs }}
+            CLOUDFLARED_VERSION=${{ needs.check.outputs.cloudflared }}
+            XUI_VERSION=${{ needs.check.outputs.x_ui }}
+            SING_BOX_VERSION=${{ needs.check.outputs.sing_box }}
+            XRAY_VERSION=${{ needs.check.outputs.xray }}
+            HTTP_META_BUNDLE_SHA256=${{ needs.check.outputs.http_meta_bundle_sha256 }}
+            HTTP_META_TPL_SHA256=${{ needs.check.outputs.http_meta_tpl_sha256 }}
+            SUB_STORE_BACKEND_SHA256=${{ needs.check.outputs.sub_store_backend_sha256 }}
+            MIHOMO_AMD64_SHA256=${{ needs.check.outputs.mihomo_amd64_sha256 }}
+            MIHOMO_ARM64_SHA256=${{ needs.check.outputs.mihomo_arm64_sha256 }}
+            DUFS_AMD64_SHA256=${{ needs.check.outputs.dufs_amd64_sha256 }}
+            DUFS_ARM64_SHA256=${{ needs.check.outputs.dufs_arm64_sha256 }}
+            CLOUDFLARED_AMD64_SHA256=${{ needs.check.outputs.cloudflared_amd64_sha256 }}
+            CLOUDFLARED_ARM64_SHA256=${{ needs.check.outputs.cloudflared_arm64_sha256 }}
+            SING_BOX_AMD64_SHA256=${{ needs.check.outputs.sing_box_amd64_sha256 }}
+            SING_BOX_ARM64_SHA256=${{ needs.check.outputs.sing_box_arm64_sha256 }}
 
-      # 仅在版本变化时更新 versions.json (force_build 不更新)
-      - name: Update versions.json
-        if: steps.versions.outputs.changed == 'true'
+      - name: Export digest
         run: |
-          jq -S . /tmp/new_versions.json > versions.json
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ============================================================
+  # Phase 3: 合并多架构 manifest，打最终 tag
+  # ============================================================
+  merge:
+    needs: [check, build]
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.IMAGE_NAME }}:${{ needs.check.outputs.xray }} \
+            -t ${{ env.IMAGE_NAME }}:latest \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ needs.check.outputs.xray }}
+
+  # ============================================================
+  # Phase 4: 仅在版本变化时提交 versions.json
+  # ============================================================
+  update-versions:
+    needs: [check, merge]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download new versions
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: new-versions
+          path: /tmp
 
       - name: Commit updated versions
-        if: steps.versions.outputs.changed == 'true'
         run: |
+          set -euo pipefail
+          # 不使用 -S：保留 new_versions.json 中 build.sh 约定的语义顺序
+          jq . /tmp/new_versions.json > versions.json
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add versions.json
           if git diff --cached --quiet; then
             echo "No changes to commit"
-          else
-            # 生成变更摘要到文件，避免注入
-            diff <(git show HEAD:versions.json | jq -S .) <(jq -S . versions.json) \
-              | grep '^[<>]' | sed 's/^</  -/;s/^>/  +/' > /tmp/diff_summary.txt || true
-            git commit -m "chore: bump component versions
+            exit 0
+          fi
+
+          # 生成变更摘要到文件，避免注入
+          diff <(git show HEAD:versions.json | jq -S .) <(jq -S . versions.json) \
+            | grep '^[<>]' | sed 's/^</  -/;s/^>/  +/' > /tmp/diff_summary.txt || true
+
+          git commit -m "chore: bump component versions
           $(cat /tmp/diff_summary.txt)
 
           🤖 Generated by GitHub Actions"
-            git push
-          fi
+          git push

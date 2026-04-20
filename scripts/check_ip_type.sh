@@ -51,9 +51,7 @@ IPV6check=1        # 检查 IPv6
 mode_lite=0        # 精简模式
 mode_output=0      # 输出到文件
 fullIP=0           # 显示完整 IP
-useNIC=""          # 指定网卡
-usePROXY=""        # 指定代理
-CurlARG=""         # curl 参数
+CurlARGS=()        # curl 参数（数组形式避免引号注入）
 
 # 存储结果的关联数组
 declare -A maxmind ipinfo scamalytics ipregistry ipapi abuseipdb ip2location dbip ipwhois ipdata ipqs
@@ -94,7 +92,7 @@ check_connectivity() {
 # 获取媒体检测所需的 Cookies
 fetch_cookies() {
     show_progress "正在获取检测所需 Cookies"
-    Media_Cookie=$(curl $CurlARG -sL --retry 3 --max-time 10 "${rawgithub}/ref/cookies.txt")
+    Media_Cookie=$(curl "${CurlARGS[@]}" -sL --retry 3 --max-time 10 "${rawgithub}/ref/cookies.txt")
     end_progress
 }
 
@@ -128,7 +126,7 @@ get_ipv4() {
     local API_NET=("myip.check.place" "ip.sb" "ping0.cc" "icanhazip.com" "api64.ipify.org")
     IPV4=""
     for p in "${API_NET[@]}"; do
-        IPV4=$(curl $CurlARG -s4 --max-time 3 "$p")
+        IPV4=$(curl "${CurlARGS[@]}" -s4 --max-time 3 "$p")
         if [[ -n "$IPV4" && ! "$IPV4" =~ "error" ]]; then
             break
         fi
@@ -140,7 +138,7 @@ get_ipv6() {
     local API_NET=("myip.check.place" "ip.sb" "ping0.cc" "icanhazip.com" "api64.ipify.org")
     IPV6=""
     for p in "${API_NET[@]}"; do
-        IPV6=$(curl $CurlARG -s6 --max-time 3 "$p")
+        IPV6=$(curl "${CurlARGS[@]}" -s6 --max-time 3 "$p")
         if [[ -n "$IPV6" && ! "$IPV6" =~ "error" ]]; then
             break
         fi
@@ -166,7 +164,7 @@ db_maxmind() {
     local ip_ver=$1
     show_progress "正在查询 Maxmind 数据库"
     local response
-    response=$(curl $CurlARG -Ls -$ip_ver -m 10 "https://ipinfo.check.place/$IP?lang=$YY")
+    response=$(curl "${CurlARGS[@]}" -Ls -$ip_ver -m 10 "https://ipinfo.check.place/$IP?lang=$YY")
 
     # 解析 JSON
     maxmind[asn]=$(echo "$response" | jq -r '.ASN.AutonomousSystemNumber // "N/A"')
@@ -192,7 +190,7 @@ db_maxmind() {
 db_ipinfo() {
     show_progress "正在查询 IPinfo 数据库"
     local response
-    response=$(curl $CurlARG -Ls -m 10 "https://ipinfo.io/widget/demo/$IP")
+    response=$(curl "${CurlARGS[@]}" -Ls -m 10 "https://ipinfo.io/widget/demo/$IP")
 
     ipinfo[asn]=$(echo "$response" | jq -r '.data.asn.asn // "N/A"')
     ipinfo[org]=$(echo "$response" | jq -r '.data.asn.name // "N/A"')
@@ -227,7 +225,7 @@ db_ipinfo() {
 db_ipregistry() {
     show_progress "正在查询 ipregistry 数据库"
     local response
-    response=$(curl $CurlARG -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=ipregistry")
+    response=$(curl "${CurlARGS[@]}" -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=ipregistry")
 
     local type=$(echo "$response" | jq -r '.connection.type')
     shopt -s nocasematch
@@ -248,7 +246,7 @@ db_ipregistry() {
 db_ip2location() {
     show_progress "正在查询 IP2Location 数据库"
     local response
-    response=$(curl $CurlARG -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=ip2location")
+    response=$(curl "${CurlARGS[@]}" -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=ip2location")
 
     ip2location[score]=$(echo "$response" | jq -r '.fraud_score // 0')
     local type=$(echo "$response" | jq -r '.usage_type')
@@ -273,7 +271,7 @@ db_ip2location() {
 db_abuseipdb() {
     show_progress "正在查询 AbuseIPDB 数据库"
     local response
-    response=$(curl $CurlARG -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=abuseipdb")
+    response=$(curl "${CurlARGS[@]}" -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=abuseipdb")
 
     abuseipdb[score]=$(echo "$response" | jq -r '.data.abuseConfidenceScore // 0')
     local type=$(echo "$response" | jq -r '.data.usageType')
@@ -299,7 +297,7 @@ db_scamalytics() {
     local ip_ver=$1
     show_progress "正在查询 Scamalytics 风险评分"
     local response
-    response=$(curl $CurlARG -sL -$ip_ver -m 10 "https://ipinfo.check.place/$IP?db=scamalytics")
+    response=$(curl "${CurlARGS[@]}" -sL -$ip_ver -m 10 "https://ipinfo.check.place/$IP?db=scamalytics")
 
     local score=$(echo "$response" | jq -r '.scamalytics.scamalytics_score // 0')
     scamalytics[score]=$score
@@ -318,7 +316,7 @@ db_scamalytics() {
 db_ipapi() {
     show_progress "正在查询 IPAPI 风险数据"
     local response
-    response=$(curl $CurlARG -sL -m 10 "https://api.ipapi.is/?q=$IP")
+    response=$(curl "${CurlARGS[@]}" -sL -m 10 "https://api.ipapi.is/?q=$IP")
 
     ipapi[proxy]=$(echo "$response" | jq -r '.is_proxy // false')
     ipapi[vpn]=$(echo "$response" | jq -r '.is_vpn // false')
@@ -363,7 +361,7 @@ test_tiktok() {
     tiktok[region]=""
 
     local result
-    result=$(curl $CurlARG -$ip_ver --user-agent "$UA_Browser" -sL -m 10 "https://www.tiktok.com/")
+    result=$(curl "${CurlARGS[@]}" -$ip_ver --user-agent "$UA_Browser" -sL -m 10 "https://www.tiktok.com/")
 
     if [[ "$result" == *"region"* ]]; then
         local region=$(echo "$result" | grep '"region":' | sed 's/.*"region"//' | cut -f2 -d'"')
@@ -383,7 +381,7 @@ test_netflix() {
     netflix[region]=""
 
     local result
-    result=$(curl $CurlARG -$ip_ver --user-agent "$UA_Browser" -fsL --max-time 10 "https://www.netflix.com/title/81280792" 2>&1)
+    result=$(curl "${CurlARGS[@]}" -$ip_ver --user-agent "$UA_Browser" -fsL --max-time 10 "https://www.netflix.com/title/81280792" 2>&1)
 
     if [[ "$result" != *"Oh no!"* && -n "$result" ]]; then
         # 尝试提取地区 ID
@@ -409,7 +407,7 @@ test_youtube() {
     youtube[status]="$status_no"
 
     local result
-    result=$(curl $CurlARG -$ip_ver -sSL --max-time 10 -H "Accept-Language: en" "https://www.youtube.com/premium" 2>&1)
+    result=$(curl "${CurlARGS[@]}" -$ip_ver -sSL --max-time 10 -H "Accept-Language: en" "https://www.youtube.com/premium" 2>&1)
 
     if echo "$result" | grep -q "Premium is not available in your country"; then
         youtube[status]="$status_no"
@@ -436,7 +434,7 @@ test_chatgpt() {
 
     # 检查是否在该地区提供服务
     local result
-    result=$(curl $CurlARG -$ip_ver -sS --max-time 10 "https://chat.openai.com/cdn-cgi/trace" 2>&1)
+    result=$(curl "${CurlARGS[@]}" -$ip_ver -sS --max-time 10 "https://chat.openai.com/cdn-cgi/trace" 2>&1)
 
     if echo "$result" | grep -q "loc="; then
         local loc=$(echo "$result" | grep "loc=" | cut -d= -f2)
@@ -499,8 +497,8 @@ while getopts "i:x:46fn" opt; do
         4) IPV6check=0 ;;
         6) IPV4check=0 ;;
         f) fullIP=1 ;;
-        i) useNIC="--interface $OPTARG"; CurlARG+="$useNIC " ;;
-        x) usePROXY="-x $OPTARG"; CurlARG+="$usePROXY " ;;
+        i) CurlARGS+=("--interface" "$OPTARG") ;;
+        x) CurlARGS+=("-x" "$OPTARG") ;;
         n) ;; # 忽略依赖检查标志
         *) echo "Usage: $0 [-4] [-6] [-f] [-i interface] [-x proxy]"; exit 1 ;;
     esac

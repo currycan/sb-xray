@@ -1013,7 +1013,9 @@ decryptSecretsEnv() {
     curl -fsSLo /tmp/tmp.bin "${base_url}/tmp.bin" || {
         log ERROR "[密钥] 下载失败，终止启动"; exit 1
     }
-    crypctl decrypt -i /tmp/tmp.bin -o "${SECRET_FILE}" -k "${DECODE}" || {
+    # 使用 --key-env 从环境变量读取密钥，避免明文出现在 ps/argv
+    # 要求 crypctl >= 支持 --key-env 的版本（currycan/key docker/crypctl）
+    crypctl decrypt -i /tmp/tmp.bin -o "${SECRET_FILE}" --key-env DECODE || {
         log ERROR "[密钥] 解密失败，终止启动"; exit 1
     }
     rm -f /tmp/tmp.bin

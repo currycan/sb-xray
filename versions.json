@@ -1,13 +1,26 @@
 {
-  "cloudflared": "2026.3.0",
-  "dufs": "0.45.0",
-  "http_meta": "1.1.0",
-  "mihomo": "1.19.24",
-  "s_ui": "1.4.1",
   "shoutrrr": "0.8.0",
-  "sing_box": "1.13.8",
-  "sub_store_backend": "2.22.4",
+  "mihomo": "1.19.24",
+  "http_meta": "1.1.0",
   "sub_store_frontend": "2.16.56",
+  "sub_store_backend": "2.22.4",
+  "s_ui": "1.4.1",
+  "dufs": "0.45.0",
+  "cloudflared": "2026.3.0",
   "x_ui": "2.8.11",
-  "xray": "26.4.17"
+  "sing_box": "1.13.8",
+  "xray": "26.4.17",
+  "digests": {
+    "mihomo_amd64_sha256": "a1aca7b07037d06d0093320386c54d86e4ed9979394a20034f3e86013a7ae6e7",
+    "mihomo_arm64_sha256": "6d4a278e7ace1016f23d7245f6f8911f6f7a4adfba2095704473d937e1911840",
+    "http_meta_bundle_sha256": "9d2201d3c56c8aba404315ffdecd773dc7be6bd46e61d8cdf568d081d234acf2",
+    "http_meta_tpl_sha256": "6f3ecf199ae9a5014b0090a46b0dfc16c64e4fc45350880726a56ecb652dd16c",
+    "sub_store_backend_sha256": "362aadebe78b287093424dda23831aea2bbfb3afc26a87cc72abc8b53adc24a7",
+    "dufs_amd64_sha256": "cd506e51f06f410661fe07387d1cd5a55ae1ffc00d07c1831b454f415d099699",
+    "dufs_arm64_sha256": "de86d5a371fafc0bb921ba92cf3c7077d86c0a9e245dcb0cc64531442d9256c9",
+    "cloudflared_amd64_sha256": "4a9e50e6d6d798e90fcd01933151a90bf7edd99a0a55c28ad18f2e16263a5c30",
+    "cloudflared_arm64_sha256": "0755ba4cbab59980e6148367fcf53a8f3ec85a97deefd63c2420cf7850769bee",
+    "sing_box_amd64_sha256": "aab8841979aba14ae4c4dc72c4a593be1a16da95e75d53b494ed718f0223370f",
+    "sing_box_arm64_sha256": "21cecd8853e910df2958da73b3d59a25db6b641b211b00d05051b12a9412cfe8"
+  }
 }
