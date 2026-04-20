@@ -2,12 +2,12 @@
   "cloudflared": "2026.3.0",
   "dufs": "0.45.0",
   "http_meta": "1.1.0",
-  "mihomo": "1.19.23",
+  "mihomo": "1.19.24",
   "s_ui": "1.4.1",
   "shoutrrr": "0.8.0",
   "sing_box": "1.13.8",
-  "sub_store_backend": "2.22.2",
-  "sub_store_frontend": "2.16.55",
+  "sub_store_backend": "2.22.4",
+  "sub_store_frontend": "2.16.56",
   "x_ui": "2.8.11",
   "xray": "26.4.17"
 }
