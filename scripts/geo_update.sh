@@ -39,16 +39,16 @@ ln -sf /usr/local/bin/bin/*.dat /usr/local/bin/
 
 log "Files downloaded successfully."
 
-# 检查 supervisord 是否在运行
-if [ -e "/var/run/supervisor.sock" ]; then
+# 检查 supervisord 是否在运行（进程存活 + socket 是真 unix socket，过滤上次异常退出残留的 stale 文件）
+if pgrep -x supervisord >/dev/null 2>&1 && [ -S "/var/run/supervisor.sock" ]; then
     log "Restarting ..."
     # supervisorctl restart all
-    supervisorctl stop xray
+    supervisorctl stop xray  || log "WARN: supervisorctl stop xray failed"
     # 清理 socket 文件，防止 bind error
     rm -f /dev/shm/uds*
-    supervisorctl start xray
+    supervisorctl start xray || log "WARN: supervisorctl start xray failed"
     log "Restarting x-ui Xray..."
-    netstat -tlnp | grep xray-linux | head -1 | awk '{print $7}' | awk -F/ '{print $1}' | xargs kill -9
+    netstat -tlnp 2>/dev/null | grep xray-linux | head -1 | awk '{print $7}' | awk -F/ '{print $1}' | xargs -r kill -9 2>/dev/null || true
 else
     log "Supervisord not running, skipping service restart."
 fi
