@@ -1,7 +1,7 @@
 {
     "log": {
         "disabled": false,
-        "level": "warning",
+        "level": "${LOG_LEVEL}",
         "output": "${LOGDIR}/sing-box/sing-box.log",
         "timestamp": true
     },

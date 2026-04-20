@@ -283,6 +283,8 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
 ENV WORKDIR=/sb-xray
 ENV LOGDIR=/var/log/
 ENV SUPERVISOR_LOG_MAX_BYTES="20MB"
+# xray 与 sing-box 共用日志级别：debug | info | warning | error
+ENV LOG_LEVEL="warning"
 
 WORKDIR ${WORKDIR}
 

@@ -3,7 +3,7 @@
     "log": {
         "access": "${LOGDIR}/xray/access.log",
         "error": "${LOGDIR}/xray/error.log",
-        "loglevel": "warning"
+        "loglevel": "${LOG_LEVEL}"
     },
     "dns": {
         "servers": [

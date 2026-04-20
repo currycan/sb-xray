@@ -9,10 +9,12 @@ services:
       - ACMESH_DEBUG=1
       # zerossl/google
       - ACMESH_SERVER_NAME=zerossl
-      - ACMESH_EAB_KID=$eab_kid  # 填入 Google EAB keyId
+      - ACMESH_EAB_KID=$eab_kid # 填入 Google EAB keyId
       - ACMESH_EAB_HMAC_KEY=$eab_hmac_key # 填入 Google EAB b64MacKey
       - DEST_HOST=speed.cloudflare.com
       - LISTENING_PORT=443
+      # xray / sing-box 日志级别：debug | info | warning | error，默认 warning
+      - LOG_LEVEL=warning
       - DUFS_PATH_PREFIX=/myfiles
       - XUI_WEBBASEPATH=3xadmin
       # Gemini直连, true=直连, false=使用代理, 空=自动判断
@@ -25,8 +27,8 @@ services:
       # - |
       #   PROVIDERS=第一个|https://<host>/api/v1/client/subscribe?token=c02d1e8f9cd19dcae0f146c4ed71541a&flag=clash.meta|优
     ports:
-      - '443:443/tcp'
-      - '443:443/udp' # use UDP for usage of HTTP/3
+      - "443:443/tcp"
+      - "443:443/udp" # use UDP for usage of HTTP/3
     volumes:
       - ./pki:/pki
       - ./acmecerts:/acmecerts
