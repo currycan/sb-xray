@@ -77,7 +77,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Print subscription-link banner + optional TLS diagnostics.",
     )
 
-    args = parser.parse_args(argv)
+    # ``parse_known_args`` (vs ``parse_args``) lets us silently ignore
+    # anything the Docker CMD appends (e.g. ``supervisord``) — the legacy
+    # Bash entrypoint also accepted but discarded ``$@`` and relied on
+    # its own ``exec supervisord`` call to start the process tree.
+    args, _extras = parser.parse_known_args(argv)
 
     # Backward-compat: no subcommand → default to run
     if args.command is None:

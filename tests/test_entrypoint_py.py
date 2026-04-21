@@ -116,6 +116,22 @@ def test_python_stage_probe_invokes_probe_base_env(
     assert called["probe"] is True
 
 
+def test_trailing_docker_cmd_args_are_ignored(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Dockerfile CMD ['supervisord'] becomes trailing argv; parser tolerates it."""
+    received: dict[str, list[str]] = {}
+
+    def fake_run_legacy(skip: list[str]) -> int:
+        received["skip"] = skip
+        return 0
+
+    monkeypatch.setattr(ep, "run_legacy", fake_run_legacy)
+    # Simulate docker: ENTRYPOINT [python, entrypoint.py, run] + CMD [supervisord]
+    rc = ep.main(["--env-file", str(tmp_env_file), "run", "supervisord"])
+    assert rc == 0
+
+
 def test_show_subcommand_calls_display(tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called = {"show": False}
 
