@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# sb-xray subscription viewer — thin shim that delegates to the
+# Python entrypoint's ``show`` subcommand (replaces show-config.sh,
+# the legacy /usr/local/bin/show softlink target).
+exec python3 /scripts/entrypoint.py show "$@"

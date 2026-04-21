@@ -1,0 +1,90 @@
+"""Tests for sb_xray.display (show-config.sh §show_info_links equiv)."""
+
+from __future__ import annotations
+
+import subprocess
+from typing import Any
+
+import pytest
+from sb_xray import display
+
+
+@pytest.mark.parametrize(
+    "info,expected",
+    [
+        ("Tokyo Japan|1.1.1.1", "🇯🇵"),
+        ("日本东京|2.2.2.2", "🇯🇵"),
+        ("香港 HK|3.3.3.3", "🇭🇰"),
+        ("Hong Kong|3.3.3.3", "🇭🇰"),
+        ("New York United States|4.4.4.4", "🇺🇸"),
+        ("美国洛杉矶|4.4.4.4", "🇺🇸"),
+        ("Seoul Korea|5.5.5.5", "🇰🇷"),
+        ("Taipei Taiwan|6.6.6.6", "🇹🇼"),
+        ("Singapore|7.7.7.7", "🇸🇬"),
+        ("Berlin Germany|8.8.8.8", "🇩🇪"),
+        ("random nowhere|9.9.9.9", ""),
+    ],
+)
+def test_get_flag_emoji(info: str, expected: str) -> None:
+    assert display.get_flag_emoji(info) == expected
+
+
+def test_tls_ping_diagnose_calls_xray(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured_cmd: list[list[str]] = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "fake cert fp"
+        stderr = ""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeCompleted:
+        captured_cmd.append(cmd)
+        return FakeCompleted()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    display.tls_ping_diagnose("example.com:443")
+    assert captured_cmd == [["xray", "tls", "ping", "example.com:443"]]
+    assert "example.com:443" in capsys.readouterr().out
+
+
+def test_tls_ping_no_xray_binary(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(cmd: list[str], **kwargs: Any) -> None:
+        raise FileNotFoundError("xray not found")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    display.tls_ping_diagnose("example.com:443")
+    out = capsys.readouterr().out
+    assert "xray" in out
+
+
+def test_show_qrcode_invokes_qrencode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[list[str]] = []
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = b""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeCompleted:
+        captured.append(cmd)
+        return FakeCompleted()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    display.show_qrcode("vless://content", name="test")
+    assert any(c[0] == "qrencode" for c in captured)
+
+
+def test_show_info_links_prints_banner(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.delenv("DEBUG", raising=False)
+    display.show_info_links()
+    out = capsys.readouterr().out
+    assert "cdn.example.com" in out

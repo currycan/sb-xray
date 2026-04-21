@@ -46,7 +46,7 @@ def test_dry_run_exits_zero_without_invoking_legacy(
         return 99
 
     monkeypatch.setattr(ep, "run_legacy", fake_run_legacy)
-    rc = ep.main(["--dry-run", "--env-file", str(tmp_env_file)])
+    rc = ep.main(["--env-file", str(tmp_env_file), "run", "--dry-run"])
     assert rc == 0
     assert called["ran"] is False
 
@@ -65,6 +65,7 @@ def test_main_delegates_to_legacy_when_not_dry_run(
         [
             "--env-file",
             str(tmp_env_file),
+            "run",
             "--skip-stage",
             "speed_test",
             "--skip-stage",
@@ -110,9 +111,21 @@ def test_python_stage_probe_invokes_probe_base_env(
 
     monkeypatch.setattr(ep, "probe_base_env", fake_probe)
     monkeypatch.setattr(ep, "run_legacy", lambda _: 0)
-    rc = ep.main(["--env-file", str(tmp_env_file), "--python-stage", "probe"])
+    rc = ep.main(["--env-file", str(tmp_env_file), "run", "--python-stage", "probe"])
     assert rc == 0
     assert called["probe"] is True
+
+
+def test_show_subcommand_calls_display(tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"show": False}
+
+    def fake_show() -> None:
+        called["show"] = True
+
+    monkeypatch.setattr(ep.sbdisplay, "show_info_links", fake_show)
+    rc = ep.main(["--env-file", str(tmp_env_file), "show"])
+    assert rc == 0
+    assert called["show"] is True
 
 
 def test_python_stage_probe_skipped_by_default(

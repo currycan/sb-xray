@@ -25,6 +25,7 @@ from pathlib import Path
 # Allow ``from sb_xray import …`` when invoked as ``python3 scripts/entrypoint.py``.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from sb_xray import display as sbdisplay
 from sb_xray import logging as sblog
 from sb_xray import network as sbnet
 from sb_xray.env import EnvManager
@@ -47,12 +48,7 @@ _SUMMARY_KEYS = (
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="entrypoint.py",
-        description="sb-xray container entrypoint (Python rewrite, Phase 1)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Bootstrap env + log summary; do NOT invoke the legacy shell.",
+        description="sb-xray container entrypoint (Python rewrite)",
     )
     parser.add_argument(
         "--env-file",
@@ -60,26 +56,36 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=_DEFAULT_ENV_FILE,
         help=f"Persisted env file (default: {_DEFAULT_ENV_FILE}).",
     )
-    parser.add_argument(
-        "--skip-stage",
-        action="append",
-        default=[],
-        metavar="STAGE",
-        help="(Phase 2+) Stage names to skip. Currently advisory-only.",
-    )
-    parser.add_argument(
+
+    sub = parser.add_subparsers(dest="command")
+
+    # ``run`` — the default (container ENTRYPOINT) behavior
+    run_p = sub.add_parser("run", help="Boot container (default).")
+    run_p.add_argument("--dry-run", action="store_true")
+    run_p.add_argument("--skip-stage", action="append", default=[], metavar="STAGE")
+    run_p.add_argument(
         "--python-stage",
         action="append",
         default=[],
         choices=["probe"],
         metavar="STAGE",
-        help=(
-            "Opt-in: run the named stage in Python before delegating to "
-            "the legacy shell. Phase 2 supports: probe "
-            "(GeoIP + IP type + brutal-module detection)."
-        ),
     )
-    return parser.parse_args(argv)
+
+    # ``show`` — replaces show-config.sh
+    sub.add_parser(
+        "show",
+        help="Print subscription-link banner + optional TLS diagnostics.",
+    )
+
+    args = parser.parse_args(argv)
+
+    # Backward-compat: no subcommand → default to run
+    if args.command is None:
+        args.command = "run"
+        args.dry_run = getattr(args, "dry_run", False)
+        args.skip_stage = getattr(args, "skip_stage", [])
+        args.python_stage = getattr(args, "python_stage", [])
+    return args
 
 
 def bootstrap(env_file: Path) -> EnvManager:
@@ -139,6 +145,12 @@ def run_legacy(skip_stage: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+
+    if args.command == "show":
+        bootstrap(args.env_file)
+        sbdisplay.show_info_links()
+        return 0
+
     sblog.log(
         "INFO",
         f"sb-xray entrypoint.py starting (env_file={args.env_file})",
