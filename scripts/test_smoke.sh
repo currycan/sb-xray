@@ -232,7 +232,7 @@ fi
 
 # M2-3 VMess-WS adv 已删除（2026-04-21 决策）：
 # v2rayN 客户端不支持 vmess URL 的 fm= 字段，实测订阅里的 Vmess-Adv 节点握手失败；
-# 同时为缓解 cn2 OOM（memory/project_oom_cn2_pending_discussion.md），减少 xray worker 占用
+# 同时为缓解小内存节点（内存不超过 512 MB）OOM，减少 xray worker 占用
 # 未来 fm= 标准落地或客户端 UI 支持手动配置时，git show d2de076 找回
 if [ ! -f "${REPO_ROOT}/templates/xray/03_vmess_ws_adv_inbounds.json" ] \
  && ! grep -q 'vmessws-adv' "${REPO_ROOT}/templates/nginx/http.conf"; then

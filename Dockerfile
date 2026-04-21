@@ -313,6 +313,16 @@ ENV PORT_XICMP_ID="12345"
 ENV PORT_XDNS="5353"
 ENV XDNS_DOMAIN=""
 
+# 小内存节点降载开关（内存不超过 512 MB 的 VPS；opt-out 语义，仅显式 "false" 生效）
+#   ENABLE_SUBSTORE      ：sub-store + http-meta 两个 V8 实例（-130~200 MB）
+#   ENABLE_XUI           ：x-ui 面板（-35~55 MB）
+#   ENABLE_SUI           ：s-ui 面板（-35~55 MB）
+#   ENABLE_SHOUTRRR      ：shoutrrr-forwarder 事件转发（-20~30 MB）
+ENV ENABLE_SUBSTORE="true"
+ENV ENABLE_XUI="true"
+ENV ENABLE_SUI="true"
+ENV ENABLE_SHOUTRRR="true"
+
 WORKDIR ${WORKDIR}
 
 COPY --from=builder --chmod=755 /usr/local/bin/ /usr/local/bin/

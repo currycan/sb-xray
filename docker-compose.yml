@@ -2,6 +2,10 @@ services:
   sb-xray:
     image: docker.io/currycan/sb-xray:latest
     container_name: sb-xray
+    # 小内存节点（内存不超过 512 MB 的 VPS）内存硬约束，防止 xray VSZ 暴走触发宿主级 OOM
+    mem_limit: 460m
+    mem_reservation: 380m
+    memswap_limit: 900m
     environment:
       - DOMAIN=$domain
       - CDNDOMAIN=$cdndomain
@@ -26,6 +30,14 @@ services:
       # # 配置provider，多个provider用换行分隔
       # - |
       #   PROVIDERS=第一个|https://<host>/api/v1/client/subscribe?token=c02d1e8f9cd19dcae0f146c4ed71541a&flag=clash.meta|优
+      # Go 四件套（xray / sing-box / x-ui / s-ui）共享 GC 上限
+      - GOMEMLIMIT=320MiB
+      - GOGC=50
+      # 小内存节点降载开关（opt-out 语义，默认全部保留；置 "false"/"true" 生效）
+      - ENABLE_SUBSTORE=true # false: 关掉 sub-store + http-meta（省 ~130–200 MB）
+      - ENABLE_XUI=false # false: 关掉 x-ui 面板（省 ~35–55 MB）
+      - ENABLE_SUI=false # false: 关掉 s-ui 面板（省 ~35–55 MB）
+      - ENABLE_SHOUTRRR=true # false: 关掉 shoutrrr-forwarder（省 ~20–30 MB）
     ports:
       - "443:443/tcp"
       - "443:443/udp" # use UDP for usage of HTTP/3
@@ -47,9 +59,9 @@ services:
     restart: always
     tty: true
     network_mode: host
-    # cap_add:
-    #   - NET_ADMIN
-    #   - SYS_MODULE
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
     ulimits:
       nproc: 65535
       nofile:

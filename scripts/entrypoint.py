@@ -82,6 +82,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Print subscription-link banner + optional TLS diagnostics.",
     )
 
+    # ``trim`` — post-process daemon.ini with ENABLE_* program switches;
+    # safe to call after either Bash `createConfig` or Python `create_config`.
+    sub.add_parser(
+        "trim",
+        help="Apply ENABLE_* trim switches to the already-rendered daemon.ini.",
+    )
+
     # ``parse_known_args`` (vs ``parse_args``) captures everything the
     # Docker CMD appends (e.g. ``supervisord``) as ``extras``; we
     # forward those to the legacy Bash entrypoint as its ``$@`` so it
@@ -315,6 +322,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "show":
         return run_show_pipeline(args.env_file)
+
+    if args.command == "trim":
+        from sb_xray import config_builder as sbcfg
+
+        sbcfg.trim_runtime_configs()
+        return 0
 
     sblog.log(
         "INFO",

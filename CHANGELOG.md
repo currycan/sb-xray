@@ -12,6 +12,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added（新增功能）
 
+- **小内存节点降载开关**:新增 4 个 opt-out 环境变量让内存不超过 512 MB 的节点常驻 RSS 从 ~520 MB 降到 ~300–430 MB,避免 xray 启动期 VSZ 1.4 GB 触发内核 OOM kill。开关均为 opt-out 语义,**仅**在显式设为字符串 `"false"` 时生效,未设置时保持完整启动。
+  - `ENABLE_SUBSTORE=false` 过滤 supervisord 的 `sub-store` + `http-meta` 段(省 ~130–200 MB)
+  - `ENABLE_XUI=false` 过滤 `x-ui` 面板段(省 ~35–55 MB)
+  - `ENABLE_SUI=false` 过滤 `s-ui` 面板段(省 ~35–55 MB)
+  - `ENABLE_SHOUTRRR=false` 过滤 shoutrrr-forwarder 段(省 ~20–30 MB)
+  - **作用机制**:`scripts/entrypoint.py` 新增 `trim` 子命令 → `scripts/sb_xray/config_builder.py:trim_runtime_configs()` 实现 regex 分段过滤(保留 supervisor `%(ENV_*)s` 插值语法);`scripts/entrypoint.sh:createConfig` 后立即 `python3 /scripts/entrypoint.py trim`(幂等、失败不阻塞主流程)。
+  - **配置锚点**:Dockerfile 注册 4 个 ENV 默认值(全部 `true`,全启用语义);`docker-compose.yml` `environment:` 段显式列出供用户快速覆写;`GOMEMLIMIT=320MiB` + `GOGC=50` 配合使用可进一步约束 Go 进程 GC。
+  - **文档**:`docs/04-ops-and-troubleshooting.md` §2 环境变量表新增降载开关行;§7 新增 "小内存节点部署指引",含 `docker-compose.yml` 片段(`mem_limit: 460m`)、开关语义表、宿主层 `swap`/`vm.overcommit_memory=1` 建议、30 分钟验证命令。`docs/01-architecture-and-traffic.md` §5 启动流水线补充 §13b trim 阶段。
+  - pytest 新增 8 条用例覆盖 opt-out 默认行为、显式 `"false"` 分支、supervisor 插值保留、`trim_runtime_configs` 两条路径、`trim` 子命令不回落 legacy bash。
+
 - **Entrypoint Python 重写 · Phase 0 骨架**:引入 `pyproject.toml` 定义 Python 包 `sb_xray`(路径 `scripts/sb_xray/`),声明运行时依赖(jinja2 / httpx / pydantic / pyyaml)与开发依赖(pytest / pytest-asyncio / pytest-cov / pytest-httpx / respx / ruff / mypy)。Dockerfile 运行时层补 `py3-jinja2 py3-httpx py3-yaml py3-pydantic` 四个 apk 包。新建 `tests/` 目录含 `conftest.py` 共享 fixture(`tmp_env_file` / `isolated_workdir`)。`scripts/test_smoke.sh` 新增 "Python 包健康检查" section(sb_xray 包导入 + pytest + ruff check),smoke 基线从 52 条扩充到 55 条。
 - **Entrypoint Python 重写 · Phase 1 工具层 + ENV 管理**:迁移 entrypoint.sh §1-6。新增模块 `sb_xray.logging`(log/log_summary_box/show_progress,honor `NO_COLOR`)、`sb_xray.http`(httpx 同步/异步 probe + trace_url,替代 curl)、`sb_xray.random_gen`(secrets 驱动的 port/uuid/password/path/hex 生成)、`sb_xray.templates`(Jinja2 StrictUndefined,`${VAR}` 转 `{{ VAR }}`,`.json` 目标自动校验 + 重格式化)、`sb_xray.env.EnvManager`(三优先级 `ensure_var` + `ensure_key_pair` 原子写入 + `check_required`)。新建 `scripts/entrypoint.py` 薄壳入口(`--dry-run` / `--env-file` / `--skip-stage`),bootstrap 加载持久化 ENV 后 `subprocess` 调原 `entrypoint.sh` 继续剩余阶段。新增 62 条 pytest 单测全绿,覆盖 `ensure_var` 三分支、`ensure_key_pair` 原子性、模板缺变量抛错、JSON 失败抛错等。smoke 基线 55 → 56 条。
 - **Entrypoint Python 重写 · Phase 2 网络探测 + 测速**:迁移 entrypoint.sh §7-9。新增模块 `sb_xray.network`(`detect_ip_strategy` / `check_ip_type` ipapi.is 缓存 / `get_geo_info` ip111.cn / `is_restricted_region` CN/HK/MO/RU 正则 / `check_brutal_status` 检测 `/sys/module/brutal` / `get_fallback_proxy` / `get_isp_preferred_strategy`)、`sb_xray.speed_test`(`measure` httpx 采样返回 Mbps、`rate` 五级分档 8K-HDR/8K/4K/1080P/slow、`show_report` stderr 框、`IspSpeedContext` 带 1.15 tolerance 的最快节点追踪)。`entrypoint.py` 新增 `--python-stage probe` 开关(默认关闭),启用后在 bootstrap 后调用 `probe_base_env` 预填 `GEOIP_INFO` / `IP_TYPE` / `BRUTAL_STATUS` 持久化到 ENV_FILE,Bash 下游阶段直接继承。新增 38 条 pytest 单测(Phase 1/2 合计 106 条),`pyproject.toml` ruff 忽略中文标点误报(RUF001/002/003)。

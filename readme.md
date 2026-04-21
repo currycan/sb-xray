@@ -282,7 +282,7 @@ sb-xray/
 ├── build.sh                  # 自动构建脚本
 ├── Dockerfile                # 四阶段构建文件
 ├── scripts/
-│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1，argparse run/show）
+│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1，argparse run/show/trim；trim 子命令按 ENABLE_* 精简 supervisord 配置）
 │   ├── entrypoint.sh         # 未迁移阶段（cert/dhparam/geo/x-ui/supervisord）
 │   ├── sb_xray/              # Python 包：env/logging/cert/config_builder/...
 │   ├── geo_update.sh         # GeoIP/GeoSite 数据更新

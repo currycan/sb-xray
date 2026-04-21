@@ -290,7 +290,7 @@ graph LR
 
 ## 5. Entrypoint 守护进程生命周期
 
-容器在每次启动（或执行 `docker compose restart`）时，由 `scripts/entrypoint.py`（Python PID 1，argparse 子命令 `run` / `show`，Docker `ENTRYPOINT ["dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]`）执行初始化：加载 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` → 按 `--python-stage` 开关选择性执行 Python 阶段（探测 / 证书 / providers / 配置渲染 / 流媒体探针）→ 剩余阶段 `subprocess` 调 `scripts/entrypoint.sh` 执行 **16 段 §N 分层初始化流水线**（§1-6 工具层 → §7-9 探测层 → §12 证书 → §13 渲染 → §15-16 启动）→ `exec supervisord`。
+容器在每次启动（或执行 `docker compose restart`）时，由 `scripts/entrypoint.py`（Python PID 1，argparse 子命令 `run` / `show` / `trim`，Docker `ENTRYPOINT ["dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]`）执行初始化：加载 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` → 按 `--python-stage` 开关选择性执行 Python 阶段（探测 / 证书 / providers / 配置渲染 / 流媒体探针）→ 剩余阶段 `subprocess` 调 `scripts/entrypoint.sh` 执行 **16 段 §N 分层初始化流水线**（§1-6 工具层 → §7-9 探测层 → §12 证书 → §13 渲染 → §13b 调用 `python3 /scripts/entrypoint.py trim` 按 `ENABLE_*` 开关对已渲染的 `daemon.ini` 做幂等 in-place 过滤 → §15-16 启动）→ `exec supervisord`。
 
 ### 5.1 整体生命周期流转图
 

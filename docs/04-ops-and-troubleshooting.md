@@ -12,6 +12,7 @@
 4. [证书管理运维](#4-证书管理运维)
 5. [GeoIP/GeoSite 数据更新](#5-geoipgeosite-数据更新)
 6. [故障排查实战手册](#6-故障排查实战手册)
+7. [小内存节点部署指引（内存不超过 512 MB）](#7-小内存节点部署指引内存不超过-512-mb)
 
 ---
 
@@ -162,6 +163,8 @@ environment:
 | `PORT_XICMP_ID` | `12345` | XICMP 紧急通道 ICMP id（默认关，见 `docs/07-new-features-guide.md §6`） |
 | `PORT_XDNS` | `5353` | XDNS 紧急通道 UDP 端口（默认关，见 `docs/07-new-features-guide.md §7`） |
 | `ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE` | `false` | 实验性 feature flag；开启条件与效果详见 [新特性使用指南](./07-new-features-guide.md) |
+| `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（Dockerfile ENV 注册） | **小内存节点降载开关**；设 `false` 在 `createConfig` 后由 `python3 /scripts/entrypoint.py trim` 过滤对应 `[program:*]` 段；详见 §7 |
+| `GOMEMLIMIT` / `GOGC` | _未设置_ | Go GC 硬上限 + 回收激进度；推荐小内存节点 `GOMEMLIMIT=320MiB` + `GOGC=50` |
 | `XDNS_DOMAIN` | _空_ | XDNS 紧急通道的 NS 域名（`ENABLE_XDNS=true` 时必填） |
 | `REVERSE_DOMAINS` | _空_ | VLESS Reverse 需要穿透的域名列表（逗号分隔，`ENABLE_REVERSE=true` 时生效） |
 | `SHOUTRRR_URLS` / `SHOUTRRR_FORWARDER_PORT` / `SHOUTRRR_TITLE_PREFIX` | `"" / 18085 / [sb-xray]` | 事件总线推送通道（留空 = dry-run 仅本地日志） |
@@ -622,3 +625,63 @@ docker compose restart
 ```
 
 > **注意**：升级到修复版本后，仅删除 `/.env/status` 并重启即可触发完整的缓存联动清除，无需手动执行上述命令。
+
+---
+
+## 7. 小内存节点部署指引（内存不超过 512 MB）
+
+镜像默认启用全部 10 个 supervisord 进程（xray / sing-box / nginx / x-ui / s-ui / sub-store / http-meta / shoutrrr-forwarder / dufs / cron），常驻 RSS ~390–650 MB，启动峰值可达 650–870 MB。低于 1 GB 物理内存的节点需通过以下开关组合降载至 ~300–430 MB 常驻。
+
+**作用机制**：`scripts/entrypoint.sh:createConfig` 用 envsubst 渲染出完整 10 段 `/etc/supervisor.d/daemon.ini` 后，立即调用 `python3 /scripts/entrypoint.py trim`（实现在 `scripts/sb_xray/config_builder.py:trim_runtime_configs`），按环境变量 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤。所有开关都是 opt-out：仅显式设 `false` 生效，未设置或为空保持默认启用。
+
+### 7.1 docker-compose.yml（宿主层硬约束）
+
+```yaml
+services:
+  sb-xray:
+    mem_limit: 460m
+    mem_reservation: 380m
+    memswap_limit: 900m
+    oom_kill_disable: false
+    environment:
+      # Go 四件套（xray / sing-box / x-ui / s-ui）共享上限
+      GOMEMLIMIT: "320MiB"
+      GOGC: "50"
+      # 容器级进程精简
+      ENABLE_SUBSTORE: "false"       # 关掉 sub-store + http-meta（省 ~130–200 MB）
+      ENABLE_XUI: "false"            # 关掉 x-ui 面板（省 ~35–55 MB）
+      ENABLE_SUI: "false"            # 关掉 s-ui 面板（省 ~35–55 MB）
+      ENABLE_SHOUTRRR: "false"       # 关掉 shoutrrr-forwarder（省 ~20–30 MB）
+```
+
+### 7.2 开关语义
+
+| 变量 | 默认 | 设 `false` 的副作用 |
+|------|-----|--------------------|
+| `ENABLE_SUBSTORE` | true（保留） | 本节点无法对外托管订阅聚合/转换，客户端改从主节点订阅 |
+| `ENABLE_XUI` | true（保留） | 无 X-UI 面板；xray 仍正常运行，改用 S-UI 或直接编辑 JSON |
+| `ENABLE_SUI` | true（保留） | 无 S-UI 面板；改用 X-UI 或 sub-store |
+| `ENABLE_SHOUTRRR` | true（保留） | xray `rules.webhook` 事件不再转发到 Telegram/Discord |
+
+> Opt-out 语义：以上开关**仅**在显式设为字符串 `"false"` 时才禁用功能；未设置、空字符串、`"0"` 等均保持默认启用。
+
+### 7.3 VPS 宿主层建议
+
+- 确认 `swapon --show` 显示 ≥ 512 MB swap；无 swap 时 `fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`
+- `sysctl vm.swappiness=60`（激进换入 swap 保物理内存）
+- `sysctl vm.overcommit_memory=1`（允许 VSZ 超分，避免 xray 启动瞬间 1.4 GB VSZ 被内核拒绝）
+
+### 7.4 验证
+
+部署后 30 分钟内观察：
+
+```bash
+docker stats --no-stream sb-xray   # MEM USAGE 应稳定 < 400 MB
+free -h                            # available 稳定 > 80 MB
+dmesg | grep -i "killed process"   # 无新 OOM kill 事件
+```
+
+若仍触发 OOM，进一步措施：
+
+- 主节点接管订阅服务，小内存节点仅作纯转发
+- 保留 `before-m2` 回滚标签作为紧急兜底：`docker pull currycan/sb-xray:before-m2`

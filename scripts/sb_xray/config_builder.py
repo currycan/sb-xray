@@ -31,6 +31,17 @@ from sb_xray import logging as sblog
 # Matches ``${VAR}`` or ``$VAR`` (POSIX identifier: ``[A-Za-z_][A-Za-z0-9_]*``).
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
+# Per-program ENABLE_* switches for daemon.ini. Opt-out semantics: a program is
+# kept unless its flag is explicitly set to "false" (case-insensitive). Used by
+# low-memory deployments (≤ 512 MB RAM) to trim ~220–320 MB of resident RSS.
+_SUPERVISOR_PROGRAM_FLAGS: dict[str, str] = {
+    "x-ui": "ENABLE_XUI",
+    "s-ui": "ENABLE_SUI",
+    "sub-store": "ENABLE_SUBSTORE",
+    "http-meta": "ENABLE_SUBSTORE",
+    "shoutrrr-forwarder": "ENABLE_SHOUTRRR",
+}
+
 _TEMPLATES = Path("/templates")
 
 _FLAT_RENDERS: tuple[tuple[str, str], ...] = (
@@ -83,6 +94,35 @@ def _render_json(src: Path, dest: Path) -> None:
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"invalid JSON after render: {src} -> {exc}") from exc
     dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _flag_is_disabled(flag: str) -> bool:
+    """True only when ``os.environ[flag]`` is explicitly ``"false"`` (case-insensitive)."""
+    return os.environ.get(flag, "").strip().lower() == "false"
+
+
+def _filter_supervisord_programs(dest: Path) -> None:
+    """Drop ``[program:*]`` sections whose ``ENABLE_*`` flag is ``"false"``.
+
+    Regex-split rather than configparser so we don't disturb supervisor's
+    own ``%(ENV_*)s`` interpolation syntax inside the file.
+    """
+    disabled = {
+        program for program, flag in _SUPERVISOR_PROGRAM_FLAGS.items() if _flag_is_disabled(flag)
+    }
+    if not disabled:
+        return
+
+    text = dest.read_text(encoding="utf-8")
+    blocks = re.split(r"(?m)^(?=\[)", text)
+    kept: list[str] = []
+    for block in blocks:
+        header = re.match(r"\[program:([^\]]+)\]", block)
+        if header and header.group(1) in disabled:
+            sblog.log("INFO", f"[配置][精简] 丢弃 supervisord 段: {header.group(1)}")
+            continue
+        kept.append(block)
+    dest.write_text("".join(kept), encoding="utf-8")
 
 
 def _expand_dest(dest_tpl: str) -> Path:
@@ -183,6 +223,20 @@ def _apply_reverse_proxy(workdir: Path) -> None:
         _inject_reverse_route(xr, domains)
 
 
+def trim_runtime_configs(
+    *,
+    daemon_ini: Path = Path("/etc/supervisor.d/daemon.ini"),
+) -> None:
+    """Post-process already-rendered ``daemon.ini`` with ``ENABLE_*`` switches.
+
+    Runs **after** whoever wrote the file (Bash ``createConfig`` or Python
+    ``create_config``) — so ``ENABLE_*`` flags take effect regardless of
+    which entrypoint rendered it. Silent no-op when the file is absent.
+    """
+    if daemon_ini.is_file():
+        _filter_supervisord_programs(daemon_ini)
+
+
 def create_config(*, workdir: Path | None = None) -> None:
     """Render every service-level config (entrypoint.sh ``createConfig``)."""
     if workdir is None:
@@ -192,7 +246,10 @@ def create_config(*, workdir: Path | None = None) -> None:
     os.environ["RANDOM_NUM"] = str(random.randint(0, 9))
 
     for src, dest in _FLAT_RENDERS:
-        _render_flat(_TEMPLATES / src, _expand_dest(dest))
+        dest_path = _expand_dest(dest)
+        _render_flat(_TEMPLATES / src, dest_path)
+        if src == "supervisord/daemon.ini":
+            _filter_supervisord_programs(dest_path)
     for src, dest in _FLAT_COPIES:
         dest_path = _expand_dest(dest)
         dest_path.parent.mkdir(parents=True, exist_ok=True)

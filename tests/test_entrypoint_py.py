@@ -360,6 +360,30 @@ def test_python_stage_media_invokes_probes(
     assert os.environ["GEMINI_OUT"] == "fallback"
 
 
+def test_trim_subcommand_invokes_trim_runtime_configs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`entrypoint.py trim` must call config_builder.trim_runtime_configs()
+    exactly once and return 0 without touching the legacy Bash handoff."""
+    from sb_xray import config_builder as sbcfg
+
+    calls: list[dict] = []
+
+    def fake_trim(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(sbcfg, "trim_runtime_configs", fake_trim)
+
+    def bash_must_not_run(_s, _e=None):
+        raise AssertionError("run_legacy should not be invoked by trim subcommand")
+
+    monkeypatch.setattr(ep, "run_legacy", bash_must_not_run)
+
+    rc = ep.main(["trim"])
+    assert rc == 0
+    assert len(calls) == 1
+
+
 def test_python_stage_providers_invokes_generate_and_export(
     tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

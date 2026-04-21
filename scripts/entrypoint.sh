@@ -1398,19 +1398,42 @@ main_init() {
     createConfig
     generateProxyProvidersConfig
 
-    # 步骤 12: 初始化 X-UI / S-UI 管理面板（daemon.ini priority=5，最先启动）
-    log INFO "[步骤 12] 初始化 X-UI / S-UI"
-    x-ui setting -username "${PUBLIC_USER}" -password "${PUBLIC_PASSWORD}" \
-        -port "${XUI_LOCAL_PORT}" -webBasePath "${XUI_WEBBASEPATH}" >/dev/null
-    sui setting -port "${SUI_PORT}" -subPort "${SUI_SUB_PORT}" \
-        -path "/${SUI_WEBBASEPATH}" -subPath "/${SUI_SUB_PATH}" >/dev/null
-    sui admin -password "${PUBLIC_PASSWORD}" -username "${PUBLIC_USER}" >/dev/null
-    [ -f "${SUI_DB_FOLDER}/s-ui.db" ] && \
-        sqlite3 "${SUI_DB_FOLDER}/s-ui.db" \
-            "UPDATE settings SET value='https://${DOMAIN}/${SUI_SUB_PATH}/' WHERE key='subURI';"
+    # 步骤 11b: 按小内存节点开关精简已渲染的 supervisord 配置
+    # （ENABLE_SUBSTORE / ENABLE_XUI / ENABLE_SUI / ENABLE_SHOUTRRR）
+    # Python trim 子命令对 /etc/supervisor.d/daemon.ini 做幂等 in-place 过滤；
+    # 失败不阻塞主流程（降级为完整启动）
+    if ! python3 /scripts/entrypoint.py trim; then
+        log WARN "[步骤 11b] trim 子命令失败,保持完整配置启动"
+    fi
 
-    # 步骤 13: Nginx Basic Auth + Fail2ban（nginx priority=25，最后启动）
-    log INFO "[步骤 13] 配置 Nginx Basic Auth 与 Fail2ban"
+    # 步骤 12: 初始化 X-UI / S-UI 管理面板（daemon.ini priority=5，最先启动）
+    # 两个面板都被降载开关关掉时，整个步骤就没意义——连日志也别打，避免误导
+    local _xui_on=true _sui_on=true
+    [ "${ENABLE_XUI:-true}" = "false" ] && _xui_on=false
+    [ "${ENABLE_SUI:-true}" = "false" ] && _sui_on=false
+    if [ "$_xui_on" = "true" ] || [ "$_sui_on" = "true" ]; then
+        local _targets=""
+        [ "$_xui_on" = "true" ] && _targets="X-UI"
+        [ "$_sui_on" = "true" ] && _targets="${_targets:+${_targets} / }S-UI"
+        log INFO "[步骤 12] 初始化 ${_targets}"
+        if [ "$_xui_on" = "true" ]; then
+            x-ui setting -username "${PUBLIC_USER}" -password "${PUBLIC_PASSWORD}" \
+                -port "${XUI_LOCAL_PORT}" -webBasePath "${XUI_WEBBASEPATH}" >/dev/null
+            fail2ban-client -x start >/dev/null 2>&1 || log WARN "[步骤 12] Fail2ban 启动失败"
+        fi
+        if [ "$_sui_on" = "true" ]; then
+            sui setting -port "${SUI_PORT}" -subPort "${SUI_SUB_PORT}" \
+                -path "/${SUI_WEBBASEPATH}" -subPath "/${SUI_SUB_PATH}" >/dev/null
+            sui admin -password "${PUBLIC_PASSWORD}" -username "${PUBLIC_USER}" >/dev/null
+            [ -f "${SUI_DB_FOLDER}/s-ui.db" ] && \
+                sqlite3 "${SUI_DB_FOLDER}/s-ui.db" \
+                    "UPDATE settings SET value='https://${DOMAIN}/${SUI_SUB_PATH}/' WHERE key='subURI';"
+        fi
+    else
+        log INFO "[步骤 12] ENABLE_XUI=ENABLE_SUI=false,两个面板均已禁用,跳过初始化"
+    fi
+
+    log INFO "[步骤 13] 配置 Nginx Basic Auth"
     local htpasswd_file="/etc/nginx/.htpasswd"
     if [ -n "${PUBLIC_USER:-}" ] && [ -n "${PUBLIC_PASSWORD:-}" ]; then
         local enc_pass; enc_pass=$(openssl passwd -apr1 "${PUBLIC_PASSWORD}")
@@ -1420,7 +1443,6 @@ main_init() {
     else
         log WARN "[步骤 13] PUBLIC_USER/PASSWORD 未设置，跳过 Basic Auth"
     fi
-    fail2ban-client -x start >/dev/null 2>&1 || log WARN "[步骤 13] Fail2ban 启动失败"
 
     # 步骤 14: 配置 Cron 定时任务（daemon.ini priority=10）
     log INFO "[步骤 14] 配置 Cron 定时任务"

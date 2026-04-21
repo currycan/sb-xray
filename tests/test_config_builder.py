@@ -20,6 +20,10 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "REVERSE_DOMAINS",
         "XRAY_REVERSE_UUID",
         "RANDOM_NUM",
+        "ENABLE_SUBSTORE",
+        "ENABLE_XUI",
+        "ENABLE_SUI",
+        "ENABLE_SHOUTRRR",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("WORKDIR", str(tmp_path / "workdir"))
@@ -241,3 +245,125 @@ def test_create_config_full_flow(
     sb_data = json.loads((workdir / "sing-box" / "sb.json").read_text(encoding="utf-8"))
     assert sb_data == {"tag": "vpn.example.com"}
     assert os.environ["RANDOM_NUM"].isdigit()
+
+
+# ---------------------------------------------------------------------------
+# Small-memory VPS trim switches (nodes ≤ 512 MB RAM OOM mitigation)
+# ---------------------------------------------------------------------------
+
+
+_DAEMON_INI_FIXTURE = """\
+[program:s-ui]
+command=sui
+priority=5
+
+[program:x-ui]
+command=x-ui
+priority=5
+
+[program:sub-store]
+command=node /sub-store/sub-store.bundle.js
+priority=15
+environment=SUB_STORE_DOCKER=%(ENV_SUB_STORE_DOCKER)s
+
+[program:http-meta]
+command=node /sub-store/http-meta.bundle.js
+priority=15
+
+[program:shoutrrr-forwarder]
+command=python3 /scripts/shoutrrr-forwarder.py
+priority=18
+
+[program:xray]
+command=xray run -confdir ${WORKDIR}/xray/
+priority=20
+
+[program:nginx]
+command=/usr/sbin/nginx -g "daemon off;"
+priority=25
+"""
+
+
+def test_flag_is_disabled_only_on_explicit_false(env: Path) -> None:
+    os.environ["ENABLE_SUBSTORE"] = "false"
+    assert cb._flag_is_disabled("ENABLE_SUBSTORE") is True
+    os.environ["ENABLE_SUBSTORE"] = "FALSE"
+    assert cb._flag_is_disabled("ENABLE_SUBSTORE") is True
+    os.environ["ENABLE_SUBSTORE"] = "true"
+    assert cb._flag_is_disabled("ENABLE_SUBSTORE") is False
+    os.environ["ENABLE_SUBSTORE"] = ""
+    assert cb._flag_is_disabled("ENABLE_SUBSTORE") is False
+
+
+def test_filter_supervisord_keeps_all_when_flags_unset(env: Path, tmp_path: Path) -> None:
+    dest = tmp_path / "daemon.ini"
+    dest.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
+    cb._filter_supervisord_programs(dest)
+    assert dest.read_text(encoding="utf-8") == _DAEMON_INI_FIXTURE
+
+
+def test_filter_supervisord_drops_substore_pair(env: Path, tmp_path: Path) -> None:
+    os.environ["ENABLE_SUBSTORE"] = "false"
+    dest = tmp_path / "daemon.ini"
+    dest.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
+    cb._filter_supervisord_programs(dest)
+    text = dest.read_text(encoding="utf-8")
+    assert "[program:sub-store]" not in text
+    assert "[program:http-meta]" not in text
+    assert "[program:s-ui]" in text  # unaffected
+    assert "[program:xray]" in text
+    assert "[program:nginx]" in text
+
+
+def test_filter_supervisord_drops_multiple_flags(env: Path, tmp_path: Path) -> None:
+    os.environ["ENABLE_SUI"] = "false"
+    os.environ["ENABLE_SHOUTRRR"] = "false"
+    dest = tmp_path / "daemon.ini"
+    dest.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
+    cb._filter_supervisord_programs(dest)
+    text = dest.read_text(encoding="utf-8")
+    assert "[program:s-ui]" not in text
+    assert "[program:shoutrrr-forwarder]" not in text
+    assert "[program:sub-store]" in text
+    assert "[program:x-ui]" in text  # ENABLE_XUI unset → kept
+    assert "[program:xray]" in text
+
+
+def test_filter_supervisord_drops_xui_when_flag_false(env: Path, tmp_path: Path) -> None:
+    os.environ["ENABLE_XUI"] = "false"
+    dest = tmp_path / "daemon.ini"
+    dest.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
+    cb._filter_supervisord_programs(dest)
+    text = dest.read_text(encoding="utf-8")
+    assert "[program:x-ui]" not in text
+    assert "[program:s-ui]" in text  # 不同开关互不影响
+    assert "[program:xray]" in text
+
+
+def test_filter_supervisord_preserves_supervisor_interpolation(env: Path, tmp_path: Path) -> None:
+    """``%(ENV_*)s`` must survive filtering verbatim (regex, not configparser)."""
+    os.environ["ENABLE_SUI"] = "false"
+    dest = tmp_path / "daemon.ini"
+    dest.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
+    cb._filter_supervisord_programs(dest)
+    assert "%(ENV_SUB_STORE_DOCKER)s" in dest.read_text(encoding="utf-8")
+
+
+def test_trim_runtime_configs_filters_existing_daemon_ini(env: Path, tmp_path: Path) -> None:
+    os.environ["ENABLE_SUBSTORE"] = "false"
+    os.environ["ENABLE_SUI"] = "false"
+    daemon = tmp_path / "daemon.ini"
+    daemon.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
+
+    cb.trim_runtime_configs(daemon_ini=daemon)
+
+    text = daemon.read_text(encoding="utf-8")
+    assert "[program:sub-store]" not in text
+    assert "[program:http-meta]" not in text
+    assert "[program:s-ui]" not in text
+    assert "[program:xray]" in text
+
+
+def test_trim_runtime_configs_silent_when_daemon_missing(env: Path, tmp_path: Path) -> None:
+    """No daemon.ini present → must not raise."""
+    cb.trim_runtime_configs(daemon_ini=tmp_path / "missing.ini")
