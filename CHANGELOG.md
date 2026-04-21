@@ -8,7 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
-## [Unreleased] — 2026-04 大升级（底层 Xray v26.4.17）
+## [Unreleased]
+
+（占位）
+
+---
+
+## [26.4.17] — 2026-04-21 · 2026-04 大升级（底层 Xray v26.4.17）
 
 > 本次升级覆盖 **可观测化 / 抗审查 / 内网穿透 / 单核收敛** 四条产品主线。配套 52 条静态规约（`scripts/test_smoke.sh`）+ 生产环境 E2E 验证通过。
 >
@@ -130,4 +136,5 @@ cd /root/sb-xray && docker compose up -d
 
 ---
 
-[Unreleased]: https://github.com/currycan/sb-xray/compare/26.4.14...HEAD
+[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.4.17...HEAD
+[26.4.17]: https://github.com/currycan/sb-xray/compare/v26.4.14...v26.4.17
