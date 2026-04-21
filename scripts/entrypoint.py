@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sb_xray import logging as sblog
+from sb_xray import network as sbnet
 from sb_xray.env import EnvManager
 
 _DEFAULT_ENV_FILE = Path(os.environ.get("ENV_FILE", "/.env/sb-xray"))
@@ -66,6 +67,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="STAGE",
         help="(Phase 2+) Stage names to skip. Currently advisory-only.",
     )
+    parser.add_argument(
+        "--python-stage",
+        action="append",
+        default=[],
+        choices=["probe"],
+        metavar="STAGE",
+        help=(
+            "Opt-in: run the named stage in Python before delegating to "
+            "the legacy shell. Phase 2 supports: probe "
+            "(GeoIP + IP type + brutal-module detection)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -82,6 +95,29 @@ def bootstrap(env_file: Path) -> EnvManager:
         value = value_raw.strip().strip("'")
         os.environ.setdefault(key, value)
     return mgr
+
+
+def probe_base_env(mgr: EnvManager) -> None:
+    """Phase 2 Python replacement for ``analyze_base_env`` (entrypoint.sh §15).
+
+    Populates (and persists) the handful of environment variables that
+    downstream Bash stages rely on, using the Python network helpers:
+      - ``GEOIP_INFO``      — ``<region>|<ip>`` string from ip111.cn
+      - ``IP_TYPE``         — ``isp``/``hosting``/``unknown`` via ipapi.is
+      - ``BRUTAL_STATUS``   — ``true`` / ``false`` based on /sys/module
+    """
+    sblog.log("INFO", "[probe] GeoIP / IP-type / brutal-module detection")
+    geo = sbnet.get_geo_info()
+    if geo:
+        mgr.ensure_var("GEOIP_INFO", default=geo)
+    ip_type = sbnet.check_ip_type()
+    mgr.ensure_var("IP_TYPE", default=ip_type)
+    brutal = sbnet.check_brutal_status()
+    mgr.ensure_var("BRUTAL_STATUS", default=brutal)
+    sblog.log(
+        "INFO",
+        f"[probe] GEOIP_INFO={geo or 'N/A'} IP_TYPE={ip_type} BRUTAL={brutal}",
+    )
 
 
 def run_legacy(skip_stage: list[str]) -> int:
@@ -107,7 +143,9 @@ def main(argv: list[str] | None = None) -> int:
         "INFO",
         f"sb-xray entrypoint.py starting (env_file={args.env_file})",
     )
-    bootstrap(args.env_file)
+    mgr = bootstrap(args.env_file)
+    if "probe" in args.python_stage:
+        probe_base_env(mgr)
     sblog.log_summary_box(*_SUMMARY_KEYS)
     if args.dry_run:
         sblog.log("INFO", "dry-run complete, skipping legacy shell")

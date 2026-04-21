@@ -82,6 +82,53 @@ def test_run_legacy_returns_127_when_script_missing(
     assert ep.run_legacy([]) == 127
 
 
+def test_probe_base_env_persists_fields(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sb_xray.env import EnvManager
+
+    for key in ("GEOIP_INFO", "IP_TYPE", "BRUTAL_STATUS"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(ep.sbnet, "get_geo_info", lambda: "Tokyo JP|8.8.8.8")
+    monkeypatch.setattr(ep.sbnet, "check_ip_type", lambda: "isp")
+    monkeypatch.setattr(ep.sbnet, "check_brutal_status", lambda: "true")
+    ep.probe_base_env(EnvManager(tmp_env_file))
+    content = tmp_env_file.read_text(encoding="utf-8")
+    assert "export GEOIP_INFO='Tokyo JP|8.8.8.8'" in content
+    assert "export IP_TYPE='isp'" in content
+    assert "export BRUTAL_STATUS='true'" in content
+    assert os.environ["IP_TYPE"] == "isp"
+
+
+def test_python_stage_probe_invokes_probe_base_env(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = {"probe": False}
+
+    def fake_probe(_: object) -> None:
+        called["probe"] = True
+
+    monkeypatch.setattr(ep, "probe_base_env", fake_probe)
+    monkeypatch.setattr(ep, "run_legacy", lambda _: 0)
+    rc = ep.main(["--env-file", str(tmp_env_file), "--python-stage", "probe"])
+    assert rc == 0
+    assert called["probe"] is True
+
+
+def test_python_stage_probe_skipped_by_default(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = {"probe": False}
+
+    def fake_probe(_: object) -> None:
+        called["probe"] = True
+
+    monkeypatch.setattr(ep, "probe_base_env", fake_probe)
+    monkeypatch.setattr(ep, "run_legacy", lambda _: 0)
+    ep.main(["--env-file", str(tmp_env_file)])
+    assert called["probe"] is False
+
+
 def test_run_legacy_invokes_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_script = tmp_path / "fake.sh"
     fake_script.write_text("#!/usr/bin/env bash\nexit 42\n", encoding="utf-8")
