@@ -24,7 +24,7 @@
 | 序号 | 协议/模式 | 引擎 | 关键技术 | 适用场景 | 推荐度 |
 |:---|:---|:---|:---|:---|:---:|
 | 1 | **VLESS-Vision-Reality** | Xray | XTLS, Vision | 日常主力，极速稳定 | ⭐⭐⭐⭐⭐ |
-| 2 | **Hysteria2** | Sing-box | UDP, 拥塞控制 | 移动/弱网，暴力竞速 | ⭐⭐⭐⭐⭐ |
+| 2 | **Hysteria2** | Xray | UDP, 拥塞控制 | 移动/弱网，暴力竞速 | ⭐⭐⭐⭐⭐ |
 | 3 | **XHTTP-Reality 直连** | Xray | XHTTP, Reality, MLKEM | 探索性主力协议 | ⭐⭐⭐⭐ |
 | 4 | **XHTTP 上CDN下直连** | Xray | XHTTP, 混合路由 | 隐藏上行 IP | ⭐⭐⭐⭐ |
 | 5 | **XHTTP 上直连下CDN** | Xray | XHTTP, 混合路由 | 优化下行线路 | ⭐⭐⭐⭐ |
@@ -78,7 +78,7 @@ graph LR
 
 ---
 
-### 1.2 Hysteria2 (Sing-box) — 竞速首选
+### 1.2 Hysteria2 (Xray) — 竞速首选
 
 基于 UDP 的拥塞控制协议，专为恶劣网络环境设计。
 
@@ -89,8 +89,8 @@ graph LR
 
 ```mermaid
 graph LR
-    User((客户端)) -- "UDP 443 / 跳跃端口" --> Singbox(("Sing-box 核心"))
-    Singbox -- "Hysteria2" --> Internet((互联网))
+    User((客户端)) -- "UDP 6443" --> Xray(("Xray 核心"))
+    Xray -- "Hysteria2" --> Internet((互联网))
 ```
 
 #### 客户端配置
