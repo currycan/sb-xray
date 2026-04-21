@@ -10,7 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-（占位）
+### Added（新增功能）
+
+- **Entrypoint Python 重写 · Phase 0 骨架**:引入 `pyproject.toml` 定义 Python 包 `sb_xray`(路径 `scripts/sb_xray/`),声明运行时依赖(jinja2 / httpx / pydantic / pyyaml)与开发依赖(pytest / pytest-asyncio / pytest-cov / pytest-httpx / respx / ruff / mypy)。Dockerfile 运行时层补 `py3-jinja2 py3-httpx py3-yaml py3-pydantic` 四个 apk 包。新建 `tests/` 目录含 `conftest.py` 共享 fixture(`tmp_env_file` / `isolated_workdir`)。`scripts/test_smoke.sh` 新增 "Python 包健康检查" section(sb_xray 包导入 + pytest + ruff check),smoke 基线从 52 条扩充到 55 条。
+- 后续 Phase 1-6 分阶段把 1447 行 `scripts/entrypoint.sh` 迁移到 Python。
 
 ---
 

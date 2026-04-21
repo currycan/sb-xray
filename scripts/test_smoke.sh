@@ -122,6 +122,46 @@ for required in \
     fi
 done
 
+# Python 包健康检查（Phase 0 起 entrypoint 开始 Python 化）
+section "Python 包健康检查"
+
+if [ -f "${REPO_ROOT}/pyproject.toml" ] && [ -d "${REPO_ROOT}/scripts/sb_xray" ]; then
+    # 导入冒烟:sb_xray 应无副作用 import
+    if PYTHONPATH="${REPO_ROOT}/scripts" python3 -c 'import sb_xray, sb_xray.routing; assert sb_xray.__version__' 2>/dev/null; then
+        ok "Python: sb_xray 包可导入且暴露 __version__"
+    else
+        bad "Python: sb_xray 包导入失败"
+        PYTHONPATH="${REPO_ROOT}/scripts" python3 -c 'import sb_xray' 2>&1 | head -3 | sed 's/^/    /'
+    fi
+
+    # pytest 单测(若 pytest 可用)——用 exit code 判断,不依赖输出格式
+    if command -v pytest >/dev/null 2>&1; then
+        pytest_output=$(cd "${REPO_ROOT}" && pytest --no-header 2>&1)
+        pytest_rc=$?
+        if [ "${pytest_rc}" -eq 0 ]; then
+            ok "Python: pytest 通过"
+        else
+            bad "Python: pytest 失败 (exit ${pytest_rc})"
+            echo "${pytest_output}" | tail -10 | sed 's/^/    /'
+        fi
+    else
+        info "pytest 未安装，跳过单测(本地 pip install -e '.[dev]' 后可启用)"
+    fi
+
+    # ruff 静态检查(若 ruff 可用)
+    if command -v ruff >/dev/null 2>&1; then
+        if (cd "${REPO_ROOT}" && ruff check scripts/sb_xray tests 2>&1); then
+            ok "Python: ruff check 通过"
+        else
+            bad "Python: ruff check 失败"
+        fi
+    else
+        info "ruff 未安装，跳过静态检查"
+    fi
+else
+    info "pyproject.toml / sb_xray 包尚未就绪，跳过 Python 检查"
+fi
+
 # M1 规约 grep 级别校验
 section "M1 规约校验"
 

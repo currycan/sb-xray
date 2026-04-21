@@ -255,7 +255,7 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
     --mount=type=cache,target=/root/.cache/pip,sharing=locked \
   set -ex; \
-  runtime_pkgs="curl bash iproute2 net-tools tzdata bash-completion ca-certificates python3 py3-pip gettext libc6-compat gcompat vim libqrencode-tools jq sqlite nodejs grep sed coreutils dumb-init"; \
+  runtime_pkgs="curl bash iproute2 net-tools tzdata bash-completion ca-certificates python3 py3-pip py3-jinja2 py3-httpx py3-yaml py3-pydantic gettext libc6-compat gcompat vim libqrencode-tools jq sqlite nodejs grep sed coreutils dumb-init"; \
   apk -U add --virtual .runtime-deps ${runtime_pkgs}; \
   echo -e "[global]\nbreak-system-packages = true" > /etc/pip.conf; \
   pip install -U pip supervisor; \
