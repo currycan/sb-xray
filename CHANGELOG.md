@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added（新增功能）
 
 - **Entrypoint Python 重写 · Phase 0 骨架**:引入 `pyproject.toml` 定义 Python 包 `sb_xray`(路径 `scripts/sb_xray/`),声明运行时依赖(jinja2 / httpx / pydantic / pyyaml)与开发依赖(pytest / pytest-asyncio / pytest-cov / pytest-httpx / respx / ruff / mypy)。Dockerfile 运行时层补 `py3-jinja2 py3-httpx py3-yaml py3-pydantic` 四个 apk 包。新建 `tests/` 目录含 `conftest.py` 共享 fixture(`tmp_env_file` / `isolated_workdir`)。`scripts/test_smoke.sh` 新增 "Python 包健康检查" section(sb_xray 包导入 + pytest + ruff check),smoke 基线从 52 条扩充到 55 条。
-- 后续 Phase 1-6 分阶段把 1447 行 `scripts/entrypoint.sh` 迁移到 Python。
+- **Entrypoint Python 重写 · Phase 1 工具层 + ENV 管理**:迁移 entrypoint.sh §1-6。新增模块 `sb_xray.logging`(log/log_summary_box/show_progress,honor `NO_COLOR`)、`sb_xray.http`(httpx 同步/异步 probe + trace_url,替代 curl)、`sb_xray.random_gen`(secrets 驱动的 port/uuid/password/path/hex 生成)、`sb_xray.templates`(Jinja2 StrictUndefined,`${VAR}` 转 `{{ VAR }}`,`.json` 目标自动校验 + 重格式化)、`sb_xray.env.EnvManager`(三优先级 `ensure_var` + `ensure_key_pair` 原子写入 + `check_required`)。新建 `scripts/entrypoint.py` 薄壳入口(`--dry-run` / `--env-file` / `--skip-stage`),bootstrap 加载持久化 ENV 后 `subprocess` 调原 `entrypoint.sh` 继续剩余阶段。新增 62 条 pytest 单测全绿,覆盖 `ensure_var` 三分支、`ensure_key_pair` 原子性、模板缺变量抛错、JSON 失败抛错等。smoke 基线 55 → 56 条。
+- 后续 Phase 2-6 将依次迁移网络探测 / 测速 / 路由决策 / 证书模板订阅 / CLI 切换 / 清理。
 
 ---
 
