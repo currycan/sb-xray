@@ -55,7 +55,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `09_xdns_inbounds.json` → `06_xdns_emergency_inbounds.json`（同上 + 滑位到 06）
 - **M4 · 02_xhttp_h3 内置 adv 字段**：H3 客户端必然 Xray-core 26.3.27+，模板直接合并 `xPaddingQueryParam` / `xPaddingPlacement` / `UplinkDataPlacement`（等价 02_xhttp_adv 的 xhttp obfuscation 字段集）。不另建 `_h3_adv` 变体。`finalmask.fragment` 是 TCP-only，H3 用 `finalmask.quicParams.congestion=bbr` 做 QUIC 级整形。
 - **v2rayn 主轨订阅序**：`Xhttp-H3+BBR` 节点排在第一位（性能优先原则；客户端按实测 RTT 重排，显示序保留 H3 优先）。
-- **M4 · sing-box 职责收窄**：从 "Hy2 + TUIC + AnyTLS" 三协议缩减为仅 "TUIC + AnyTLS"；Hy2 由 Xray 接管。`templates/sing-box/` 剩 `02_tuic_inbounds.json` + `03_anytls_inbounds.json` + `sb.json`。
+- **M4 · sing-box 职责收窄**：从 "Hy2 + TUIC + AnyTLS" 三协议缩减为仅 "TUIC + AnyTLS"；Hy2 由 Xray 接管。`templates/sing-box/` 剩 `01_tuic_inbounds.json` + `02_anytls_inbounds.json` + `sb.json`。
 - **entrypoint 启动日志**：`[阶段 1]` 输出 `hy2=${PORT_HYSTERIA2}(xray)`，永久标注 Hy2 后端为 xray（与永久迁移一致，不再动态分支）。
 
 ### Fixed（问题修复）

@@ -175,7 +175,7 @@ graph LR
   ```
   tuic://${SB_UUID}:${SB_UUID}@${DOMAIN}:${PORT_TUIC}?alpn=h3&congestion_control=bbr#🇺🇸 TUIC ✈ ${NODE_NAME}${NODE_SUFFIX}
   ```
-* **服务端配置文件**: `templates/sing-box/02_tuic_inbounds.json`
+* **服务端配置文件**: `templates/sing-box/01_tuic_inbounds.json`
 * **路径**: **直连**（不经过 Nginx，不经过 Xray）
 
 #### ISP 高峰期 UDP 限速
@@ -204,7 +204,7 @@ graph LR
   ```
   anytls://${SB_UUID}@${DOMAIN}:${PORT_ANYTLS}?security=tls&type=tcp#🇺🇸 AnyTLS ✈ ${NODE_NAME}${NODE_SUFFIX}
   ```
-* **服务端配置文件**: `templates/sing-box/03_anytls_inbounds.json`
+* **服务端配置文件**: `templates/sing-box/02_anytls_inbounds.json`
 * **路径**: **直连**（不经过 Nginx，不经过 Xray）
 
 ---

@@ -211,7 +211,7 @@ graph TD
 
 * **适用协议**：Hysteria2 (UDP)、TUIC V5 (UDP)、AnyTLS (TCP)
 * **客户端行为**：连接服务器的**独立端口**（Hysteria2/TUIC 支持端口跳跃）
-* **流转过程**：流量直接到达独立端口。**Hysteria2 由 Xray 承载**（2026-04 起永久迁移，`templates/xray/04_hy2_inbounds.json`）；**TUIC / AnyTLS 仍由 Sing-box 承载**（`templates/sing-box/02_tuic_inbounds.json` / `03_anytls_inbounds.json`）。均不经过 Nginx。损耗最小。
+* **流转过程**：流量直接到达独立端口。**Hysteria2 由 Xray 承载**（2026-04 起永久迁移，`templates/xray/04_hy2_inbounds.json`）；**TUIC / AnyTLS 仍由 Sing-box 承载**（`templates/sing-box/01_tuic_inbounds.json` / `02_anytls_inbounds.json`）。均不经过 Nginx。损耗最小。
 
 #### 场景四：管理与维护
 

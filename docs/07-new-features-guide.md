@@ -165,7 +165,7 @@ docker logs sb-xray 2>&1 | grep '阶段 1'
 
 # sing-box 目录只剩 tuic + anytls
 docker exec sb-xray ls /sb-xray/sing-box/
-# 期望：02_tuic_inbounds.json  03_anytls_inbounds.json  cache.db  sb.json
+# 期望：01_tuic_inbounds.json  02_anytls_inbounds.json  cache.db  sb.json
 
 # 端到端握手测试（容器内用 sing-box 作 client 连 xray 服务端）
 # 完整脚本见 references/implementation-notes.md §M4 生产验证
