@@ -1,10 +1,10 @@
-# 新特性使用指南（M1–M4）
+# 新特性使用指南
 
 > 本指南覆盖 [CHANGELOG.md](../CHANGELOG.md) [Unreleased] 段里列出的全部新增 / 强化能力。
 >
 > 按"**做什么 / 何时用 / 怎么开 / 如何验证 / 故障排查**"五段式组织。
 >
-> 默认路径（不改任何 env）的容器行为：与 M3 完全一致 —— Hy2 由 Xray 接管但参数无感；所有实验性入站关闭；Reverse Proxy 关闭；webhook 事件总线以 dry-run 模式运行（仅本地日志，不发外部通知）。
+> 默认路径（不改任何 env）的容器行为：Hy2 由 Xray 接管但客户端参数无感；所有实验性入站关闭；Reverse Proxy 关闭；webhook 事件总线以 dry-run 模式运行（仅本地日志，不发外部通知）。
 
 ## 目录
 
@@ -71,7 +71,7 @@ docker exec sb-xray curl -X POST http://127.0.0.1:18085/shoutrrr/ban_bt \
 | **v2rayn-compat** | `https://${CDNDOMAIN}/sb-xray/v2rayn-compat?token=${SUBSCRIBE_TOKEN}` | **mihomo / OpenClash / Karing / 低版 Xray-core（<26.3.27）** | 无 VLESS 加密 + TCP xhttp（无 H3、无 fragment） |
 
 **为什么退役 adv 轨**：
-- XHTTP-H3（M4）客户端必然 26.3.27+，已在 `02_xhttp_h3_inbounds.json` 内嵌 adv obfs 字段
+- XHTTP-H3 客户端必然 Xray-core 26.3.27+，已在 `02_xhttp_h3_inbounds.json` 内嵌 adv obfs 字段
 - v2rayN 自 2024 起跟着 Xray-core 最新发，2026-04 所有 v2rayN 用户几乎都在 26.3.27+ 范围内
 - Karing / OpenClash 本就走 `v2rayn-compat`（sing-box / mihomo 不认 ML-KEM）
 - **三轨简化为两轨**：一套主轨吃最新 Xray-core，一套 compat 吃其他
@@ -93,7 +93,7 @@ docker exec sb-xray sh -c 'ls /sb-xray/subscribe/ | grep -c v2rayn-adv'
 **故障排查**：
 - 客户端原订阅是 `/v2rayn-adv`：**改订阅 URL 为 `/v2rayn`** —— 主轨已吸收全部 adv 能力
 - 主轨节点全部延迟 -1：客户端版本 < 26.3.27，**改订阅 `/v2rayn-compat`**
-- Vmess-Adv 节点：历史已删，见 CHANGELOG M2-3（v2rayN URL 不支持 `fm=` 字段承载 Finalmask header-custom）
+- Vmess-Adv 节点：历史上曾存在，因 v2rayN URL 标准不支持 `fm=` 字段承载 Finalmask header-custom 而彻底移除，详见 CHANGELOG
 
 ---
 
@@ -150,7 +150,7 @@ docker exec sb-xray cat /sb-xray/xray/xr.json \
 
 **何时用**：**无任何操作**。升级到本 release 即永久生效 —— sing-box 不再承载 Hy2，仅保留 TUIC + AnyTLS。
 
-**怎么开**：不需要开关。之前讨论过 `ENABLE_HY2=false` 回退方案，后决定**彻底移除**该开关以减少引擎维护面与配置分支：Hy2 永久由 xray 接管（见 [CHANGELOG M4 Added](../CHANGELOG.md)）。
+**怎么开**：不需要开关。Hy2 永久由 xray 接管，没有回退路径（见 [CHANGELOG](../CHANGELOG.md)）。
 
 **如何验证**：
 
@@ -168,7 +168,7 @@ docker exec sb-xray ls /sb-xray/sing-box/
 # 期望：01_tuic_inbounds.json  02_anytls_inbounds.json  cache.db  sb.json
 
 # 端到端握手测试（容器内用 sing-box 作 client 连 xray 服务端）
-# 完整脚本见 references/implementation-notes.md §M4 生产验证
+# 期望：http_code=200，time_total < 0.1s
 ```
 
 **故障排查**：
@@ -314,10 +314,10 @@ dig @ns1.example.com TXT probe.ns1.example.com
 
 **做什么**：**目前仅占位**。Dockerfile 注册了 `ENABLE_ECH=false` env，但 TLS 层的 `tlsSettings.echConfigList` 尚未接入任何入站模板。**启用暂无实际效果**。
 
-**何时用**：**暂时不要依赖**。留作下次 release（M4-5b phase）真正实现 TLS ECH 后再启用。
+**何时用**：**暂时不要依赖**。留作下次 release 真正实现 TLS ECH 后再启用。
 
 **追踪**：
-- M4-5 ECH 计划见 [`references/implementation-notes.md §M4 已知缺口`](../references/implementation-notes.md)
+- TLS ECH 集成仍在计划中，当前版本仅为 env 占位
 - 上游 Xray v26.3.27 [#5725](https://github.com/XTLS/Xray-core/pull/5725) 提供 ECH 字段
 
 ---
@@ -389,7 +389,7 @@ docker exec sb-xray show-config
 ```bash
 # 前提：升级时本地保留了 before-m4 tag
 ssh <vps> "docker tag currycan/sb-xray:before-m4 currycan/sb-xray:latest && cd /root/sb-xray && docker compose up -d"
-# 30 秒内回到 M3 镜像
+# 30 秒内回滚到上一版镜像
 ```
 
 ### 10.6 日志定位

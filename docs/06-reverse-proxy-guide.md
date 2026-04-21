@@ -166,7 +166,7 @@ curl -x socks5h://<sb-xray-socks5>:1080 http://nas.lan/
 
 ### 4.3 故障告警
 
-bridge 断线时，公网端 Xray 的 observatory 会在 1 分钟内标记隧道 dead；配合 M1 的 `rules.webhook`，可在 xr.json 里追加一条：
+bridge 断线时，公网端 Xray 的 observatory 会在 1 分钟内标记隧道 dead；配合 `rules.webhook` 事件总线，可在 xr.json 里追加一条：
 
 ```json
 {
