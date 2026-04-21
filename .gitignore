@@ -15,3 +15,6 @@ ag_output_*.txt
 .claude/
 .gemini/
 .gstack/
+scripts/__pycache__/
+
+references/

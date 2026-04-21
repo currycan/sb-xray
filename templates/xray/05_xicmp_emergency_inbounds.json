@@ -1,0 +1,50 @@
+{
+    "_comment": "XICMP 紧急通道（feature flag ENABLE_XICMP）：ICMP echo 承载代理数据；需 container cap_add=NET_RAW；mKCP transport；仅当 UDP/443 和 TCP/443 都被封时才有意义",
+    "inbounds": [
+        {
+            "listen": "::",
+            "port": 0,
+            "protocol": "vless",
+            "tag": "XICMP_IN",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "${XRAY_UUID}",
+                        "level": 0,
+                        "email": "vless@xicmp.emergency"
+                    }
+                ],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "kcp",
+                "kcpSettings": {
+                    "mtu": 1400,
+                    "tti": 100,
+                    "uplinkCapacity": 10,
+                    "downlinkCapacity": 20,
+                    "congestion": false,
+                    "readBufferSize": 2,
+                    "writeBufferSize": 2
+                },
+                "finalmask": {
+                    "udp": [
+                        {
+                            "type": "xicmp",
+                            "settings": {
+                                "ip": "0.0.0.0",
+                                "id": ${PORT_XICMP_ID}
+                            }
+                        }
+                    ]
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls"],
+                "metadataOnly": false,
+                "routeOnly": true
+            }
+        }
+    ]
+}

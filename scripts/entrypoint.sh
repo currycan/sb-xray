@@ -924,11 +924,81 @@ createConfig() {
     _apply_tpl "/templates/dufs/conf.yml"                "${WORKDIR}/dufs/conf.yml"
     _apply_tpl "/templates/providers/providers.yaml"     "${WORKDIR}/providers"
 
-    for t in /templates/xray/*.json;     do _apply_tpl "$t" "${WORKDIR}/xray/$(basename "$t")";     done
+    # 清理挂载目录内已不存在于模板源的孤儿文件（例如：升级镜像时删除了某个入站模板）
+    # 否则 xray/sing-box 会继续加载孤儿 JSON，产生"模板已删但仍生效"的诡异状态
+    for dir in "${WORKDIR}/xray" "${WORKDIR}/sing-box"; do
+        mkdir -p "$dir"
+        src_type="${dir##*/}"
+        for f in "$dir"/*.json; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f")
+            if [ ! -f "/templates/${src_type}/${name}" ]; then
+                log INFO "[配置] 清理孤儿 JSON：${dir}/${name}"
+                rm -f "$f"
+            fi
+        done
+    done
+
+    # M4 feature flag：按开关决定是否加载对应入站模板；关闭时主动删除 WORKDIR 里的老文件，
+    # 避免"升级后开关关掉但老配置残留"的情况
+    local xray_dst="${WORKDIR}/xray"
+    for t in /templates/xray/*.json; do
+        local name; name=$(basename "$t")
+        local enable_flag=""
+        case "$name" in
+            05_xicmp_emergency_inbounds.json)   enable_flag="${ENABLE_XICMP}" ;;
+            06_xdns_emergency_inbounds.json)    enable_flag="${ENABLE_XDNS}" ;;
+        esac
+        if [ -n "$enable_flag" ] && [ "$enable_flag" != "true" ]; then
+            rm -f "${xray_dst}/${name}"
+            log INFO "[配置][M4] 跳过禁用模板：${name}"
+            continue
+        fi
+        _apply_tpl "$t" "${xray_dst}/${name}"
+    done
     for t in /templates/sing-box/*.json; do _apply_tpl "$t" "${WORKDIR}/sing-box/$(basename "$t")"; done
+
+    # VLESS Reverse Proxy（M3）：ENABLE_REVERSE=true 时往 01_reality_inbounds.json 的
+    # clients 数组追加一个带 reverse.tag 标记的 UUID；同时往 xr.json 追加 outboundTag=r-tunnel 的
+    # 路由规则（命中 REVERSE_DOMAINS 列表的域名走 reverse 隧道到家宽落地机）
+    if [ "${ENABLE_REVERSE:-false}" = "true" ]; then
+        local reality_file="${WORKDIR}/xray/01_reality_inbounds.json"
+        local xr_file="${WORKDIR}/xray/xr.json"
+        local reverse_domains_json="[]"
+        if [ -n "${REVERSE_DOMAINS:-}" ]; then
+            reverse_domains_json=$(printf '%s' "${REVERSE_DOMAINS}" | awk -v RS=',' 'NF{printf "\"%s\",",$0}' | sed 's/,$//; s/^/[/; s/$/]/')
+        fi
+        log INFO "[配置][Reverse] 注入 reverse client（UUID=...${XRAY_REVERSE_UUID: -8}）+ routing 规则（domains=${REVERSE_DOMAINS:-<none>}）"
+        # 1) 追加 reverse client 到 01_reality_inbounds.json
+        jq --arg uuid "${XRAY_REVERSE_UUID}" '
+            .inbounds[0].settings.clients += [{
+                "id": $uuid,
+                "level": 0,
+                "email": "reverse@portal.bridge",
+                "flow": "xtls-rprx-vision",
+                "reverse": { "tag": "r-tunnel" }
+            }]
+        ' "$reality_file" > "${reality_file}.tmp" && mv "${reality_file}.tmp" "$reality_file"
+        # 2) 追加 routing 规则到 xr.json（仅当有 REVERSE_DOMAINS 时；否则只建立隧道不路由任何流量）
+        if [ "$reverse_domains_json" != "[]" ]; then
+            jq --argjson domains "$reverse_domains_json" '
+                .routing.rules |= ([{
+                    "type": "field",
+                    "ruleTag": "reverse-bridge",
+                    "domain": $domains,
+                    "outboundTag": "r-tunnel"
+                }] + .)
+            ' "$xr_file" > "${xr_file}.tmp" && mv "${xr_file}.tmp" "$xr_file"
+        fi
+    fi
 
     log INFO "[配置] 所有模板渲染完成"
 }
+
+# 注：M1-4 原计划 `buildMphCache` 已作废
+# PR #5505 (v26.2.6) 引入的 `xray buildMphCache` CLI 于 2026-04-13 被 PR #5814 revert
+# 新方案是运行时自动生效的 matcher group + 初始化后主动 GC，无需任何 CLI/env 配置
+# 详见 docs/10-implementation-notes.md §M1-4
 
 # 生成 CLASH_PROXY_PROVIDERS / SURGE_PROXY_PROVIDERS / STASH_PROVIDER_NAMES
 # 依赖: ${WORKDIR}/providers（由 createConfig 渲染）
@@ -1049,6 +1119,7 @@ analyze_base_env() {
         "DUFS_PORT|generateRandomStr port"
         "PASSWORD|generateRandomStr password 16"
         "XRAY_UUID|generateRandomStr uuid"
+        "XRAY_REVERSE_UUID|generateRandomStr uuid"
         "SB_UUID|generateRandomStr uuid"
         "XRAY_REALITY_SHORTID|openssl rand -hex 8"
         "XRAY_REALITY_SHORTID_2|openssl rand -hex 4"
@@ -1067,7 +1138,7 @@ analyze_base_env() {
         ensure_var "$key" $cmd
     done
 
-    log INFO "[阶段 1] 完成 hy2=${PORT_HYSTERIA2} tuic=${PORT_TUIC} anytls=${PORT_ANYTLS}"
+    log INFO "[阶段 1] 完成 hy2=${PORT_HYSTERIA2}(xray) tuic=${PORT_TUIC} anytls=${PORT_ANYTLS}"
 }
 
 # 阶段 2: ISP 代理测速与选路（ISP_TAG 已缓存则跳过）

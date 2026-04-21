@@ -53,7 +53,8 @@ graph TD
     Cloudflare((外部 CDN 中转网络)):::cdn
 
     User -->|"TLS 加密握手 端口 443"| Nginx["Nginx 流控边界防御网关"]:::gateway
-    User -->|"UDP 竞速直连 独立高位端口"| Singbox("Sing-box 竞速内核")
+    User -->|"Hysteria2 UDP 6443 (2026-04 迁入 Xray)"| XrayHy2(("Xray Hy2 核心")):::core
+    User -->|"TUIC/AnyTLS UDP/TCP 高位端口"| Singbox("Sing-box 竞速内核")
     User --> Cloudflare
     Cloudflare -->|"CDN 回源流量 端口 443"| Nginx
 
@@ -65,6 +66,7 @@ graph TD
 
     XrayReality --> RoutingEngine{"智能路由与策略分流引擎"}:::core
     XrayCDN --> RoutingEngine
+    XrayHy2 --> RoutingEngine
     Singbox --> RoutingEngine:::core
 
     RoutingEngine -->|"命中流媒体/AI 规则"| ISP["ISP 住宅节点 SOCKS5 链式代理"]:::dest
@@ -79,7 +81,7 @@ graph TD
 ### 1. 🚀 智能双核引擎驱动 (Dual-Core Engine)
 
 - **Xray 核心 (隐蔽主干)**: 主理 Reality 协议与 XTLS-Vision 流控，在提供极高防探测能力的同时，确保高频数据通信（如日常网络代理、AI 接口调用）的绝对稳定。
-- **Sing-box 核心 (竞速加速)**: 专注于处理 Hysteria2、TUIC 等基于 UDP 的高并发协议，能够在严重丢包的弱网环境下进行暴力网络竞速，为您提供极致的宽带压榨保障。
+- **Sing-box 核心 (竞速加速)**: 专注处理 TUIC、AnyTLS 等 UDP 竞速协议（Hysteria2 于 2026-04 永久迁至 Xray 原生入站，客户端订阅参数不变），在严重丢包弱网环境下暴力竞速压榨带宽。
 
 ### 2. 🛡️ 零信任前置网关 (Zero-Trust Gateway)
 
@@ -108,6 +110,9 @@ graph TD
 | 🟡 **调度中枢与客户端** | [**👉 03. 智能路由策略与全平台客户端接入**](./docs/03-routing-and-clients.md)  | 详解 OpenClash Policy-Priority 六维加权评分体系、Sub-Store 深层节点清洗引擎，以及动态 ISP 链式落地的底层实现。         |
 | 🔴 **系统运维与监控**   | [**👉 04. 运维管理与故障排查手册**](./docs/04-ops-and-troubleshooting.md)      | 包含多面板入口导航、订阅端点双重认证安全防扫描策略、证书运维以及应对 502/404/证书失效等故障的汇总排错指南。            |
 | ⚙️ **构建部署指南**     | [**👉 05. 构建部署指南**](./docs/05-build-release.md)                          | 详解 `build.sh` 自动构建脚本、四阶段 Dockerfile 架构、11 个组件的版本管理策略与常见构建问题 FAQ。                      |
+| 🔄 **内网穿透专题**     | [**👉 06. VLESS Reverse Proxy 部署指南**](./docs/06-reverse-proxy-guide.md)    | 家宽落地机反向挂载到 VPS 的端到端部署：portal 侧 `ENABLE_REVERSE` 开关、bridge 侧 simplified outbound 模板、双 UUID 隔离、故障排查与撤销流程。 |
+| ✨ **新特性使用指南**   | [**👉 07. 新特性使用指南（M1–M4）**](./docs/07-new-features-guide.md)          | 事件总线 / adv 抗审查订阅 / 反向穿透 / Xray 原生 Hy2 / XHTTP-H3 / XICMP / XDNS 共 8 个特性的五段式操作手册 + Env 速查表 + 通用故障排查。 |
+| 📜 **版本发布日志**     | [**👉 CHANGELOG（Keep a Changelog 格式）**](./CHANGELOG.md)                    | 横跨 M1–M4 的 Added / Changed / Fixed / Removed / Security / Migration notes 全分类列表，附 bracknerd 生产 E2E 验证证据与 30 秒回滚命令。|
 
 ---
 
@@ -392,7 +397,7 @@ docker exec -it sb-xray bash
 | 项目                    | 作用                                                 | 链接                                                      |
 | :---------------------- | :--------------------------------------------------- | :-------------------------------------------------------- |
 | **Xray-core**           | VLESS/VMess/Reality/XHTTP 协议核心，XTLS-Vision 流控 | [XTLS/Xray-core](https://github.com/XTLS/Xray-core)       |
-| **Sing-box**            | Hysteria2/TUIC/AnyTLS 等 UDP 协议核心                | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) |
+| **Sing-box**            | TUIC/AnyTLS 等 UDP/QUIC 协议核心（Hysteria2 2026-04 迁至 Xray） | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) |
 | **Mihomo (Clash Meta)** | 客户端智能路由内核，Smart 模式策略组引擎             | [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)   |
 
 ### 🖥️ 管理面板与前端

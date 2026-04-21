@@ -1,0 +1,49 @@
+{
+    "_comment": "XDNS 紧急通道（feature flag ENABLE_XDNS）：DNS 查询载荷承载代理数据（类似 DNSTT）；mKCP 高 TTI（600-900ms）配合慢速 DNS 链路；XDNS_DOMAIN 环境变量指定用户控制的 NS 域名（如 tns.example.com）",
+    "inbounds": [
+        {
+            "listen": "::",
+            "port": ${PORT_XDNS},
+            "protocol": "vless",
+            "tag": "XDNS_IN",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "${XRAY_UUID}",
+                        "level": 0,
+                        "email": "vless@xdns.emergency"
+                    }
+                ],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "kcp",
+                "kcpSettings": {
+                    "mtu": 900,
+                    "tti": 600,
+                    "uplinkCapacity": 1,
+                    "downlinkCapacity": 1,
+                    "congestion": false,
+                    "readBufferSize": 2,
+                    "writeBufferSize": 2
+                },
+                "finalmask": {
+                    "udp": [
+                        {
+                            "type": "xdns",
+                            "settings": {
+                                "domains": ["${XDNS_DOMAIN}"]
+                            }
+                        }
+                    ]
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls"],
+                "metadataOnly": false,
+                "routeOnly": true
+            }
+        }
+    ]
+}

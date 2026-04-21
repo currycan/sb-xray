@@ -70,7 +70,8 @@ graph TD
         NginxStream{{"Nginx Stream 分流器"}}:::nginx
         NginxWeb{{"Nginx Web 服务"}}:::nginx
         XrayReality(("Xray Reality 核心")):::xray
-        SingBox(("Sing-box 核心")):::sing
+        XrayHy2(("Xray Hy2 核心<br/>2026-04 迁入")):::xray
+        SingBox(("Sing-box 核心<br/>仅 TUIC/AnyTLS")):::sing
         UDS_Reality["udsreality.sock"]
         UDS_CDN["cdnh2.sock SSL"]
         UDS_Nginx["nginx.sock 明文"]
@@ -86,7 +87,8 @@ graph TD
     XrayReality -- "非 Vision 流量" --> UDS_Nginx
     UDS_Nginx --> NginxWeb
 
-    PHysteria --> SingBox
+    PHysteria --> XrayHy2
+    XrayHy2 --> ProxyOut1
     PTuic --> SingBox
     PAnyTLS --> SingBox
     SingBox --> ProxyOut2["代理流量出站"]:::sing
@@ -126,14 +128,16 @@ graph TD
     User((外部客户端))
     subgraph 边缘网关监听层
         P443["TCP/UDP 443 端口 由 Nginx 接管"]:::entry
-        PHigh["动态高位端口 由 Sing-box 接管"]:::entry
+        PHy2["Hy2 UDP 6443 由 Xray 接管 (2026-04 迁入)"]:::entry
+        PHigh["TUIC/AnyTLS 高位端口 由 Sing-box 接管"]:::entry
     end
     User -->|"伪装域名 / CDN 域名"| P443
-    User -->|"直连 IP / 域名 UDP 竞速"| PHigh
+    User -->|"UDP 6443 Hysteria2 竞速"| PHy2
+    User -->|"TUIC/AnyTLS 直连"| PHigh
     classDef entry fill:#f96,stroke:#333,stroke-width:2px,color:white
 ```
 
-* **解释**：Sing-box 运行的 Hysteria2 等协议基于纯 UDP，拥有极强的抗丢包特性，因此直接绕过 Nginx，监听独立的随机高位端口，实现暴力竞速。
+* **解释**：Hysteria2（2026-04 起由 **Xray** 原生承载）/ TUIC / AnyTLS 等协议基于纯 UDP 或 QUIC，拥有极强的抗丢包特性，因此直接绕过 Nginx，监听独立的随机高位端口，实现暴力竞速。
 
 ### 2.3 视角二：Reality 核心鉴权与回落
 
@@ -207,7 +211,7 @@ graph TD
 
 * **适用协议**：Hysteria2 (UDP)、TUIC V5 (UDP)、AnyTLS (TCP)
 * **客户端行为**：连接服务器的**独立端口**（Hysteria2/TUIC 支持端口跳跃）
-* **流转过程**：流量直接到达独立端口，**Sing-box** 直接监听，不经过 Nginx，不经过 Xray。损耗最小。
+* **流转过程**：流量直接到达独立端口。**Hysteria2 由 Xray 承载**（2026-04 起永久迁移，`templates/xray/04_hy2_inbounds.json`）；**TUIC / AnyTLS 仍由 Sing-box 承载**（`templates/sing-box/02_tuic_inbounds.json` / `03_anytls_inbounds.json`）。均不经过 Nginx。损耗最小。
 
 #### 场景四：管理与维护
 

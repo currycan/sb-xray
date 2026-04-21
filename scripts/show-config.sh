@@ -91,6 +91,21 @@ fi
 # Helpers
 print_colored() { echo -e "$1$2${RESET}\n"; }
 
+# TLS 诊断：用 `xray tls ping` 打印目标站的证书信息 (leaf + CA SHA256、ALPN、TLS 版本等)
+# 来源: Xray-core v26.1.23 PR #5628 / v26.2.6 PR #5644
+# 本项目 CF CDN 和 ZeroSSL 证书都会轮转，因此**不自动**把叶子 pin 指纹写进订阅链接
+# (那会在证书续签日令所有客户端失联)。作为运维诊断命令使用，或在 DEBUG=1 时打印。
+tls_ping_diagnose() {
+    local target="${1:-${CDNDOMAIN}:443}"
+    if ! command -v xray >/dev/null 2>&1; then
+        echo -e "${YELLOW}[tls-ping] xray CLI 不可用${RESET}"
+        return 1
+    fi
+    echo -e "${CYAN}${BOLD}[tls-ping] ${target}${RESET}"
+    xray tls ping "${target}" 2>&1 || echo -e "${YELLOW}[tls-ping] 失败（目标不可达或未部署证书）${RESET}"
+    echo
+}
+
 show_qrcode() {
     local content="$1" remark="$2"
     local qr_params="-s 8 -m 4 -l H -v 10 -d 300 -k 2"
@@ -127,6 +142,11 @@ generate_links() {
 
     local link_mix="vless://${XRAY_UUID}@${CDNDOMAIN}:${LISTENING_PORT}?encryption=mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}&security=tls&sni=${CDNDOMAIN}&alpn=h2&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY}&sid=${XRAY_REALITY_SHORTID}&type=xhttp&host=${CDNDOMAIN}&path=%2F${XRAY_URL_PATH}-xhttp&mode=auto#${FLAG_PREFIX}Xhttp+TLS+CDN上下行不分离 ✈ ${region_name}${NODE_SUFFIX}"
 
+    # XHTTP/3 + BBR（永久启用，无开关；UDP 直连 PORT_XHTTP_H3，BBR 拥塞；Xray-core 26.3.27+ 可用）
+    # 模板 02_xhttp_h3_inbounds.json 已内嵌 adv 字段（xPaddingQueryParam/xPaddingPlacement/UplinkDataPlacement）
+    local xhttp_h3_extra="%7B%22noSSEHeader%22%3Atrue%2C%22scMaxEachPostBytes%22%3A1000000%2C%22scMaxBufferedPosts%22%3A30%2C%22xPaddingBytes%22%3A%22100-1000%22%2C%22xPaddingQueryParam%22%3A%22cf_ray_id%22%2C%22xPaddingPlacement%22%3A%22cookie%22%2C%22UplinkDataPlacement%22%3A%22auto%22%7D"
+    local link_xhttp_h3="vless://${XRAY_UUID}@${DOMAIN}:${PORT_XHTTP_H3}?encryption=mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}&security=tls&sni=${DOMAIN}&alpn=h3&fp=chrome&type=xhttp&path=%2F${XRAY_URL_PATH}-xhttp-h3&mode=auto&extra=${xhttp_h3_extra}#${FLAG_PREFIX}Xhttp-H3+BBR ✈ ${region_name}${NODE_SUFFIX}"
+
     # ==================================================================
     # Compat 变种（给不支持 VLESS mlkem 加密的客户端：mihomo/OpenClash、sing-box/Karing）
     #   - encryption=none（走 decryption:none 的 xhttp-compat inbound）
@@ -152,7 +172,9 @@ ${link_anytls}
 ${link_vmess}
 ${link_vless_vision}"
 
-    local part2="${link_xhttp_reality}
+    # H3 排第一（BBR/QUIC 性能优先；客户端按实测 RTT 重排，显示序保留 H3 优先）
+    local part2="${link_xhttp_h3}
+${link_xhttp_reality}
 ${link_up_cdn_down_reality}
 ${link_up_reality_down_cdn}
 ${link_mix}"
@@ -162,11 +184,20 @@ ${link_up_cdn_down_reality_compat}
 ${link_up_reality_down_cdn_compat}
 ${link_mix_compat}"
 
+    # ==================================================================
+    # 2026-04 起 v2rayn-adv 订阅轨已并入主轨 v2rayn：
+    #   - XHTTP obfs 新字段（xPaddingQueryParam/xPaddingPlacement/UplinkDataPlacement）+ Finalmask fragment
+    #     直接落到 02_xhttp_inbounds.json 主轨
+    #   - Xray-core <26.3.27 的客户端命中新字段会失败，降级到 v2rayn-compat
+    #   - 结果：三轨 → 两轨（v2rayn + v2rayn-compat）
+    # ==================================================================
+
     V2RAYN_SUBSCRIBE="${part1}
 ${part2}"
 
     V2RAYN_COMPAT_SUBSCRIBE="${part1}
 ${part2_compat}"
+
     print_colored ${PURPLE} "V2RAYN 订阅链接内容如下:\n${V2RAYN_SUBSCRIBE}"
     echo -n "$V2RAYN_SUBSCRIBE"        | base64 -w0 > ${WORKDIR}/subscribe/v2rayn
     echo -n "$V2RAYN_COMPAT_SUBSCRIBE" | base64 -w0 > ${WORKDIR}/subscribe/v2rayn-compat
@@ -187,12 +218,20 @@ show_info_links() {
     echo -e "${BOLD}${GREEN}${sep}${RESET}"
     echo
 
+    # TLS 诊断（仅在 DEBUG=1 时输出，用 xray tls ping 查看证书指纹/ALPN/套件）
+    if [ "${DEBUG:-0}" = "1" ]; then
+        tls_ping_diagnose "${CDNDOMAIN}:443"
+        [ -n "${DOMAIN:-}" ] && [ "${DOMAIN}" != "${CDNDOMAIN}" ] && tls_ping_diagnose "${DOMAIN}:443"
+    fi
+
     # 通用索引
     print_colored ${RED}            "📋 Index（订阅索引页）\n${base}/show-config${token_param}"
 
-    # v2rayN 双轨（mlkem 版本给 xray-core 客户端，compat 版本给 mihomo/Karing）
-    print_colored ${CYAN}           "🚀 V2rayN 订阅  ${DIM}[xray-core 客户端 · 含 ML-KEM-768 后量子加密]${RESET}${CYAN}\n${base}/v2rayn${token_param}"
-    print_colored ${BRIGHT_CYAN}    "🔓 V2rayN-Compat 订阅  ${DIM}[mihomo/OpenClash/Karing 用 · 无 VLESS 加密]${RESET}${BRIGHT_CYAN}\n${base}/v2rayn-compat${token_param}"
+    # v2rayN 两轨订阅（2026-04 起 adv 轨已并入主轨 v2rayn）：
+    # - v2rayn  : Xray-core 26.3.27+（ML-KEM-768 + XHTTP obfs 新字段 + Finalmask fragment + XHTTP-H3 优先）
+    # - compat  : mihomo/OpenClash/Karing + 低版 Xray-core（无 VLESS 加密，TCP xhttp）
+    print_colored ${CYAN}           "🚀 V2rayN 订阅  ${DIM}[Xray-core 26.3.27+ · ML-KEM-768 + adv obfs + fragment + H3 优先]${RESET}${CYAN}\n${base}/v2rayn${token_param}"
+    print_colored ${BRIGHT_CYAN}    "🔓 V2rayN-Compat 订阅  ${DIM}[mihomo/OpenClash/Karing + 低版 Xray-core · 无 VLESS 加密]${RESET}${BRIGHT_CYAN}\n${base}/v2rayn-compat${token_param}"
 
     # Client Template YAML（每个一种颜色，循环）
     local tpl_colors=("${BRIGHT_YELLOW}" "${BRIGHT_MAGENTA}" "${BRIGHT_GREEN}" "${BRIGHT_BLUE}" "${BRIGHT_RED}")

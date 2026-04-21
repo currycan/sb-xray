@@ -122,9 +122,9 @@ graph LR
 
 #### 服务端入站
 
-* **配置文件**: `templates/sing-box/01_hysteria2_inbounds.json`
+* **配置文件**: `templates/xray/04_hy2_inbounds.json`（2026-04 起从 sing-box 迁至 Xray 原生入站，永久无开关；客户端订阅 URL 参数完全等价，无感迁移）
 * **监听地址**: `::` (All Interfaces)，端口 6443（Dockerfile ENV 固定值）
-* **路径**: **直连**（不经过 Nginx，不经过 Xray）
+* **路径**: **直连**（不经过 Nginx；由 Xray 直接承载 QUIC/UDP）
 * **Salamander 混淆**: 服务端和客户端使用同一 `SB_UUID` 作为混淆密码
 
 #### Xray 原生客户端配置

@@ -39,6 +39,10 @@ ln -sf /usr/local/bin/bin/*.dat /usr/local/bin/
 
 log "Files downloaded successfully."
 
+# 注：原本此处有 MPH 缓存重建逻辑（PR #5505），已作废。
+# PR #5505 的 buildMphCache CLI 在 2026-04-13 被 PR #5814 的 geodata refactor revert
+# 新方案运行时自动生效，无需重建。详见 docs/10-implementation-notes.md §M1-4
+
 # 检查 supervisord 是否在运行（进程存活 + socket 是真 unix socket，过滤上次异常退出残留的 stale 文件）
 if pgrep -x supervisord >/dev/null 2>&1 && [ -S "/var/run/supervisor.sock" ]; then
     log "Restarting ..."

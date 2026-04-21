@@ -1,15 +1,17 @@
 {
+    "_comment": "XHTTP/3 入站（adv 轨，H3 客户端必然 Xray-core 26.3.27+，直接内嵌 adv 字段）；直接监听 UDP/PORT_XHTTP_H3 + BBR 拥塞 + xPadding 新字段；绕开 nginx 直连内核；finalmask.fragment 是 TCP-only，H3 用 finalmask.quicParams 做 QUIC 级整形",
     "inbounds": [
         {
-            "listen": "/dev/shm/udsxhttp.sock,0666",
+            "listen": "::",
+            "port": ${PORT_XHTTP_H3},
             "protocol": "vless",
-            "tag": "XHTTP_IN",
+            "tag": "XHTTP_H3_IN",
             "settings": {
                 "clients": [
                     {
                         "id": "${XRAY_UUID}",
                         "level": 0,
-                        "email": "vless@xhttp.reality"
+                        "email": "vless@xhttp.h3"
                     }
                 ],
                 "decryption": "mlkem768x25519plus.native.600s.${XRAY_MLKEM768_SEED}"
@@ -18,7 +20,7 @@
                 "network": "xhttp",
                 "xhttpSettings": {
                     "host": "",
-                    "path": "/${XRAY_URL_PATH}-xhttp",
+                    "path": "/${XRAY_URL_PATH}-xhttp-h3",
                     "mode": "auto",
                     "extra": {
                         "noSSEHeader": true,
@@ -30,24 +32,21 @@
                         "UplinkDataPlacement": "auto"
                     }
                 },
-                "sockopt": {
-                    "tcpFastOpen": true,
-                    "acceptProxyProtocol": false,
-                    "tcpcongestion": "bbr",
-                    "tcpMptcp": true,
-                    "tcpNoDelay": true,
-                    "trustedXForwardedFor": ["X-Forwarded-For"]
-                },
-                "finalmask": {
-                    "tcp": [
+                "security": "tls",
+                "tlsSettings": {
+                    "alpn": ["h3"],
+                    "minVersion": "1.3",
+                    "certificates": [
                         {
-                            "type": "fragment",
-                            "settings": {
-                                "interval": "5-20",
-                                "length": "100-200"
-                            }
+                            "certificateFile": "${SSL_PATH}/sb_xray_bundle.crt",
+                            "keyFile": "${SSL_PATH}/sb_xray_bundle.key"
                         }
                     ]
+                },
+                "finalmask": {
+                    "quicParams": {
+                        "congestion": "bbr"
+                    }
                 }
             },
             "sniffing": {

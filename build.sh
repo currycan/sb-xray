@@ -157,6 +157,14 @@ update_script_default() {
     VERSIONS_UPDATED=true
 }
 
+# 解析参数：支持 "default"（离线模式）与 "--local"（本地单架构构建，不 push）
+LOCAL_BUILD=false
+for arg in "$@"; do
+    case "$arg" in
+        --local) LOCAL_BUILD=true ;;
+    esac
+done
+
 # 检查是否使用默认版本模式
 USE_DEFAULT_VERSIONS=false
 XRAY_VERSION_FINAL=""
@@ -254,13 +262,13 @@ check_version() {
 check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"           "0.8.0"
 check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"             "1.19.24"
 check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"          "1.1.0"
-check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION" "2.16.56"
-check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"  "2.22.4"
+check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION" "2.16.57"
+check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"  "2.22.5"
 check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"                "1.4.1"
 check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"               "0.45.0"
 check_version "Cloudflared"      "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSION"        "2026.3.0"
-check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"                "2.8.11"
-check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"           "1.13.8"
+check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"                "2.9.0"
+check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"           "1.13.9"
 check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"               "26.4.17"
 
 # 当从 GitHub 获取版本后，自动更新脚本中的默认版本配置
@@ -429,12 +437,23 @@ BUILD_ARGS="${BUILD_ARGS} \
 echo -e "${BLUE}开始构建 Docker 镜像...${NC}"
 echo -e "Tags: currycan/sb-xray:${TAG_VERSION}  currycan/sb-xray:latest"
 
-# shellcheck disable=SC2086
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  $BUILD_ARGS \
-  --tag currycan/sb-xray:"${TAG_VERSION}" \
-  --tag currycan/sb-xray:latest \
-  --push .
-
-echo -e "${GREEN}✓ 构建完成: currycan/sb-xray:${TAG_VERSION} + :latest${NC}"
+if [ "$LOCAL_BUILD" == "true" ]; then
+    echo -e "${YELLOW}本地构建模式：单架构 linux/amd64 + --load，不 push 到 registry${NC}"
+    # shellcheck disable=SC2086
+    docker buildx build \
+      --platform linux/amd64 \
+      $BUILD_ARGS \
+      --tag currycan/sb-xray:"${TAG_VERSION}-local" \
+      --tag currycan/sb-xray:local \
+      --load .
+    echo -e "${GREEN}✓ 本地构建完成: currycan/sb-xray:${TAG_VERSION}-local + :local${NC}"
+else
+    # shellcheck disable=SC2086
+    docker buildx build \
+      --platform linux/amd64,linux/arm64 \
+      $BUILD_ARGS \
+      --tag currycan/sb-xray:"${TAG_VERSION}" \
+      --tag currycan/sb-xray:latest \
+      --push .
+    echo -e "${GREEN}✓ 构建完成: currycan/sb-xray:${TAG_VERSION} + :latest${NC}"
+fi

@@ -286,6 +286,33 @@ ENV SUPERVISOR_LOG_MAX_BYTES="20MB"
 # xray 与 sing-box 共用日志级别：debug | info | warning | error
 ENV LOG_LEVEL="warning"
 
+# shoutrrr-forwarder 事件总线：
+#   SHOUTRRR_URLS 为空时 dry-run（仅日志，不推送），这是默认安全状态
+#   接收 xray rules.webhook 的 POST 并转发给 shoutrrr CLI
+ENV SHOUTRRR_URLS=""
+ENV SHOUTRRR_FORWARDER_PORT="18085"
+ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
+
+# VLESS Reverse Proxy（M3，默认关闭）
+# ENABLE_REVERSE=true 时 entrypoint 往 REALITY 入站追加 reverse client UUID，
+# 并按 REVERSE_DOMAINS（逗号分隔，例如 "domain:home.lan,domain:nas.lan"）生成 routing 规则
+# 落地机（bridge）配置：见 templates/xray/reverse_bridge_client.json
+ENV ENABLE_REVERSE="false"
+ENV REVERSE_DOMAINS=""
+
+# M4 新入站 feature flag（Xray v26.4.17）
+#   Hy2 / XHTTP-H3 已永久启用（无开关，见 templates/xray/04_hy2_inbounds.json 与 02_xhttp_h3_inbounds.json）
+#   ENABLE_XICMP     ：ICMP echo 承载代理的紧急通道（仅极端封锁场景；需要 cap_add=NET_RAW）
+#   ENABLE_XDNS      ：DNS 查询载荷承载代理的紧急通道（仅极端封锁场景；需要用户控制的 NS 域名 XDNS_DOMAIN）
+#   ENABLE_ECH       ：TLS ECH 占位开关；M4-5 TLS 层接入尚未实现，置 true 暂无效果
+ENV ENABLE_XICMP="false"
+ENV ENABLE_XDNS="false"
+ENV ENABLE_ECH="false"
+ENV PORT_XHTTP_H3="4443"
+ENV PORT_XICMP_ID="12345"
+ENV PORT_XDNS="5353"
+ENV XDNS_DOMAIN=""
+
 WORKDIR ${WORKDIR}
 
 COPY --from=builder --chmod=755 /usr/local/bin/ /usr/local/bin/

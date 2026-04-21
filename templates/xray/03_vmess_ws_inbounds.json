@@ -25,7 +25,8 @@
                     "acceptProxyProtocol": false,
                     "tcpcongestion": "bbr",
                     "tcpMptcp": true,
-                    "tcpNoDelay": true
+                    "tcpNoDelay": true,
+                    "trustedXForwardedFor": ["X-Forwarded-For"]
                 }
             },
             "sniffing": {

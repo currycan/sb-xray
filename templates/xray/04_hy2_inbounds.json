@@ -1,0 +1,55 @@
+{
+    "inbounds": [
+        {
+            "listen": "::",
+            "port": ${PORT_HYSTERIA2},
+            "protocol": "hysteria",
+            "tag": "HY2_IN",
+            "settings": {
+                "version": 2,
+                "clients": [
+                    {
+                        "auth": "${SB_UUID}",
+                        "email": "hy2@xray"
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "hysteria",
+                "hysteriaSettings": {
+                    "version": 2
+                },
+                "security": "tls",
+                "tlsSettings": {
+                    "alpn": ["h3"],
+                    "minVersion": "1.3",
+                    "certificates": [
+                        {
+                            "certificateFile": "${SSL_PATH}/sb_xray_bundle.crt",
+                            "keyFile": "${SSL_PATH}/sb_xray_bundle.key"
+                        }
+                    ]
+                },
+                "finalmask": {
+                    "quicParams": {
+                        "congestion": "bbr"
+                    },
+                    "udp": [
+                        {
+                            "type": "salamander",
+                            "settings": {
+                                "password": "${SB_UUID}"
+                            }
+                        }
+                    ]
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls"],
+                "metadataOnly": false,
+                "routeOnly": true
+            }
+        }
+    ]
+}

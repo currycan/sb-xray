@@ -1,0 +1,70 @@
+{
+    "_comment": "VLESS Reverse Proxy bridge（落地机）配置 — 在家宽内网机器上跑，反向连接公网 sb-xray 构建隧道。",
+    "_usage": [
+        "1. 公网端 sb-xray 必须设置: ENABLE_REVERSE=true（docker-compose environment）",
+        "2. 在公网端 sb-xray 容器运行 show-config 脚本，获取 XRAY_REVERSE_UUID / DOMAIN / DEST_HOST / XRAY_REALITY_PUBLIC_KEY / XRAY_REALITY_SHORTID",
+        "3. 替换本文件的占位符：${XRAY_REVERSE_UUID} ${DOMAIN} ${LISTENING_PORT} ${DEST_HOST} ${XRAY_REALITY_PUBLIC_KEY} ${XRAY_REALITY_SHORTID}",
+        "4. 落地机执行 xray -c reverse_bridge_client.json 跑作为长驻进程（推荐用 systemd unit）",
+        "5. 落地机端需要能访问公网 sb-xray（出站 443/TCP）；无需落地机开端口",
+        "6. 公网端 routing.rules 里把 REVERSE_DOMAINS 匹配的流量 outboundTag 指向 r-tunnel，流量即反向穿透到落地机 freedom 出口",
+        "",
+        "详见 docs/08-reverse-proxy-guide.md"
+    ],
+    "log": {
+        "loglevel": "warning"
+    },
+    "inbounds": [
+        {
+            "tag": "api",
+            "port": 7979,
+            "listen": "127.0.0.1",
+            "protocol": "dokodemo-door",
+            "settings": {
+                "address": "127.0.0.1"
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "vless",
+            "tag": "reverse-bridge",
+            "settings": {
+                "address": "${DOMAIN}",
+                "port": 443,
+                "id": "${XRAY_REVERSE_UUID}",
+                "flow": "xtls-rprx-vision",
+                "encryption": "none",
+                "reverse": {
+                    "tag": "r-tunnel"
+                }
+            },
+            "streamSettings": {
+                "network": "raw",
+                "security": "reality",
+                "realitySettings": {
+                    "serverName": "${DEST_HOST}",
+                    "fingerprint": "chrome",
+                    "publicKey": "${XRAY_REALITY_PUBLIC_KEY}",
+                    "shortId": "${XRAY_REALITY_SHORTID}",
+                    "spiderX": "/"
+                }
+            }
+        },
+        {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {
+                "domainStrategy": "UseIPv4v6"
+            }
+        }
+    ],
+    "routing": {
+        "rules": [
+            {
+                "type": "field",
+                "inboundTag": ["reverse-bridge"],
+                "outboundTag": "direct"
+            }
+        ]
+    }
+}
