@@ -685,8 +685,8 @@ apply_isp_routing_logic() {
     fi
 
     # IS_8K_SMOOTH：基于实际出口的均值速度，阈值 100 Mbps
-    # - 使用 ISP 代理 → 以代理均值为准 → show-config.sh 生成 "good" 标签
-    # - 回退直连     → 以直连均值为准 → show-config.sh 结合 IP_TYPE 决定 "super" 标签
+    # - 使用 ISP 代理 → 以代理均值为准 → show 子命令生成 "good" 标签
+    # - 回退直连     → 以直连均值为准 → show 子命令结合 IP_TYPE 决定 "super" 标签
     local ref_speed
     if [[ "${ISP_TAG:-}" != "direct" ]]; then
         ref_speed="${proxy_max_speed:-0}"
@@ -709,9 +709,9 @@ apply_isp_routing_logic() {
     local _label_hint
     if [[ "${IS_8K_SMOOTH}" == "true" ]]; then
         if [[ "${ISP_TAG:-}" != "direct" ]]; then
-            _label_hint="→ show-config.sh 将生成 ✈ good 标签 (OpenClash +10分)"
+            _label_hint="→ show 子命令将生成 ✈ good 标签 (OpenClash +10分)"
         else
-            _label_hint="→ IP_TYPE=isp 时 show-config.sh 将生成 ✈ super 标签 (OpenClash +30分)"
+            _label_hint="→ IP_TYPE=isp 时 show 子命令将生成 ✈ super 标签 (OpenClash +30分)"
         fi
     else
         _label_hint="→ 无质量标签（速度 ${ref_speed} Mbps 未达 100 Mbps 阈值）"
@@ -851,6 +851,12 @@ issueCertificate() {
     local first_dom="${params%%:*}"
     local cert="${SSL_PATH}/${name}.crt" key="${SSL_PATH}/${name}.key" ca="${SSL_PATH}/${name}-ca.crt"
 
+    # acme.sh 内部 LOG_LEVEL 变量是数值（1/2/3），但 Dockerfile 把 LOG_LEVEL 作为
+    # xray/sing-box 的字符串日志级别（"warning"/"info"/"debug"），会让 acme.sh 里的
+    # [ "${LOG_LEVEL:-$DEFAULT_LOG_LEVEL}" -ge "$LOG_LEVEL_1" ] 抛 "integer expected"。
+    # 用 env -u LOG_LEVEL 在子进程中剥离该命名冲突。
+    local _acme='env -u LOG_LEVEL acme.sh'
+
     # 证书有效期检查
     if [[ -f "$cert" && -f "$key" && -f "$ca" ]]; then
         if openssl x509 -checkend 604800 -noout -in "$cert" >/dev/null 2>&1; then
@@ -861,7 +867,7 @@ issueCertificate() {
     fi
 
     # 首次申请
-    if ! acme.sh --list | grep -q "${first_dom}"; then
+    if ! $_acme --list | grep -q "${first_dom}"; then
         checkRequiredEnv "ACMESH_SERVER_NAME" "ACMESH_REGISTER_EMAIL" \
                          "ALI_KEY" "ALI_SECRET" "CF_TOKEN" "CF_ZONE_ID" "CF_ACCOUNT_ID"
         export Ali_Key="${ALI_KEY}" Ali_Secret="${ALI_SECRET}" \
@@ -876,7 +882,7 @@ issueCertificate() {
         [[ -n "${ACMESH_EAB_KID:-}" && -n "${ACMESH_EAB_HMAC_KEY:-}" ]] && \
             reg_args+=("--eab-kid" "${ACMESH_EAB_KID}" "--eab-hmac-key" "${ACMESH_EAB_HMAC_KEY}")
 
-        acme.sh --register-account "${reg_args[@]}" >/dev/null 2>&1
+        $_acme --register-account "${reg_args[@]}" >/dev/null 2>&1
 
         local issue_args=("--issue" "--ecc" "--server" "${ACMESH_SERVER_NAME}")
         IFS='|' read -ra ENTRIES <<< "$params"
@@ -885,13 +891,13 @@ issueCertificate() {
             issue_args+=("-d" "$d" "--dns" "$p")
             [[ ! "$d" =~ ^[0-9.]+$ ]] && issue_args+=("-d" "*.$d" "--dns" "$p")
         done
-        acme.sh "${issue_args[@]}" || { log ERROR "[证书] 申请失败"; return 1; }
+        $_acme "${issue_args[@]}" || { log ERROR "[证书] 申请失败"; return 1; }
     fi
 
     # 安装证书
     log INFO "[证书] 安装 ${name}..."
     rm -f /etc/nginx/conf.d/* /etc/nginx/stream.d/*
-    acme.sh --install-cert --ecc -d "${first_dom}" \
+    $_acme --install-cert --ecc -d "${first_dom}" \
         --key-file "$key" --fullchain-file "$cert" --ca-file "$ca" \
         --reloadcmd "/usr/sbin/nginx"
     /usr/sbin/nginx -s quit 2>/dev/null && rm -f /var/run/nginx/nginx.pid || true

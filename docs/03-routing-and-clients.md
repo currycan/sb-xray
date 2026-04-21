@@ -66,7 +66,7 @@ export KR_ISP_USER='your_username'
 export KR_ISP_SECRET='your_password'
 ```
 
-> `entrypoint.sh` 启动时自动 source `/.env/secret`，无需手动操作。
+> `entrypoint.py` 启动时自动加载 `/.env/sb-xray` + `/.env/status` + `/.env/secret`，无需手动操作。
 
 #### docker-compose.yml 中只需设置兜底出口
 
@@ -88,7 +88,7 @@ environment:
 
 > **为什么要显式设置 `DEFAULT_ISP=`（空）？** Dockerfile 默认值为 `LA_ISP`，不覆盖则永远锁定 LA 出口。只有在 docker-compose 中显式置空，才能解锁自动选路能力。
 
-配置生效后，`entrypoint.sh` 自动将**所有** ISP 凭据渲染为底层内核支持的 SOCKS5 出站 JSON（按测速速度降序排列），并生成 `isp-auto` 健康选优出站（Sing-box `urltest` / Xray `balancer`）。运行时每 1 分钟探测各 ISP 存活状态，故障自动回退 `direct`。所有的解锁动作在服务器端完成，客户端无需额外配置。
+配置生效后，入口自动将**所有** ISP 凭据渲染为底层内核支持的 SOCKS5 出站 JSON（按测速速度降序排列），并生成 `isp-auto` 健康选优出站（Sing-box `urltest` / Xray `balancer`）。运行时每 1 分钟探测各 ISP 存活状态，故障自动回退 `direct`。所有的解锁动作在服务器端完成，客户端无需额外配置。
 
 ---
 
@@ -110,7 +110,7 @@ flowchart LR
         F["VPS 直连测速\n（住宅VPS直出场景）"] --> G{"IP_TYPE=isp\n且 > 100 Mbps?"}
     end
 
-    subgraph show-config.sh 订阅生成
+    subgraph show 子命令订阅生成
         D --> H{"ISP_TAG\n已激活?"}
         H -- "是 → good" --> I["NODE_SUFFIX += ✈ good\n+10分标签"]
         G -- "是 → super" --> J["NODE_SUFFIX += ✈ super\n+30分标签"]

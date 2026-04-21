@@ -25,9 +25,9 @@ _FAKE_ENV = {
     "PORT_TUIC": "4443",
     "PORT_ANYTLS": "5443",
     "PORT_XHTTP_H3": "6443",
-    "NODE_SUFFIX": "",
-    "FLAG_PREFIX": "🇯🇵",
-    "REGION_NAME": "Tokyo",
+    "NODE_SUFFIX": " ✈ isp",
+    "FLAG_PREFIX": "🇯🇵 ",
+    "NODE_NAME": "jp",
 }
 
 
@@ -106,3 +106,127 @@ def test_urlquote_noop_for_plain_string() -> None:
 
 def test_urlquote_escapes_special_chars() -> None:
     assert sub.urlquote("/foo bar") == "%2Ffoo%20bar"
+
+
+# ------------------------------------------------------------------
+# Regression: each link format from show-config.sh:generate_links
+# ------------------------------------------------------------------
+
+
+def test_hysteria2_has_obfs_salamander(env: None) -> None:
+    url = sub.build_hysteria2_link()
+    assert "obfs=salamander" in url
+    assert "obfs-password=abcdef12-3456-4789-0abc-def123456789" in url
+    assert url.endswith("#🇯🇵 Hysteria2 ✈ jp ✈ isp")
+
+
+def test_vmess_payload_has_ws_path_and_alpn(env: None) -> None:
+    url = sub.build_vmess_link()
+    payload = url[len("vmess://") :]
+    data = json.loads(base64.b64decode(payload + "==").decode("utf-8"))
+    assert data["net"] == "ws"
+    assert data["path"] == "/abcd1234-vmessws"
+    assert data["alpn"] == "http/1.1"
+    assert data["fp"] == "chrome"
+    assert data["scy"] == "auto"
+
+
+def test_vless_vision_reality_link(env: None) -> None:
+    url = sub.build_vless_vision_link()
+    assert url.startswith("vless://")
+    assert "flow=xtls-rprx-vision" in url
+    assert "security=reality" in url
+    assert "sni=www.apple.com" in url
+    assert "type=tcp" in url
+    assert url.endswith("#🇯🇵 XTLS-Reality ✈ jp ✈ isp")
+
+
+def test_xhttp_reality_main_has_mlkem(env: None) -> None:
+    url = sub.build_xhttp_reality_link(compat=False)
+    assert "encryption=mlkem768x25519plus.native.0rtt.mlkem-client-pubkey-placeholder" in url
+    assert "mode=auto" in url
+    assert "path=%2Fabcd1234-xhttp" in url
+    assert "-xhttp-compat" not in url
+
+
+def test_xhttp_reality_compat_uses_packet_up(env: None) -> None:
+    url = sub.build_xhttp_reality_link(compat=True)
+    assert "encryption=none" in url
+    assert "mode=packet-up" in url
+    assert "path=%2Fabcd1234-xhttp-compat" in url
+    assert "mlkem768" not in url
+
+
+def test_up_cdn_down_reality_main_carries_extra_json(env: None) -> None:
+    url = sub.build_up_cdn_down_reality_link(compat=False)
+    assert "extra=%7B%22downloadSettings%22%3A%7B" in url
+    assert "%22network%22%3A%22xhttp%22" in url
+    assert "%22security%22%3A%22reality%22" in url
+    assert "%22mode%22%3A%22auto%22" in url
+    assert "cdn.example.com" in url  # uplink host
+
+
+def test_up_cdn_down_reality_compat_mode_packet_up(env: None) -> None:
+    url = sub.build_up_cdn_down_reality_link(compat=True)
+    assert "encryption=none" in url
+    assert "%22mode%22%3A%22packet-up%22" in url
+    assert "xhttp-compat" in url
+
+
+def test_up_reality_down_cdn_main(env: None) -> None:
+    url = sub.build_up_reality_down_cdn_link(compat=False)
+    assert "security=reality" in url
+    assert "%22security%22%3A%22tls%22" in url  # extra=downloadSettings→TLS
+    assert "%22alpn%22%3A%5B%22h2%22%5D" in url
+
+
+def test_mix_main_includes_reality_keys(env: None) -> None:
+    url = sub.build_mix_link(compat=False)
+    assert "pbk=reality-pub-placeholder" in url
+    assert "sid=s1" in url
+    assert "alpn=h2" in url
+
+
+def test_mix_compat_omits_reality_keys(env: None) -> None:
+    url = sub.build_mix_link(compat=True)
+    assert "encryption=none" in url
+    # pure CDN inbound → no reality pbk/sid
+    assert "pbk=" not in url
+    assert "sid=" not in url
+
+
+def test_xhttp_h3_includes_extra_obfs(env: None) -> None:
+    url = sub.build_xhttp_h3_link()
+    assert "alpn=h3" in url
+    assert "port" in urllib.parse.urlparse(url).netloc or ":6443" in url
+    assert "%22noSSEHeader%22%3Atrue" in url
+    assert "%22xPaddingQueryParam%22%3A%22cf_ray_id%22" in url
+    assert "%22UplinkDataPlacement%22%3A%22auto%22" in url
+    assert "path=%2Fabcd1234-xhttp-h3" in url
+
+
+def test_v2rayn_subscription_includes_all_ten_lines(env: None) -> None:
+    sub_text = sub.build_v2rayn_subscription()
+    lines = sub_text.split("\n")
+    assert len(lines) == 10
+    # part1: hy2, tuic, anytls, vmess, vless-vision
+    assert lines[0].startswith("hysteria2://")
+    assert lines[1].startswith("tuic://")
+    assert lines[2].startswith("anytls://")
+    assert lines[3].startswith("vmess://")
+    assert lines[4].startswith("vless://") and "flow=xtls-rprx-vision" in lines[4]
+    # part2: xhttp-h3, xhttp-reality, up_cdn, up_reality, mix
+    assert "Xhttp-H3+BBR" in lines[5]
+    assert lines[6].startswith("vless://") and "Xhttp+Reality直连" in lines[6]
+
+
+def test_v2rayn_compat_subscription_has_nine_lines(env: None) -> None:
+    sub_text = sub.build_v2rayn_compat_subscription()
+    lines = sub_text.split("\n")
+    # part1 (5) + part2_compat (4) = 9
+    assert len(lines) == 9
+    # main-only H3 link must NOT be in compat track
+    assert not any("Xhttp-H3+BBR" in ln for ln in lines)
+    # compat variants must all use mode=packet-up or encryption=none
+    for ln in lines[5:]:
+        assert "encryption=none" in ln

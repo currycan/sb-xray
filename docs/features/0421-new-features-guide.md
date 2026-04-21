@@ -12,7 +12,7 @@
 2. [两轨订阅（v2rayn + v2rayn-compat，adv 轨已并入主轨）](#2-两轨订阅v2rayn--v2rayn-compatadv-轨已并入主轨)
 3. [VLESS Reverse Proxy 内网穿透](#3-vless-reverse-proxy-内网穿透)
 4. [Xray 原生 Hysteria2](#4-xray-原生-hysteria2)
-5. [XHTTP/3 + BBR 主轨入站（永久启用）](#5-xhttp3--bbr-主轨入站永久启用)
+5. [XHTTP/3 + BBR 主轨入站](#5-xhttp3--bbr-主轨入站)
 6. [XICMP 紧急通道](#6-xicmp-紧急通道)
 7. [XDNS 紧急通道](#7-xdns-紧急通道)
 8. [ECH 占位开关](#8-ech-占位开关)
@@ -177,9 +177,9 @@ docker exec sb-xray ls /sb-xray/sing-box/
 
 ---
 
-## 5. XHTTP/3 + BBR 主轨入站（永久启用）
+## 5. XHTTP/3 + BBR 主轨入站
 
-**做什么**：纯 UDP + HTTP/3 + BBR 拥塞控制的 XHTTP 入站（`templates/xray/02_xhttp_h3_inbounds.json`），**永久启用无开关**。与 `02_xhttp_inbounds.json`（TCP / 经 nginx / CDN 友好）**互补不替换**。模板内置 adv 字段（`xPaddingQueryParam` / `xPaddingPlacement` / `UplinkDataPlacement`）—— 因 H3 客户端必然 Xray-core 26.3.27+，直接上 adv，不分 h3-base / h3-adv 两份。
+**做什么**：纯 UDP + HTTP/3 + BBR 拥塞控制的 XHTTP 入站（`templates/xray/02_xhttp_h3_inbounds.json`）。与 `02_xhttp_inbounds.json`（TCP / 经 nginx / CDN 友好）**互补不替换**。模板内置 adv 字段（`xPaddingQueryParam` / `xPaddingPlacement` / `UplinkDataPlacement`）—— 因 H3 客户端必然 Xray-core 26.3.27+，直接上 adv，不分 h3-base / h3-adv 两份。
 
 对应节点 `Xhttp-H3+BBR` **进入 `v2rayn` 主轨**（排第一位，性能优先；客户端按实测 RTT 重排，显示序保留 H3 优先）。`v2rayn-compat` 不含 H3 节点（sing-box / mihomo 不支持 xhttp-h3 transport）。
 
@@ -194,7 +194,7 @@ docker exec sb-xray ls /sb-xray/sing-box/
 
 **不支持的客户端（走 compat 轨）**：**mihomo（OpenClash）和 sing-box（Karing）的 xhttp transport 是 TCP-only**，不支持 QUIC / H3。这类客户端继续走 `02_xhttp_compat_inbounds.json` 的 `v2rayn-compat` 订阅轨（`decryption: "none"` + TCP xhttp，不含任何 H3 节点）。
 
-**怎么开**：**无需任何操作**，升级到本 release 即永久启用。仅需确认宿主机防火墙放行 UDP `${PORT_XHTTP_H3:-4443}`：
+**怎么开**：**无需任何操作**，升级到本 release 即自动启用。仅需确认宿主机防火墙放行 UDP `${PORT_XHTTP_H3:-4443}`：
 
 ```bash
 # 宿主机放行 UDP 4443（host 网络模式下 docker-compose ports: 段被忽略，直接操作 iptables/nftables）

@@ -158,7 +158,7 @@ environment:
 | `PORT_HYSTERIA2` | `6443`（Dockerfile ENV 固定值） | Hysteria2 UDP 端口（Xray 承载） |
 | `PORT_TUIC` | `8443`（Dockerfile ENV 固定值） | TUIC UDP 端口（Sing-box 承载） |
 | `PORT_ANYTLS` | `4433`（Dockerfile ENV 固定值） | AnyTLS TCP 端口（Sing-box 承载） |
-| `PORT_XHTTP_H3` | `4443`（Dockerfile ENV 固定值） | XHTTP/3 UDP 端口（永久启用） |
+| `PORT_XHTTP_H3` | `4443`（Dockerfile ENV 固定值） | XHTTP/3 UDP 端口 |
 | `PORT_XICMP_ID` | `12345` | XICMP 紧急通道 ICMP id（默认关，见 `docs/07-new-features-guide.md §6`） |
 | `PORT_XDNS` | `5353` | XDNS 紧急通道 UDP 端口（默认关，见 `docs/07-new-features-guide.md §7`） |
 | `ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE` | `false` | 实验性 feature flag；开启条件与效果详见 [新特性使用指南](./07-new-features-guide.md) |
@@ -185,7 +185,7 @@ docker compose restart
 | 变量 | 含义 |
 |:---|:---|
 | `ISP_TAG` | 最快 ISP 代理 tag（测速选路结果）；`direct` 表示无代理回退直连。用于 IS_8K_SMOOTH 计算和节点标签生成 |
-| `IS_8K_SMOOTH` | `true`/`false`，实际出口速度是否 ≥ 100 Mbps；驱动 show-config.sh 生成 `✈ good`（代理出口）或 `✈ super`（住宅直出）节点标签 |
+| `IS_8K_SMOOTH` | `true`/`false`，实际出口速度是否 ≥ 100 Mbps；驱动 `show` 子命令生成 `✈ good`（代理出口）或 `✈ super`（住宅直出）节点标签 |
 | `HAS_ISP_NODES` | `true`/空，标识是否存在可用 ISP 节点。有节点时路由函数返回 `isp-auto`（健康选优），无节点返回 `direct` |
 | `CHATGPT_OUT` | ChatGPT 出口策略 tag |
 | `NETFLIX_OUT` | Netflix 出口策略 tag |
@@ -473,7 +473,7 @@ docker exec sb-xray supervisorctl restart sing-box
 docker exec sb-xray supervisorctl restart nginx
 
 # 查看实时配置
-docker exec sb-xray /scripts/show-config.sh
+docker exec sb-xray show
 
 # 进入容器终端
 docker exec -it sb-xray bash

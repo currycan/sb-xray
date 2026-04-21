@@ -18,7 +18,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Entrypoint Python 重写 · Phase 3 路由决策**:迁移 entrypoint.sh §10-11。新增 `sb_xray.routing.isp`(`RoutingContext` / `IspDecision` 不可变数据类、`process_single_isp` 生成 Xray+Sing-box socks 出站 JSON、`build_sb_urltest` Sing-box urltest 按速度降序、`build_xray_balancer` observatory+balancer JSON 片段、`build_xray_service_rules` geosite 规则带 marktag/balancerTag/outboundTag、`apply_isp_routing_logic` 综合选路纯函数含 DEFAULT_ISP 锁定 + 受限地区 + 非住宅 IP + IS_8K_SMOOTH 阈值 100 Mbps)、`sb_xray.routing.media`(8 个 `check_*` 函数 Netflix/Disney/YouTube/Social/TikTok/ChatGPT/Claude/Gemini,表驱动 restricted-region 短路 + probe + trace_url Claude 重定向识别 + GEMINI_DIRECT 覆盖,`check_all` 聚合成 `{NETFLIX_OUT/…/GEMINI_OUT}` 8 键映射)。新增 41 条 pytest 单测(含 6 分支路由 + 3 分支 IS_8K_SMOOTH + 8 个媒体 restricted/hosting/residential 全路径)。累计 147 条 pytest 全绿。
 - **Entrypoint Python 重写 · Phase 4 证书 + 订阅 + 展示**:迁移 entrypoint.sh §12/§14 + 整个 `show-config.sh`。新增 `sb_xray.cert.ensure_certificate`(subprocess 包装 openssl 7 天有效期阈值判断 + acme.sh 注册/签发/安装,Google CA EAB 校验);`sb_xray.secrets.decrypt_remote_secrets`(httpx 下载 + crypctl `--key-env DECODE`);`sb_xray.subscription`(10+ 协议 URL 构造器 Hy2/TUIC/AnyTLS/VMess/XHTTP-H3 + `write_subscriptions` 产出 `v2rayn` / `v2rayn-compat` 两轨 base64 文件,compat 轨自动剔除 mlkem768);`sb_xray.display`(`get_flag_emoji` 19 地区查表、`tls_ping_diagnose` xray 子进程、`show_qrcode` qrencode 子进程、`show_info_links` stdout 订阅页)。`scripts/entrypoint.py` 升级为 argparse subparsers(`run` / `show`),新增 `scripts/show` 1 行 shim `exec python3 /scripts/entrypoint.py show "$@"` 替代 `show-config.sh` 作为 `/usr/local/bin/show` 软链目标。新增 35 条 pytest 单测(累计 182),cert/secrets/subscription/display 全覆盖。
 - **Entrypoint Python 重写 · Phase 5 切换 Dockerfile ENTRYPOINT**:Dockerfile L417 `ENTRYPOINT` 从 `/scripts/entrypoint.sh` 切换为 `python3 /scripts/entrypoint.py run`(保留 `dumb-init` PID 1);`/usr/local/bin/show` 运行时软链目标从 `show-config.sh` 改为 `/scripts/show` Python shim,`docker exec sb-xray show` 走 Python 路径。entrypoint.sh 本身仍保留供 Python 内部 subprocess 调用处理未迁移的配置渲染片段,Phase 6 会彻底移除。冷启动链路:dumb-init → python3 entrypoint.py run → subprocess bash entrypoint.sh → exec supervisord。生产 VPS(jp.ansandy.com)灰度观察 72 小时后进入 Phase 6。
-- **Entrypoint Python 重写 · Phase 6 收尾清理 (a)**:删除 `scripts/test_entrypoint.sh`(426 行,由 pytest 套件完全替代,182 条测试覆盖所有原 T1-T11 分支);更新 `.dockerignore` 去除已删除文件、补 `tests/` 排除入镜像;更新 `readme.md` 文件树把 `test_entrypoint.sh` 改为 `scripts/show` shim 说明。**`scripts/entrypoint.sh` 与 `scripts/show-config.sh` 暂保留**,等生产 VPS(jp.ansandy.com)72 小时灰度无回滚需求后由后续 commit 彻底删除;届时 `test_smoke.sh` 里的 M1-M4 规约 grep 目标同步切换到 `scripts/sb_xray/*.py`。
+- **Entrypoint Python 重写 · Phase 6 收尾清理 (a)**:删除 `scripts/test_entrypoint.sh`(426 行,由 pytest 套件完全替代,182 条测试覆盖所有原 T1-T11 分支);更新 `.dockerignore` 去除已删除文件、补 `tests/` 排除入镜像;更新 `readme.md` 文件树把 `test_entrypoint.sh` 改为 `scripts/show` shim 说明。
+- **Entrypoint Python 重写 · Phase 6 收尾清理 (b) + Phase 7 orchestration wiring**:(1) 正式删除 `scripts/show-config.sh`(267 行)—— 由 `scripts/show` shim + Python `scripts/entrypoint.py show` 子命令完全替代,覆盖率 ~98% 含字节对齐的 10+4 协议订阅 URL、`FLAG_PREFIX`/`NODE_SUFFIX` 派生、ANSI 彩色 banner + 去色归档;(2) 删除 `scripts/stop-supervisor.sh`(19 行死代码,仅被 supervisord.conf 注释块 `[eventlistener:exit]` 引用,本轮一并清理该注释块);(3) 新模块 `sb_xray.routing.providers.generate_and_export`(`generateProxyProvidersConfig` port,导出 `CLASH_PROXY_PROVIDERS` / `SURGE_PROXY_PROVIDERS` / `SURGE_PROVIDER_NAMES` / `STASH_PROVIDER_NAMES` 四个 env);(4) 新模块 `sb_xray.config_builder.create_config`(`createConfig` orchestrator,含 13 个 Xray/Sing-box JSON 模板 envsubst 渲染 + 孤儿 JSON 清理 + `ENABLE_XICMP`/`ENABLE_XDNS` feature-flag 过滤 + `ENABLE_REVERSE` VLESS Reverse-Proxy client/route JSON 注入);(5) 新模块 `sb_xray.node_meta.derive_and_export`(`NODE_SUFFIX` 派生 4 条规则:`dmit|dc|jp` 前缀 → ✈ 高速、`ISP_TAG!=direct + IS_8K_SMOOTH=true` → ✈ good、`IP_TYPE=isp + IS_8K_SMOOTH=true` → ✈ super、`IP_TYPE` 自身后缀);(6) `entrypoint.py` 新增 `--python-stage {probe,cert,providers,config,media}` 接线开关,opt-in 逐阶段灰度;`probe_base_env` 从 3 vars 扩到 **16 vars**(XUI_LOCAL_PORT / DUFS_PORT / PASSWORD / XRAY_UUID / XRAY_REVERSE_UUID / SB_UUID / XRAY_REALITY_SHORTID_{,2,3} / XRAY_URL_PATH / SUBSCRIBE_TOKEN / STRATEGY / GEOIP_INFO / IS_BRUTAL / SUB_STORE_FRONTEND_BACKEND_PATH / IP_TYPE);新增 `issue_bundle_certificate` / `run_media_probes` 入口。
+
+### Fixed(修复)
+
+- **acme.sh `integer expected` 警告消除**:Dockerfile `LOG_LEVEL="warning"`(给 xray/sing-box 使用的字符串日志级别)与 acme.sh 内部数值 `LOG_LEVEL`(1/2/3)命名冲突,触发 `[ "${LOG_LEVEL:-$DEFAULT_LOG_LEVEL}" -ge "$LOG_LEVEL_1" ]` 的整数比较告警(L347/381/414)。`scripts/entrypoint.sh:issueCertificate` 所有 4 处 `acme.sh` 调用改用 `env -u LOG_LEVEL acme.sh` 包装;`scripts/sb_xray/cert.py` 新增 `_acme_env()` helper 剥离该 env,所有 `subprocess.run(["acme.sh", ...])` 传 `env=_acme_env()`。
+- **nginx 证书安装前清目录 + 关旧 nginx + 清 PID**:`cert.py:ensure_certificate` 在 `acme.sh --install-cert` 前后补齐 bash 原副作用—— 清空 `/etc/nginx/conf.d/*` 与 `/etc/nginx/stream.d/*`(避免 acme 的 `--reloadcmd` 启动 nginx 时加载残留 orphan upstream)、`--install-cert` 之后 `nginx -s quit` + `rm -f /var/run/nginx/nginx.pid`(让 supervisord 后续能 fork 干净 nginx)。
+- **nginx catch-all 的 IPv6 噪声消除**:容器默认 docker-bridge 无 IPv6 出口,`location / { proxy_pass https://${DEST_HOST}; }` 被扫描器命中时,DNS 解析到 Cloudflare IPv6 `[2606:4700:…]` 会 `ENETUNREACH` 产生 "Network unreachable" 噪声。`templates/nginx/http.conf` 在 server 块加 `resolver 127.0.0.11 8.8.8.8 1.1.1.1 ipv6=off valid=300s` + `resolver_timeout 5s`,强制仅选 A 记录。
+- **`bootstrap()` / `main()` summary box `N/A` 修复**:`scripts/entrypoint.py:bootstrap` 现在把 env_file 路径写回 `os.environ["ENV_FILE"]`(bash `source` 自带此语义,Python 之前缺),`main()` 启动期与 `run_show_pipeline` 都额外 source `STATUS_FILE` + `SECRET_FILE`,恢复 `ISP_TAG` / `IS_8K_SMOOTH` / 远端密钥对下游的可见性,同时修 `NODE_SUFFIX` 缺 ✈ super/good 标签。
+- **`show_qrcode` 参数对齐 Bash**:`scripts/sb_xray/display.py:show_qrcode` 补齐 `-v 10 -d 300 -k 2` + `-f 0 -b 255`,与 show-config.sh L111 字节一致(死代码补齐,Bash 本身也未调用该函数)。
+
+### Changed(变更)
+
+- `scripts/entrypoint.py:bootstrap()` 把 `ENV_FILE` 路径写回 `os.environ`;`main()` 启动期 source STATUS_FILE + SECRET_FILE(对齐 Bash `main_init` L1351-1352)。
+- `scripts/test_smoke.sh` 3 处 grep 目标从 `show-config.sh` 迁移到 Python 模块:M1-7 `tls_ping_diagnose` → `scripts/sb_xray/display.py`;M2-Adv-Retired 和 M4-订阅 XHTTP-H3 → `scripts/sb_xray/subscription.py`。smoke 基线 54 → 52(对应移除 adv/show-config.sh 目标的 grep;0 失败)。
+- `scripts/entrypoint.sh` 3 处注释里的 `show-config.sh` 改为 `show 子命令`。
+- `readme.md` / `docs/02` / `docs/03` / `docs/04` 用户文档 `docker exec sb-xray /scripts/show-config.sh` 全部改为 `docker exec sb-xray show`;相应 mermaid 子图标签、IS_8K_SMOOTH/协议命名注释同步更新。
+
+### Removed(移除)
+
+- 删除 `scripts/show-config.sh`(267 行 Bash)。
+- 删除 `scripts/stop-supervisor.sh`(19 行 Bash,死代码)。
+- 删除 `templates/supervisord/supervisord.conf` 的 `[eventlistener:exit]` 注释块(6 行,引用被删脚本)。
+
+### Tests(测试)
+
+- pytest 从 183 条扩到 **240 条**(新增覆盖 providers 10 条、config_builder 14 条、node_meta 7 条、show 子命令 pipeline 2 条、cert env/purge/quit 3 条、entrypoint.py --python-stage cert/media/providers/config 4 条、STATUS_FILE 加载回归 1 条、QR 参数 - skip、show-config STATUS_FILE 回归 1 条等)。
+- `SKIP_COMPOSE=1 bash scripts/test_smoke.sh` → 52/0。
 
 ---
 

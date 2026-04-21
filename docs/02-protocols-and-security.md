@@ -30,7 +30,7 @@
 5. **UDP 备选** — TUIC（⭐⭐⭐）
 6. **TCP 伪装** — AnyTLS（⭐⭐⭐）
 
-> 协议命名与订阅节点名（`show-config.sh` 输出）**完全一致**，便于你在客户端界面里对号入座。
+> 协议命名与订阅节点名（`show` 子命令输出）**完全一致**，便于你在客户端界面里对号入座。
 
 ### 1.0 协议总览
 
@@ -183,7 +183,7 @@ graph LR
 
 #### 服务端入站
 
-* **配置文件**: `templates/xray/04_hy2_inbounds.json`（2026-04 起从 sing-box 迁至 Xray 原生入站，永久无开关；客户端订阅 URL 参数完全等价，无感迁移）
+* **配置文件**: `templates/xray/04_hy2_inbounds.json`（2026-04 起从 sing-box 迁至 Xray 原生入站；客户端订阅 URL 参数完全等价，无感迁移）
 * **监听地址**: `::` (All Interfaces)，端口 6443（Dockerfile ENV 固定值）
 * **路径**: **直连**（不经过 Nginx；由 Xray 直接承载 QUIC/UDP）
 * **Salamander 混淆**: 服务端和客户端使用同一 `SB_UUID` 作为混淆密码
@@ -218,7 +218,7 @@ graph LR
 
 > 订阅节点名：`Xhttp-H3+BBR`
 
-**Xray 原生 xhttp-over-HTTP/3** 直连入站，UDP 内核直听 `PORT_XHTTP_H3`（默认 4443），**完全绕过 Nginx**。2026-04 永久启用，无开关。
+**Xray 原生 xhttp-over-HTTP/3** 直连入站，UDP 内核直听 `PORT_XHTTP_H3`（默认 4443），**完全绕过 Nginx**。
 
 * **定位**: UDP 极速，单 RTT + 0-RTT，主轨 v2rayn 首节点
 * **订阅轨**: **仅 `v2rayn` 主轨**（compat 轨不含）
@@ -246,7 +246,7 @@ graph LR
   ```
   vless://${XRAY_UUID}@${DOMAIN}:${PORT_XHTTP_H3}?encryption=mlkem768x25519plus.native.0rtt.${XRAY_MLKEM768_CLIENT}&security=tls&sni=${DOMAIN}&alpn=h3&fp=chrome&type=xhttp&path=/${XRAY_URL_PATH}-xhttp-h3&mode=auto#🇺🇸 Xhttp-H3+BBR ✈ ${NODE_NAME}${NODE_SUFFIX}
   ```
-* **服务端入站**: `templates/xray/02_xhttp_h3_inbounds.json`（永久启用）
+* **服务端入站**: `templates/xray/02_xhttp_h3_inbounds.json`
 
 ---
 

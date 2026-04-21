@@ -211,7 +211,7 @@ else
     bad "M1-6: webhook 规则数不足 4"
 fi
 
-if grep -q 'tls_ping_diagnose' "${REPO_ROOT}/scripts/show-config.sh"; then
+if grep -q 'tls_ping_diagnose' "${REPO_ROOT}/scripts/sb_xray/display.py"; then
     ok "M1-7: tls ping 诊断命令已集成"
 else
     bad "M1-7: tls ping 诊断命令未集成"
@@ -243,11 +243,11 @@ fi
 
 # M2-Adv-Retired 反向校验：adv 轨已并入主轨（2026-04）
 if [ ! -f "${REPO_ROOT}/templates/xray/02_xhttp_adv_inbounds.json" ] \
- && ! grep -q 'V2RAYN_ADV_SUBSCRIBE\|link_xhttp_reality_adv' "${REPO_ROOT}/scripts/show-config.sh" \
+ && ! grep -q 'v2rayn_adv\|xhttp_reality_adv' "${REPO_ROOT}/scripts/sb_xray/subscription.py" \
  && ! grep -q 'xhttp-adv' "${REPO_ROOT}/templates/nginx/http.conf"; then
-    ok "M2-Adv-Retired: v2rayn-adv 三轨已退役，并入主轨（模板/nginx/show-config 三处清理完成）"
+    ok "M2-Adv-Retired: v2rayn-adv 三轨已退役，并入主轨（模板/nginx/subscription.py 三处清理完成）"
 else
-    bad "M2-Adv-Retired: adv 残留（模板/nginx/show-config 未彻底清理）"
+    bad "M2-Adv-Retired: adv 残留（模板/nginx/subscription.py 未彻底清理）"
 fi
 
 # ---- M3 规约 -----------------------------------------------------------------
@@ -341,11 +341,11 @@ else
 fi
 
 # M4-订阅：XHTTP-H3 进入 v2rayn 主轨 + v2rayn-adv 订阅（无条件）
-if grep -q 'link_xhttp_h3=' "${REPO_ROOT}/scripts/show-config.sh" \
-   && ! grep -q 'link_xhttp_h3_adv' "${REPO_ROOT}/scripts/show-config.sh"; then
-    ok "M4-订阅: show-config.sh XHTTP-H3 已进 v2rayn 主轨（无 adv-only 条件）"
+if grep -q 'build_xhttp_h3_link' "${REPO_ROOT}/scripts/sb_xray/subscription.py" \
+   && ! grep -q 'xhttp_h3_adv\|XHTTP_H3_ADV' "${REPO_ROOT}/scripts/sb_xray/subscription.py"; then
+    ok "M4-订阅: subscription.py XHTTP-H3 已进 v2rayn 主轨（无 adv-only 条件）"
 else
-    bad "M4-订阅: show-config.sh 的 XHTTP-H3 未移出 adv-only 条件或未进主轨"
+    bad "M4-订阅: subscription.py 的 XHTTP-H3 未移出 adv-only 条件或未进主轨"
 fi
 
 # ---- 容器运行时检查（可选）-------------------------------------------------

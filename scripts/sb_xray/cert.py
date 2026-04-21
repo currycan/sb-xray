@@ -59,6 +59,20 @@ def _cert_is_valid(cert_path: Path) -> bool:
     return result.returncode == 0
 
 
+def _acme_env() -> dict[str, str]:
+    """Return env with ``LOG_LEVEL`` stripped.
+
+    Dockerfile sets ``LOG_LEVEL=warning`` for xray/sing-box (string).
+    acme.sh's internal ``LOG_LEVEL`` is numeric (1/2/3) and ends up in
+    ``[ "$LOG_LEVEL" -ge "$LOG_LEVEL_1" ]`` — the string collision triggers
+    ``integer expected`` warnings (L347/381/414 of acme.sh). Dropping the
+    var in the subprocess env lets acme.sh fall back to its numeric default.
+    """
+    env = os.environ.copy()
+    env.pop("LOG_LEVEL", None)
+    return env
+
+
 def _parse_params(params: str) -> list[tuple[str, str]]:
     """Translate ``"d1:p1|d2:p2"`` → ``[("d1","p1"), ("d2","p2")]``."""
     entries: list[tuple[str, str]] = []
@@ -97,11 +111,17 @@ def _register_account() -> None:
             "--eab-hmac-key",
             os.environ["ACMESH_EAB_HMAC_KEY"],
         ]
-    subprocess.run(args, check=False)
+    subprocess.run(args, check=False, env=_acme_env())
 
 
 def _acme_already_has(first_domain: str) -> bool:
-    result = subprocess.run(["acme.sh", "--list"], check=False, capture_output=True, text=True)
+    result = subprocess.run(
+        ["acme.sh", "--list"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=_acme_env(),
+    )
     return first_domain in (result.stdout or "")
 
 
@@ -140,9 +160,23 @@ def ensure_certificate(
 
     if not _acme_already_has(first_domain):
         _register_account()
-        subprocess.run(["acme.sh", *_build_issue_args(params, server)], check=False)
+        subprocess.run(
+            ["acme.sh", *_build_issue_args(params, server)],
+            check=False,
+            env=_acme_env(),
+        )
 
     ssl_path.mkdir(parents=True, exist_ok=True)
+    # 证书安装前清空 nginx 动态配置目录 (entrypoint.sh:899 等价)。
+    # acme.sh --install-cert 会用 --reloadcmd /usr/sbin/nginx 启动 nginx；
+    # 若上一轮残留的 conf.d/ 或 stream.d/ 里有过期 upstream 引用，nginx 会
+    # 加载失败或拉起 orphan worker。createConfig 阶段稍后会重新渲染模板。
+    for d in (Path("/etc/nginx/conf.d"), Path("/etc/nginx/stream.d")):
+        if d.is_dir():
+            for item in d.iterdir():
+                if item.is_file():
+                    item.unlink()
+
     subprocess.run(
         [
             "acme.sh",
@@ -160,5 +194,18 @@ def ensure_certificate(
             "/usr/sbin/nginx",
         ],
         check=False,
+        env=_acme_env(),
     )
+    # acme.sh --reloadcmd 拉起了一个独立的 nginx 进程，但服务生命周期实际由
+    # supervisord 管理。优雅关闭它并清掉 PID 文件，后续 supervisord 才能干净
+    # fork 自己的 nginx（entrypoint.sh:903 等价）。
+    _quit_rc = subprocess.run(
+        ["/usr/sbin/nginx", "-s", "quit"],
+        check=False,
+        capture_output=True,
+    ).returncode
+    if _quit_rc == 0:
+        pid_file = Path("/var/run/nginx/nginx.pid")
+        if pid_file.is_file():
+            pid_file.unlink()
     return CertStatus.INSTALLED

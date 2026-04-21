@@ -85,6 +85,40 @@ def test_show_info_links_prints_banner(
     monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
     monkeypatch.setenv("DOMAIN", "vpn.example.com")
     monkeypatch.delenv("DEBUG", raising=False)
+    monkeypatch.delenv("SUBSCRIBE_TOKEN", raising=False)
     display.show_info_links()
     out = capsys.readouterr().out
     assert "cdn.example.com" in out
+    assert "📋 Index" in out
+    assert "🚀 V2rayN 订阅" in out
+    assert "🔓 V2rayN-Compat 订阅" in out
+    assert "https://cdn.example.com/sb-xray/v2rayn" in out
+    assert "https://cdn.example.com/sb-xray/v2rayn-compat" in out
+
+
+def test_show_info_links_token_block_only_when_token_set(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.setenv("SUBSCRIBE_TOKEN", "secret-token")
+    monkeypatch.setenv("PUBLIC_USER", "admin")
+    monkeypatch.setenv("PUBLIC_PASSWORD", "s3cret")
+    display.show_info_links()
+    out = capsys.readouterr().out
+    assert "?token=secret-token" in out
+    assert "Basic Auth: admin / s3cret" in out
+
+
+def test_show_info_links_writes_ansi_stripped_archive(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    archive = tmp_path / "subscribe" / "show-config"
+    display.show_info_links(archive_path=archive)
+    assert archive.is_file()
+    content = archive.read_text(encoding="utf-8")
+    assert "\x1b[" not in content
+    assert "📋 Index" in content
+    assert "cdn.example.com" in content
