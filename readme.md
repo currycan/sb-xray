@@ -287,7 +287,7 @@ sb-xray/
 │   ├── geo_update.sh         # GeoIP/GeoSite 数据更新
 │   ├── check_ip_type.sh      # IP 类型检测
 │   ├── stop-supervisor.sh    # Supervisor 停止脚本
-│   └── test_entrypoint.sh    # 入口脚本测试
+│   └── show                  # Python `entrypoint.py show` 子命令 shim
 ├── templates/
 │   ├── xray/                 # Xray 入站/出站/路由 JSON 模板
 │   ├── sing-box/             # Sing-box 入站/出站/路由 JSON 模板
