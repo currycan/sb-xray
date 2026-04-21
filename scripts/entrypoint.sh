@@ -1424,7 +1424,7 @@ main_init() {
     echo "0 3 * * * /scripts/geo_update.sh >> /var/log/geo_update.log 2>&1" >> "$cron_file"
     chmod 0600 "$cron_file"
 
-    [[ ! -f "/usr/local/bin/show" ]] && ln -sf "/scripts/show-config.sh" "/usr/local/bin/show"
+    [[ ! -f "/usr/local/bin/show" ]] && ln -sf "/scripts/show" "/usr/local/bin/show"
 
     log INFO "── 配置总览 ──"
     /usr/local/bin/show

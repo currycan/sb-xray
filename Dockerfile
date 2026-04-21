@@ -413,6 +413,7 @@ VOLUME ${DUFS_SERVE_PATH} ${WORKDIR} ${SUB_STORE_DATA_BASE_PATH} ${LOGDIR} /etc/
 
 STOPSIGNAL SIGTERM
 
-# ENTRYPOINT [ "/scripts/entrypoint.sh" ]
-ENTRYPOINT ["/usr/bin/dumb-init", "--", "/scripts/entrypoint.sh"]
+# Python entrypoint (Phase 5 switch). Legacy /scripts/entrypoint.sh
+# is still invoked internally for un-migrated config-render stages.
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]
 CMD  [ "supervisord" ]
