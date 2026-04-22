@@ -184,7 +184,7 @@ supervisor dumb-init fail2ban acme.sh
 
 | 配置项 | 值 | 说明 |
 |:---|:---|:---|
-| `ENTRYPOINT` | `dumb-init -- python3 /scripts/entrypoint.py run` | dumb-init 作为 PID 1，Python `entrypoint.py` 提供 `run` / `show` / `trim` 三个子命令；`run` 用纯 Python 一次性跑完 15 段初始化流水线（探测 → 选路 → 证书 → 模板渲染 → 面板初始化 → cron → `os.execvp` supervisord），自 Phase 8 起无任何 bash 回落 |
+| `ENTRYPOINT` | `dumb-init -- python3 /scripts/entrypoint.py run` | dumb-init 作为 PID 1，Python `entrypoint.py` 提供 `run` / `show` / `trim` 三个子命令；`run` 用纯 Python 一次性跑完 15 段初始化流水线（探测 → 选路 → 证书 → 模板渲染 → 面板初始化 → cron → `os.execvp` supervisord） |
 | `CMD` | `supervisord` | Supervisor 管理所有子进程 |
 | `HEALTHCHECK` | `supervisorctl status xray` | 每 30 秒检查 Xray 存活 |
 | `EXPOSE` | `80 443` | 默认暴露端口 |

@@ -290,7 +290,37 @@ graph LR
 
 ## 5. Entrypoint 守护进程生命周期
 
-容器在每次启动（或执行 `docker compose restart`）时，由 `scripts/entrypoint.py`（Python PID 1，argparse 子命令 `run` / `show` / `trim`，Docker `ENTRYPOINT ["dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]`）**一次性编排 15 段 Python 启动流水线**：加载 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` → 基础 env 探测 (`sb_xray.network`) → ISP 测速选路 (`sb_xray.speed_test.run_isp_speed_tests`) → 流媒体/AI 可达性探针 (`sb_xray.routing.media.check_all`) + 密钥对 (`sb_xray.stages.keys`) → 出站 JSON 装配 (`sb_xray.routing.isp.build_client_and_server_configs`) → TLS 证书 (`sb_xray.cert`) → DH 参数 (`sb_xray.stages.dhparam`) → GeoIP 更新 (`sb_xray.stages.geoip`) → 渲染模板 (`sb_xray.config_builder.create_config` + `sb_xray.routing.providers`) → `trim_runtime_configs` 按 `ENABLE_*` 开关对已渲染 `daemon.ini` 做幂等 in-place 过滤 → X-UI / S-UI 初始化 (`sb_xray.stages.panels`) → Nginx htpasswd (`sb_xray.stages.nginx_auth`) → Cron 安装 (`sb_xray.stages.cron`) → 订阅链接 banner → `os.execvp` 接管 supervisord (`sb_xray.stages.supervisord`)。每一个阶段都可以通过 `--skip-stage <name>` 单独跳过用于诊断。Bash 入口 `entrypoint.sh` 已于 Phase 8 彻底退役。
+容器启动或 `docker compose restart` 时，Python 脚本 `scripts/entrypoint.py` 作为 PID 1（由 `dumb-init` 包裹）按固定顺序跑完启动流水线，最后用 `os.execvp` 把进程交给 `supervisord`，由后者守护 xray / sing-box / nginx 等所有常驻服务。
+
+Entrypoint 有三个子命令:
+
+| 子命令 | 用途 |
+|---|---|
+| `run`（默认） | 容器启动时执行完整流水线,最终接管 supervisord |
+| `show` | 打印订阅链接 banner + TLS 诊断,不改任何文件 |
+| `trim` | 按 `ENABLE_*` 开关对已渲染的 `daemon.ini` 做幂等过滤 |
+
+流水线分 15 段,每段一个明确目标,可通过 `--skip-stage <name>` 单独跳过用于排障:
+
+| # | 阶段 | 作用 |
+|---:|:---|:---|
+| 1 | 加载环境 | 读取 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` 到 `os.environ` |
+| 2 | 基础网络探测 | 检测 IPv4/IPv6、GeoIP、IP_TYPE、受限地区标志 |
+| 3 | ISP 测速选路 | 逐个 ISP 节点带宽实测,按 Mbps 排序写入 `_ISP_SPEEDS_JSON` |
+| 4 | 流媒体/AI 可达性探针 | 试探 Netflix / OpenAI / Claude / Gemini 等服务的直连状态 |
+| 5 | 密钥对生成 | VLESS UUID、Reality / MLKEM768 密钥、订阅 Token 首次生成并持久化 |
+| 6 | 出站 JSON 装配 | 把 ISP 节点渲染成 xray / sing-box 的 SOCKS5 出站,生成 `isp-auto` balancer |
+| 7 | TLS 证书 | 调 `acme.sh` 申请 / 续签通配证书(Let's Encrypt / ZeroSSL / Google) |
+| 8 | DH 参数 | 生成或复用 Nginx `dhparam.pem`(首次 ~30s,其后秒级) |
+| 9 | GeoIP / GeoSite | 按 TTL 更新 `/geo` 下的规则库,dual-symlink 到 xray + sing-box 工作目录 |
+| 10 | 模板渲染 | 把 `templates/` 下的 xray / sing-box / nginx / supervisord 模板 envsubst 到 `${WORKDIR}` |
+| 11 | 程序裁剪 | 按 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤(小内存节点降载) |
+| 12 | X-UI / S-UI | 面板数据库初始化,仅在对应 `ENABLE_*` 为 true 时执行 |
+| 13 | Nginx htpasswd | 写订阅端点的 HTTP Basic Auth 凭据 |
+| 14 | Cron 安装 | 注册 `geo-update`(每日 03:00) + `isp-retest`(每 `ISP_RETEST_INTERVAL_HOURS`) |
+| 15 | Supervisord 接管 | `os.execvp("supervisord", ...)` — Python 进程退出,supervisord 继续守护 |
+
+流水线结束后,所有 daemon 由 supervisord 管理,重启策略、日志重定向、退出码处理都在 `daemon.ini` 中声明。
 
 ### 5.1 整体生命周期流转图
 
@@ -465,51 +495,30 @@ flowchart TD
 
 > **全程透明**：所有的解锁动作在服务器端默默完成，客户端无需任何繁琐的前置 (Dialer) 设置。
 
-### 6.3 ISP 健康检测方案演进
+### 6.3 ISP 健康检测工作机制
 
-#### 旧方案（启动时选优，无运行时检测）
-
-```mermaid
-flowchart LR
-    classDef old fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
-    classDef bad fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
-
-    Boot["容器启动\n逐节点测速\n5 次采样+容差带"] --> Best["选出最快 ISP\nFASTEST_PROXY_TAG"]:::old
-    Best --> Single["仅注入该节点\n为 Xray/Sing-box\n唯一 ISP 出站"]:::old
-    Single --> Route["所有服务路由\n指向该固定 tag"]:::old
-    Route --> Problem["ISP 挂了 → 流量黑洞\n无检测、无回退"]:::bad
-```
-
-| 特性 | 旧方案 |
-|:---|:---|
-| 出站节点数 | 仅注入 1 个（最快 ISP） |
-| 运行时检测 | **无** |
-| ISP 故障时 | **流量黑洞**（ChatGPT/Netflix 等全部不可用） |
-| 测速采样 | 5 次截断均值 + 15% 容差带 |
-| 路由指向 | 静态 `outboundTag: "proxy-xx-isp"` |
-
-#### 新方案（全量注入 + 运行时健康检测 + 自动回退）
+容器启动时对每个 ISP 节点做一次带宽实测,把所有节点按速度降序全部注入 xray / sing-box 的出站列表,并生成一个 `isp-auto` 健康选优出站。服务路由(Netflix / OpenAI / Disney 等)指向 `isp-auto`,由内核在运行时持续探测、自动选最低延迟节点、ISP 故障时按策略回退。
 
 ```mermaid
 flowchart LR
-    classDef new fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#333
+    classDef step fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#333
     classDef good fill:#74b9ff,stroke:#0984e3,stroke-width:2px,color:#fff
 
-    Boot["容器启动\n逐节点测速\n2 次采样排序"] --> All["注入全部 ISP 节点\n按速度降序排列"]:::new
-    All --> URLTest["Sing-box: urltest\nXray: observatory\n+ balancer"]:::good
-    URLTest --> Auto["isp-auto 出站\n每 1 分钟探测\n自动选最低延迟"]:::good
+    Boot["容器启动<br/>逐节点带宽实测<br/>按速度排序"]:::step --> All["注入全部 ISP 节点<br/>生成 isp-auto 健康选优出站"]:::step
+    All --> URLTest["sing-box: urltest<br/>xray: observatory + balancer"]:::good
+    URLTest --> Auto["每 ISP_PROBE_INTERVAL<br/>HTTP 探测<br/>最低延迟节点胜出"]:::good
     Auto --> OK{"ISP 存活?"}
-    OK -- "是" --> Best["走最优 ISP"]:::new
-    OK -- "否" --> Direct["自动回退 direct"]:::new
+    OK -- "是" --> Best["走当前最优 ISP"]:::step
+    OK -- "否" --> Direct["按 ISP_FALLBACK_STRATEGY 回退<br/>(direct / block)"]:::step
 ```
 
-| 特性 | 新方案 |
+| 特性 | 说明 |
 |:---|:---|
-| 出站节点数 | **注入全部 ISP**（按速度排序） |
-| 运行时检测 | Sing-box `urltest` / Xray `observatory` 每 1 分钟探测 |
-| ISP 故障时 | **自动回退 direct**（Sing-box urltest 含 direct；Xray balancer `fallbackTag: "direct"`） |
-| 测速采样 | 2 次（仅用于初始排序，运行时由内核选优） |
-| 路由指向 | Sing-box: `outbound: "isp-auto"`；Xray: 动态生成 `balancerTag` / `outboundTag` |
+| 出站节点数 | 全部 ISP 节点（按速度降序排列） |
+| 运行时检测 | sing-box `urltest` / xray `observatory` 按 `ISP_PROBE_INTERVAL`（默认 1m）持续探测 |
+| ISP 故障回退 | sing-box urltest 的 `outbounds` 末尾追加 fallback tag；xray balancer `fallbackTag` 同源 |
+| 周期性重测 | cron 每 `ISP_RETEST_INTERVAL_HOURS`（默认 6h）重跑带宽测试,仅组成/排序变化时重启 daemon |
+| 路由指向 | sing-box: `outbound: "isp-auto"`；xray: 动态生成 `balancerTag` / `outboundTag` |
 
 #### 双内核健康检测机制对比
 
@@ -538,7 +547,7 @@ flowchart LR
 
 ### 6.4 完整运行时闭环
 
-Phase 1–5 优化后，`isp-auto` 形成一个「冷启动缓存 → 速度测量 → 配置渲染 → 内核健康选优 → 周期重测」的闭环，操作员通过 12 个 env flag 控制节奏、可观测性与失败语义。
+`isp-auto` 是一个「冷启动缓存 → 速度测量 → 配置渲染 → 内核健康选优 → 周期重测」的完整闭环,操作员通过约十二个 env flag 控制节奏、可观测性与失败语义。
 
 ```mermaid
 flowchart TB
@@ -606,14 +615,14 @@ flowchart TB
 ```
 
 **闭环保证**:
-1. **冷启动快** — 缓存命中 <1s 启动,后台异步刷新(Phase 5)
-2. **选优有带宽信号** — probe URL 默认 Cloudflare 1 MiB,限速节点 RTT 自然变长下沉(Phase 1)
-3. **解锁按服务分桶** — sing-box 可为 Netflix / OpenAI 等各配独立 balancer + 真实域名探测(Phase 4)
-4. **ISP 挂不黑洞** — fallback 可选 `direct`(静默) 或 `block`(fail-closed,CN/HK/RU 适用)(Phase 5)
-5. **长时间漂移自愈** — 每 6h cron 重测,仅组成变化时重启 daemon,避免无谓 OOM 风险(Phase 3)
-6. **每个决策留痕** — 6 种结构化事件(`isp.speed_test.result` / `.cache_hit` / `.error` / `isp.retest.completed` / `.noop` / `.error`),stdout 必落盘,shoutrrr 按需推送(Phase 2)
+1. **冷启动快** — 缓存命中 <1s 启动,后台异步刷新
+2. **选优有带宽信号** — probe URL 默认 Cloudflare 1 MiB,限速节点 RTT 自然变长而下沉
+3. **解锁按服务分桶** — 可为 Netflix / OpenAI 等各配独立 balancer + 真实服务域名探测(仅 sing-box,`ISP_PER_SERVICE_SB=true` 启用)
+4. **ISP 挂不黑洞** — fallback 可选 `direct`(静默) 或 `block`(fail-closed,适合 CN / HK / RU)
+5. **长时间漂移自愈** — 每 6h 周期性重测,仅当组成或排序变化时重启 daemon,避免无谓内存波动
+6. **每个决策留痕** — 六种结构化事件(`isp.speed_test.result` / `.cache_hit` / `.error`,`isp.retest.completed` / `.noop` / `.error`),stdout 必落盘,shoutrrr 按需推送
 
-> 所有 flag 的默认值在 `Dockerfile` ENV 注册,保证**零行为变化** = 不改 docker-compose 时等价旧版 `isp-auto` 逻辑。完整表格与典型组合见 `docs/04-ops-and-troubleshooting.md` §2.6。
+> 所有 flag 在 Dockerfile 里注册了合适的默认值,不改 docker-compose 即可开箱运行。完整表格与典型组合见 [docs/04-ops-and-troubleshooting.md §2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
 
 ---
 
