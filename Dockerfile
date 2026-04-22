@@ -423,7 +423,7 @@ VOLUME ${DUFS_SERVE_PATH} ${WORKDIR} ${SUB_STORE_DATA_BASE_PATH} ${LOGDIR} /etc/
 
 STOPSIGNAL SIGTERM
 
-# Python entrypoint (Phase 5 switch). Legacy /scripts/entrypoint.sh
-# is still invoked internally for un-migrated config-render stages.
+# Python entrypoint (100% orchestration — entrypoint.sh retired in Phase 8).
+# `run` runs every boot stage in Python and execs supervisord as PID 1.
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]
 CMD  [ "supervisord" ]

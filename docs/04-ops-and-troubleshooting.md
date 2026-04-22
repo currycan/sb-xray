@@ -632,7 +632,7 @@ docker compose restart
 
 镜像默认启用全部 10 个 supervisord 进程（xray / sing-box / nginx / x-ui / s-ui / sub-store / http-meta / shoutrrr-forwarder / dufs / cron），常驻 RSS ~390–650 MB，启动峰值可达 650–870 MB。低于 1 GB 物理内存的节点需通过以下开关组合降载至 ~300–430 MB 常驻。
 
-**作用机制**：`scripts/entrypoint.sh:createConfig` 用 envsubst 渲染出完整 10 段 `/etc/supervisor.d/daemon.ini` 后，立即调用 `python3 /scripts/entrypoint.py trim`（实现在 `scripts/sb_xray/config_builder.py:trim_runtime_configs`），按环境变量 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤。所有开关都是 opt-out：仅显式设 `false` 生效，未设置或为空保持默认启用。
+**作用机制**：`scripts/sb_xray/config_builder.py:create_config` 用 `string.Template` envsubst 语义渲染出完整 10 段 `/etc/supervisor.d/daemon.ini` 后，`scripts/entrypoint.py:run_pipeline` 在步 11b 直接调用同模块的 `trim_runtime_configs` 按环境变量 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤（也可通过 `docker exec sb-xray python3 /scripts/entrypoint.py trim` 重跑一次）。所有开关都是 opt-out：仅显式设 `false` 生效，未设置或为空保持默认启用。
 
 ### 7.1 docker-compose.yml（宿主层硬约束）
 

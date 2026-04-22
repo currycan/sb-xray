@@ -45,7 +45,7 @@ json_template_check() {
     #   `${FOO},` 这种 section-style 占位符 → "placeholder": null,
     # JSON 模板中段落占位符上下文不固定（object key 位置 / array element 位置），
     # 严格 JSON 解析不可靠。这里做 **括号 / 引号 平衡检查**（容忍 ${VAR} 嵌入），
-    # 真实 JSON 有效性交给容器内 test_entrypoint.sh / xray -test 来校验。
+    # 真实 JSON 有效性交给容器内 xray -test 来校验。
     python3 - "$f" <<'PY' 2>&1
 import re, sys
 p = sys.argv[1]
@@ -113,7 +113,8 @@ for required in \
     "templates/xray/03_vmess_ws_inbounds.json" \
     "templates/sing-box/sb.json" \
     "templates/supervisord/daemon.ini" \
-    "scripts/entrypoint.sh" \
+    "scripts/entrypoint.py" \
+    "scripts/sb_xray/config_builder.py" \
     "scripts/shoutrrr-forwarder.py"; do
     if [ -f "${REPO_ROOT}/${required}" ]; then
         ok "存在: ${required}"
@@ -193,7 +194,7 @@ fi
 
 # M1-4 已作废：PR #5505 的 buildMphCache 被 PR #5814 revert，新方案自动生效
 # 改为验证脚本里包含 revert 注释，防止后续 contributor 再次尝试落地
-if grep -q 'PR #5814' "${REPO_ROOT}/scripts/entrypoint.sh"; then
+if grep -q 'PR #5814' "${REPO_ROOT}/scripts/geo_update.sh"; then
     ok "M1-4: buildMphCache 规划已正确回退（PR #5505 被 PR #5814 revert）"
 else
     bad "M1-4: 未见 revert 说明注释"
@@ -253,11 +254,11 @@ fi
 # ---- M3 规约 -----------------------------------------------------------------
 section "M3 规约校验"
 
-if grep -q 'XRAY_REVERSE_UUID' "${REPO_ROOT}/scripts/entrypoint.sh" \
- && grep -q 'ENABLE_REVERSE' "${REPO_ROOT}/scripts/entrypoint.sh"; then
-    ok "M3-1/M3-4: ENABLE_REVERSE feature flag + XRAY_REVERSE_UUID 已接入 entrypoint"
+if grep -q 'XRAY_REVERSE_UUID' "${REPO_ROOT}/scripts/sb_xray/config_builder.py" \
+ && grep -q 'ENABLE_REVERSE' "${REPO_ROOT}/scripts/sb_xray/config_builder.py"; then
+    ok "M3-1/M3-4: ENABLE_REVERSE feature flag + XRAY_REVERSE_UUID 已接入 config_builder"
 else
-    bad "M3-1/M3-4: entrypoint reverse 逻辑缺失"
+    bad "M3-1/M3-4: config_builder reverse 逻辑缺失"
 fi
 
 if grep -q 'ENABLE_REVERSE' "${REPO_ROOT}/Dockerfile"; then
@@ -266,11 +267,11 @@ else
     bad "M3-4: Dockerfile 未注册 ENABLE_REVERSE"
 fi
 
-if grep -q '"reverse":' "${REPO_ROOT}/scripts/entrypoint.sh" \
- && grep -q 'r-tunnel' "${REPO_ROOT}/scripts/entrypoint.sh"; then
-    ok "M3-2: entrypoint jq 注入 reverse client + routing 规则"
+if grep -q 'reverse' "${REPO_ROOT}/scripts/sb_xray/config_builder.py" \
+ && grep -q 'r-tunnel' "${REPO_ROOT}/scripts/sb_xray/config_builder.py"; then
+    ok "M3-2: config_builder Python 注入 reverse client + routing 规则"
 else
-    bad "M3-2: entrypoint reverse 注入片段缺失"
+    bad "M3-2: config_builder reverse 注入片段缺失"
 fi
 
 if [ -f "${REPO_ROOT}/templates/reverse_bridge/client.json" ]; then
@@ -308,11 +309,11 @@ else
 fi
 
 # M4-接入：entrypoint 按 ENABLE_* flag 过滤渲染（Hy2 / XHTTP-H3 已永久启用，无开关；仅 emergency 通道有 flag）
-if grep -q 'ENABLE_XICMP' "${REPO_ROOT}/scripts/entrypoint.sh" \
-   && grep -q 'ENABLE_XDNS' "${REPO_ROOT}/scripts/entrypoint.sh"; then
-    ok "M4-接入: entrypoint feature-flag 过滤已接入（emergency 通道）"
+if grep -q 'ENABLE_XICMP' "${REPO_ROOT}/scripts/sb_xray/config_builder.py" \
+   && grep -q 'ENABLE_XDNS' "${REPO_ROOT}/scripts/sb_xray/config_builder.py"; then
+    ok "M4-接入: config_builder feature-flag 过滤已接入（emergency 通道）"
 else
-    bad "M4-接入: entrypoint 缺少 emergency feature-flag 接入"
+    bad "M4-接入: config_builder 缺少 emergency feature-flag 接入"
 fi
 
 # M4-env：Dockerfile 注册默认值
@@ -325,19 +326,19 @@ else
 fi
 
 # M4-Hy2-permanent: ENABLE_HY2 开关已移除（Hy2 永久走 xray）
-if ! grep -q 'ENABLE_HY2' "${REPO_ROOT}/scripts/entrypoint.sh" \
+if ! grep -rq 'ENABLE_HY2' "${REPO_ROOT}/scripts/sb_xray" "${REPO_ROOT}/scripts/entrypoint.py" \
    && ! grep -q 'ENV ENABLE_HY2' "${REPO_ROOT}/Dockerfile"; then
     ok "M4-Hy2-permanent: ENABLE_HY2 开关已彻底移除，Hy2 永久由 xray 接管"
 else
-    bad "M4-Hy2-permanent: ENABLE_HY2 残留（应在 Dockerfile/entrypoint 全部清理）"
+    bad "M4-Hy2-permanent: ENABLE_HY2 残留（应在 Dockerfile/scripts 全部清理）"
 fi
 
 # M4-H3-permanent: ENABLE_XHTTP_H3 开关已移除，H3 永久启用 + 进主轨
-if ! grep -q 'ENABLE_XHTTP_H3' "${REPO_ROOT}/scripts/entrypoint.sh" \
+if ! grep -rq 'ENABLE_XHTTP_H3' "${REPO_ROOT}/scripts/sb_xray" "${REPO_ROOT}/scripts/entrypoint.py" \
    && ! grep -q 'ENV ENABLE_XHTTP_H3' "${REPO_ROOT}/Dockerfile"; then
     ok "M4-H3-permanent: ENABLE_XHTTP_H3 开关已彻底移除，H3 永久启用"
 else
-    bad "M4-H3-permanent: ENABLE_XHTTP_H3 残留（应在 Dockerfile/entrypoint 全部清理）"
+    bad "M4-H3-permanent: ENABLE_XHTTP_H3 残留（应在 Dockerfile/scripts 全部清理）"
 fi
 
 # M4-订阅：XHTTP-H3 进入 v2rayn 主轨 + v2rayn-adv 订阅（无条件）

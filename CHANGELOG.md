@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed（变更）
+
+- **Entrypoint Python 重写 · Phase 8 — `entrypoint.sh` 彻底退役（100% Python 编排）**：`scripts/entrypoint.sh`（1475 行 bash）物理删除；`scripts/entrypoint.py:run_pipeline` 在容器内按顺序 Python 跑完 16 段启动流水线（`_init_dirs` → `decrypt_remote_secrets` → `probe_base_env` → `run_isp_speed_tests` → 媒体探针 + `ensure_reality_keys/mlkem_keys` → `build_client_and_server_configs` → `issue_bundle_certificate` → `ensure_dhparam` → `update_geo_data` → `create_config` + providers → `trim_runtime_configs` → `init_panels` → `setup_basic_auth` → `install_crontab` → show banner → `os.execvp` supervisord）。新增 `sb_xray.stages/` 子包（`dhparam/geoip/panels/nginx_auth/cron/supervisord/keys`）封装剩余 subprocess 调用；`speed_test.measure` 升级为截断均值 + 标准差 + `[稳定]/[轻微波动]/[波动较大]` CV 标签与 bash §9 逐行对齐；`IspSpeedContext.tolerance` 默认改回 `1.0`（bash `_test_isp_node` 直接 `>` 比较）。`scripts/test_smoke.sh` 所有对 `entrypoint.sh` 的 grep 断言改为针对 `scripts/sb_xray/config_builder.py` 等 Python 模块；Dockerfile `ENTRYPOINT` / readme 文件树 / `docs/01/04/05` / nginx 模板注释全部同步。pytest 从 249 升至 275 条全绿，新增 `test_stages_*` + `test_run_isp_speed_tests` + `test_build_isp_outbounds` 共 8 个测试文件覆盖所有新增 Python 路径。
+
 ### Added（新增功能）
 
 - **小内存节点降载开关**:新增 4 个 opt-out 环境变量让内存不超过 512 MB 的节点常驻 RSS 从 ~520 MB 降到 ~300–430 MB,避免 xray 启动期 VSZ 1.4 GB 触发内核 OOM kill。开关均为 opt-out 语义,**仅**在显式设为字符串 `"false"` 时生效,未设置时保持完整启动。
