@@ -927,6 +927,35 @@ flowchart TD
 | **`can not get domain token`** | 检查 DNS A 记录、关闭 Cloudflare 小黄云、放行 TCP 80/443 |
 | **`cert 失败：预期文件缺失`** | acme.sh `--install-cert` 静默失败（多因上次失败留了空 store 目录）。清 `./acmecerts/<domain>_ecc/` 后重启即可 |
 
+### 4.5 CA 切换行为（`ACMESH_SERVER_NAME` 修改后发生什么）
+
+`ACMESH_SERVER_NAME` 改名（例如 `zerossl` → `letsencrypt`）**不触发续期，而是触发一次重新签发** —— 但只在现有证书已经过期/接近过期时生效。逐步流程见 `scripts/sb_xray/cert.py::ensure_certificate`：
+
+1. **启动时校验 `/pki/sb_xray_bundle.crt`**
+   - 三个文件（`.crt` / `.key` / `-ca.crt`）齐全 **且** `openssl x509 -checkend 604800` 还剩 **> 7 天** → `CertStatus.SKIPPED`，沿用现有证书，不论 `ACMESH_SERVER_NAME` 是什么都**不产生任何动作**。
+   - 剩余 ≤ 7 天 **或** 任一文件缺失 → 进入下一步。
+2. **`acme.sh --issue --server <新 CA>`** 全新签发，覆盖 `/pki/sb_xray_bundle.*`。acme.sh 账户系统按 CA 隔离：Let's Encrypt 账户文件在 `acmecerts/ca/acme-v02.api.letsencrypt.org/`，ZeroSSL 的在 `acmecerts/ca/acme.zerossl.com/`，二者互不通 —— **不会用旧 CA 账户去续新 CA 的证书，反之亦然**。
+3. **后续续期**：Let's Encrypt 证书 90 天有效，第 83 天起（剩 ≤ 7 天）下次容器 restart 会重复第 2 步用 LE 续签。无需再改任何配置。
+
+#### 想**立刻**切换到新 CA（不等旧证书到期）
+
+二选一：
+
+```bash
+# 方案 A：主动清证书，立刻强制重签
+rm /root/sb-xray/pki/sb_xray_bundle.*
+docker compose restart          # 下次启动用 ACMESH_SERVER_NAME 指定的新 CA 签发
+
+# 方案 B：什么都不做，等旧证书剩 ≤ 7 天自然触发（最稳，零停机）
+```
+
+#### 清理旧 CA 账户（可选）
+
+`acmecerts/ca/acme.zerossl.com/` 保留不会造成问题，acme.sh 只会用 `ACMESH_SERVER_NAME` 指定的那个。想清爽可以 `find acmecerts/ca/acme.zerossl.com -mindepth 1 -delete && rmdir acmecerts/ca/acme.zerossl.com` —— 丢掉 ZeroSSL 账户无害，哪天切回只是重新注册。
+
+> [!TIP]
+> 如果你是因为 ZeroSSL 限流才切到 LE，清 `acmecerts/cn2.ansandy.com_ecc/`（保留 `account.conf`）避免 acme.sh 的本地 store 记录指向 ZeroSSL 签发历史时引起混淆；LE 会创建自己的 domain 目录。
+
 ---
 
 ## 6. Xray TUN 模式进阶指南
