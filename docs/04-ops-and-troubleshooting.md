@@ -230,7 +230,7 @@ docker compose restart
 | 变量 | 默认 | Phase | 作用 |
 |:---|:---|:---|:---|
 | `ISP_PROBE_URL` | `https://speed.cloudflare.com/__down?bytes=1048576` | 1 | urltest / observatory 探测 URL；默认携带带宽信号,可切 `https://www.gstatic.com/generate_204` 回退 |
-| `ISP_PROBE_INTERVAL` | `1m` | 1 | 探测周期；cn2 等小内存节点建议 `5m` |
+| `ISP_PROBE_INTERVAL` | `1m` | 1 | 探测周期；小内存节点建议 `5m` |
 | `ISP_PROBE_TOLERANCE_MS` | `300` | 1 | sing-box `urltest` 切换最低 RTT 差阈值（毫秒） |
 | `ISP_EVENTS_ENABLED` | `true` | 2 | 结构化事件 `event=... payload=...` 是否写 stdout + POST 到 shoutrrr |
 | `ISP_RETEST_INTERVAL_HOURS` | `6` | 3 | 周期性带宽重测 cron 间隔；`0` 禁用 |
@@ -243,7 +243,7 @@ docker compose restart
 | `ISP_SPEED_CACHE_ASYNC` | `true` | 5 | 缓存命中时是否后台线程异步刷新速度;`false` 仅用于调试 |
 
 > **典型组合**
-> - **cn2 OOM 敏感节点**: `ISP_PROBE_INTERVAL=5m`, `ISP_PER_SERVICE_SB=false`, `ISP_RETEST_INTERVAL_HOURS=12`
+> - **小内存节点（OOM 敏感）**: `ISP_PROBE_INTERVAL=5m`, `ISP_PER_SERVICE_SB=false`, `ISP_RETEST_INTERVAL_HOURS=12`
 > - **CN / HK / RU 受限地区 fail-closed**: `ISP_FALLBACK_STRATEGY=block`
 > - **受限地区 + WARP 兜底**: `ISP_FALLBACK_STRATEGY=warp`, `WARP_ENABLED=true`（需模板里有 `warp` outbound）
 > - **追求极致解锁命中率**: `ISP_PER_SERVICE_SB=true` + 保持 `ISP_PROBE_URL` 默认

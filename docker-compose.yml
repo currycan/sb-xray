@@ -56,7 +56,7 @@ services:
       - SHOUTRRR_FORWARDER_PORT=18085 # 监听端口（仅 127.0.0.1 绑定）
       # ── isp-auto 优化开关（所有默认值已在 Dockerfile ENV 注册，此处仅在需要**覆盖**时取消注释）
       # 完整说明见 docs/04-ops-and-troubleshooting.md §2.6
-      # - ISP_PROBE_INTERVAL=5m           # cn2 等小内存节点建议降频
+      # - ISP_PROBE_INTERVAL=5m           # 小内存节点建议降频
       # - ISP_PER_SERVICE_SB=true         # 开启 sing-box 按服务分桶（Netflix/OpenAI/Claude/Gemini/Disney/YouTube 独立 balancer）
       # - ISP_FALLBACK_STRATEGY=block     # CN/HK/RU 拒绝静默走 direct
       # - ISP_FALLBACK_STRATEGY=warp      # 受限地区 + 自备 warp outbound
