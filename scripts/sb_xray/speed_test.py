@@ -507,6 +507,7 @@ def run_isp_speed_tests(
     *,
     samples: int | None = None,
     url: str = _SPEED_TEST_URL,
+    force: bool = False,
 ) -> None:
     """Port of ``run_speed_tests_if_needed`` (entrypoint.sh:1153).
 
@@ -517,12 +518,16 @@ def run_isp_speed_tests(
       3. :func:`_measure_direct_baseline` — direct speed for 8K 判定.
       4. :func:`_measure_isp_nodes` — per-``*_ISP_IP`` SOCKS5h probes.
       5. :func:`_persist_routing_decision` — route + write STATUS_FILE.
+
+    ``force=True`` (Phase 3) bypasses the ``ISP_TAG`` cache hit path —
+    the periodic retest cron needs a real measurement every time.
     """
     sample_count = _resolve_sample_count(samples)
 
-    cached_tag = os.environ.get("ISP_TAG", "").strip()
-    if cached_tag and _try_cache_hit(cached_tag):
-        return
+    if not force:
+        cached_tag = os.environ.get("ISP_TAG", "").strip()
+        if cached_tag and _try_cache_hit(cached_tag):
+            return
 
     _reset_caches_for_fresh_run()
     _log_routing_inputs()
