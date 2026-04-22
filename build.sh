@@ -112,83 +112,73 @@ get_latest_stable_tag() {
 }
 
 # 辅助函数: 将脚本中某组件的默认版本更新为最新获取值
-update_script_default() {
-    local arg_name=$1
-    local fetched_tag=$2
-    local script
-    script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# ============================================================
+# 解析 CLI 模式
+#
+#   ./build.sh                 默认离线模式：从 versions.json 读取
+#                              版本号 + digests，纯本地构建镜像，不触网。
+#                              CI 每日把最新 versions + digests 写进
+#                              versions.json，本地 git pull 即可与 CI
+#                              产物一致。
+#
+#   ./build.sh refresh         刷新模式：调用 GitHub API 拉最新 versions
+#                              + digests，写回 versions.json，然后走
+#                              完整构建流程。等价于 CI 每日跑的动作。
+#
+#   ./build.sh --local         单架构 linux/amd64 + --load，不推送
+#                              registry；可与两种模式组合。
+#
+#   ./build.sh default         旧的离线模式别名，保留向后兼容。
+# ============================================================
 
-    # 跳过空或无效版本
-    if [ -z "$fetched_tag" ] || [ "$fetched_tag" == "null" ]; then
-        return
-    fi
-
-    local clean_version="${fetched_tag#v}"
-
-    # 从脚本中读取当前默认版本
-    local current_default
-    current_default=$(grep "check_version" "$script" | grep "\"${arg_name}\"" | sed "s/.*\"${arg_name}\"[[:space:]]*\"\([^\"]*\)\".*/\1/")
-
-    if [ "$clean_version" == "$current_default" ]; then
-        return
-    fi
-
-    # 跨平台兼容更新
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        sed -i '' "s|\(check_version.*\"${arg_name}\"[[:space:]]*\)\"[^\"]*\"|\1\"${clean_version}\"|" "$script"
-    else
-        sed -i "s|\(check_version.*\"${arg_name}\"[[:space:]]*\)\"[^\"]*\"|\1\"${clean_version}\"|" "$script"
-    fi
-
-    echo -e "  ${GREEN}↑ ${arg_name}: ${current_default} -> ${clean_version}${NC}"
-    VERSIONS_UPDATED=true
-}
-
-# 解析参数：支持 "default"（离线模式）与 "--local"（本地单架构构建，不 push）
 LOCAL_BUILD=false
+MODE=offline
 for arg in "$@"; do
     case "$arg" in
-        --local) LOCAL_BUILD=true ;;
+        --local)          LOCAL_BUILD=true ;;
+        refresh)          MODE=refresh ;;
+        default|offline)  MODE=offline ;;
     esac
 done
 
-# 检查是否使用默认版本模式
-USE_DEFAULT_VERSIONS=false
+VERSIONS_JSON_PATH="$(cd "$(dirname "$0")" && pwd)/versions.json"
+
+# 从 versions.json 读取缓存的 version（offline 模式用）
+get_cached_version() {
+    local key=$1
+    [ -f "$VERSIONS_JSON_PATH" ] || { echo ""; return; }
+    jq -r --arg k "$key" '.[$k] // empty' "$VERSIONS_JSON_PATH" 2>/dev/null
+}
+
 XRAY_VERSION_FINAL=""
-if [ "$1" == "default" ]; then
-    USE_DEFAULT_VERSIONS=true
-    echo -e "${YELLOW}使用默认版本模式，跳过 API 调用...${NC}"
-fi
 
 # 获取各组件版本
-if [ "$USE_DEFAULT_VERSIONS" == "true" ]; then
-    # 使用默认版本，不调用 API
-    SHOUTRRR_TAG=""
-    MIHOMO_TAG=""
-    HTTP_META_VERSION=""
-    SUB_STORE_FRONTEND_VERSION=""
-    SUB_STORE_BACKEND_VERSION=""
-    SUI_TAG=""
-    DUFS_TAG=""
-    CLOUDFLARED_VERSION=""
-    XUI_TAG=""
-    SING_BOX_TAG=""
-    XRAY_TAG=""
+if [ "$MODE" == "offline" ]; then
+    echo -e "${BLUE}离线模式：从 versions.json 读取组件版本...${NC}"
+    SHOUTRRR_TAG=$(get_cached_version shoutrrr)
+    MIHOMO_TAG=$(get_cached_version mihomo)
+    HTTP_META_VERSION=$(get_cached_version http_meta)
+    SUB_STORE_FRONTEND_VERSION=$(get_cached_version sub_store_frontend)
+    SUB_STORE_BACKEND_VERSION=$(get_cached_version sub_store_backend)
+    SUI_TAG=$(get_cached_version s_ui)
+    DUFS_TAG=$(get_cached_version dufs)
+    CLOUDFLARED_VERSION=$(get_cached_version cloudflared)
+    XUI_TAG=$(get_cached_version x_ui)
+    SING_BOX_TAG=$(get_cached_version sing_box)
+    XRAY_TAG=$(get_cached_version xray)
 else
-    echo -e "${BLUE}开始获取最新版本信息...${NC}"
-
-    # 获取各组件版本
-SHOUTRRR_TAG=$(get_latest_release "containrrr/shoutrrr")
-MIHOMO_TAG=$(get_latest_release "MetaCubeX/mihomo")
-HTTP_META_VERSION=$(get_latest_release "xream/http-meta")
-SUB_STORE_FRONTEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store-Front-End")
-SUB_STORE_BACKEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store")
-SUI_TAG=$(get_latest_release "alireza0/s-ui")
-DUFS_TAG=$(get_latest_stable_tag "sigoden/dufs")
-CLOUDFLARED_VERSION=$(get_latest_stable_tag "cloudflare/cloudflared")
-XUI_TAG=$(get_latest_stable_tag "MHSanaei/3x-ui")
-SING_BOX_TAG=$(get_latest_stable_tag "SagerNet/sing-box")
-XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
+    echo -e "${BLUE}刷新模式：从 GitHub API 获取最新版本信息...${NC}"
+    SHOUTRRR_TAG=$(get_latest_release "containrrr/shoutrrr")
+    MIHOMO_TAG=$(get_latest_release "MetaCubeX/mihomo")
+    HTTP_META_VERSION=$(get_latest_release "xream/http-meta")
+    SUB_STORE_FRONTEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store-Front-End")
+    SUB_STORE_BACKEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store")
+    SUI_TAG=$(get_latest_release "alireza0/s-ui")
+    DUFS_TAG=$(get_latest_stable_tag "sigoden/dufs")
+    CLOUDFLARED_VERSION=$(get_latest_stable_tag "cloudflare/cloudflared")
+    XUI_TAG=$(get_latest_stable_tag "MHSanaei/3x-ui")
+    SING_BOX_TAG=$(get_latest_stable_tag "SagerNet/sing-box")
+    XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
 fi
 
 # 处理版本号并构建 Docker 参数
@@ -196,88 +186,88 @@ BUILD_ARGS=""
 
 # 检查版本函数
 # 参数:
-# $1 = 组件显示名称
-# $2 =获取到的版本号 (可能带 v 前缀)
-# $3 = Docker build-arg 变量名
-# $4 = 默认版本号 (用于 fallback)
+#   $1 = 组件显示名称（日志用）
+#   $2 = 版本号（可带 v 前缀）
+#   $3 = Docker build-arg 变量名
+# 版本为空时直接退出 — 上游要么是 versions.json 缺字段（离线模式下运
+# 行 `./build.sh refresh` 刷新），要么是 GitHub API 调用失败（刷新模
+# 式下网络问题），无论哪种都不应用任何 fallback 硬编码值。
 check_version() {
     local name=$1
     local version=$2
     local arg_name=$3
-    local default_version=$4
 
-    # 版本格式校验（与 .github/workflows/daily-build.yml 中 validate_version 保持一致）
+    # 版本格式校验（与 .github/workflows/daily-build.yml 中 validate_version 一致）
     # 拒绝含 shell 元字符的 tag，避免 $BUILD_ARGS 展开时注入 docker buildx 参数
     _validate_semver() {
         [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?$ ]]
     }
-    if [ -n "$version" ] && [ "$version" != "null" ]; then
-        local stripped="${version#v}"
-        if ! _validate_semver "$stripped"; then
-            printf "%-25s ${RED}版本 %q 格式非法，拒绝构建（可能含注入字符）${NC}\n" "${name}:" "$version"
-            exit 1
-        fi
-    fi
 
     if [ -z "$version" ] || [ "$version" == "null" ]; then
-        if [ -n "$default_version" ]; then
-            if [ "$USE_DEFAULT_VERSIONS" == "true" ]; then
-                printf "%-25s ${GREEN}%s${NC}\n" "${name}:" "${default_version}"
-            else
-                printf "%-25s ${YELLOW}获取失败! 使用默认版本: %s${NC}\n" "${name}:" "${default_version}"
-            fi
-            BUILD_ARGS="${BUILD_ARGS} --build-arg ${arg_name}=${default_version}"
-            # 版本获取失败时同样记录版本号用于镜像 Tag
-            if [ "$name" == "Xray" ]; then
-                XRAY_VERSION_FINAL=$default_version
-            fi
+        if [ "$MODE" == "offline" ]; then
+            printf "%-25s ${RED}versions.json 中未找到该字段${NC}\n" "${name}:"
+            echo -e "${YELLOW}  请运行 \`./build.sh refresh\` 从 GitHub API 拉取并写回 versions.json${NC}" >&2
         else
-            printf "%-25s ${RED}获取失败! 停止构建${NC}\n" "${name}:"
-            exit 1
+            printf "%-25s ${RED}GitHub API 获取失败${NC}\n" "${name}:"
         fi
-    else
-        # 去除 'v' 前缀
-        clean_version=${version#v}
-        printf "%-25s ${GREEN}%s${NC}\n" "${name}:" "${clean_version}"
-        BUILD_ARGS="${BUILD_ARGS} --build-arg ${arg_name}=${clean_version}"
-        if [ "$name" == "Xray" ]; then
-            XRAY_VERSION_FINAL=$clean_version
-        fi
+        exit 1
+    fi
+
+    local stripped="${version#v}"
+    if ! _validate_semver "$stripped"; then
+        printf "%-25s ${RED}版本 %q 格式非法，拒绝构建（可能含注入字符）${NC}\n" "${name}:" "$version"
+        exit 1
+    fi
+
+    printf "%-25s ${GREEN}%s${NC}\n" "${name}:" "${stripped}"
+    BUILD_ARGS="${BUILD_ARGS} --build-arg ${arg_name}=${stripped}"
+    if [ "$name" == "Xray" ]; then
+        XRAY_VERSION_FINAL=$stripped
     fi
 }
 
-check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"           "0.8.0"
-check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"             "1.19.24"
-check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"          "1.1.0"
-check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION" "2.16.57"
-check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"  "2.22.5"
-check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"                "1.4.1"
-check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"               "0.45.0"
-check_version "Cloudflared"      "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSION"        "2026.3.0"
-check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"                "2.9.0"
-check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"           "1.13.9"
-check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"               "26.3.27"
+check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"
+check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"
+check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"
+check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION"
+check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"
+check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"
+check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"
+check_version "Cloudflared"     "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSION"
+check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"
+check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"
+check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"
 
-# 当从 GitHub 获取版本后，自动更新脚本中的默认版本配置
-if [ "$USE_DEFAULT_VERSIONS" != "true" ]; then
-    echo -e "${BLUE}检查默认版本配置是否需要更新...${NC}"
-    VERSIONS_UPDATED=false
-    update_script_default "SHOUTRRR_VERSION"           "$SHOUTRRR_TAG"
-    update_script_default "MIHOMO_VERSION"             "$MIHOMO_TAG"
-    update_script_default "HTTP_META_VERSION"          "$HTTP_META_VERSION"
-    update_script_default "SUB_STORE_FRONTEND_VERSION" "$SUB_STORE_FRONTEND_VERSION"
-    update_script_default "SUB_STORE_BACKEND_VERSION"  "$SUB_STORE_BACKEND_VERSION"
-    update_script_default "SUI_VERSION"                "$SUI_TAG"
-    update_script_default "DUFS_VERSION"               "$DUFS_TAG"
-    update_script_default "CLOUDFLARED_VERSION"        "$CLOUDFLARED_VERSION"
-    update_script_default "XUI_VERSION"                "$XUI_TAG"
-    update_script_default "SING_BOX_VERSION"           "$SING_BOX_TAG"
-    update_script_default "XRAY_VERSION"               "$XRAY_TAG"
-    if [ "$VERSIONS_UPDATED" == "true" ]; then
-        echo -e "${GREEN}✓ build.sh 默认版本配置已同步更新${NC}"
-    else
-        echo -e "${BLUE}✓ 所有默认版本均为最新，无需更新${NC}"
-    fi
+# 刷新模式：把新获取到的 versions 写回 versions.json（与 digests 同步更新）
+if [ "$MODE" == "refresh" ]; then
+    echo -e "${BLUE}刷新 versions.json（versions 段）...${NC}"
+    _tmp_versions=$(mktemp)
+    jq \
+        --arg shoutrrr             "${SHOUTRRR_TAG#v}" \
+        --arg mihomo               "${MIHOMO_TAG#v}" \
+        --arg http_meta            "${HTTP_META_VERSION#v}" \
+        --arg sub_store_frontend   "${SUB_STORE_FRONTEND_VERSION#v}" \
+        --arg sub_store_backend    "${SUB_STORE_BACKEND_VERSION#v}" \
+        --arg s_ui                 "${SUI_TAG#v}" \
+        --arg dufs                 "${DUFS_TAG#v}" \
+        --arg cloudflared          "${CLOUDFLARED_VERSION#v}" \
+        --arg x_ui                 "${XUI_TAG#v}" \
+        --arg sing_box             "${SING_BOX_TAG#v}" \
+        --arg xray                 "${XRAY_TAG#v}" \
+        '. + {
+            shoutrrr: $shoutrrr,
+            mihomo: $mihomo,
+            http_meta: $http_meta,
+            sub_store_frontend: $sub_store_frontend,
+            sub_store_backend: $sub_store_backend,
+            s_ui: $s_ui,
+            dufs: $dufs,
+            cloudflared: $cloudflared,
+            x_ui: $x_ui,
+            sing_box: $sing_box,
+            xray: $xray
+        }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
+    echo -e "  ${GREEN}✓ versions 段已写回 versions.json${NC}"
 fi
 
 TAG_VERSION=$XRAY_VERSION_FINAL
@@ -313,8 +303,8 @@ _require_sha() {
     printf "  %-32s ${GREEN}%s${NC}\n" "${name}:" "${val:0:12}…"
 }
 
-if [ "$USE_DEFAULT_VERSIONS" == "true" ]; then
-    # ---------- 默认模式：纯本地读取 versions.json，不触网 ----------
+if [ "$MODE" == "offline" ]; then
+    # ---------- 离线模式：纯本地读取 versions.json，不触网 ----------
     echo -e "  ${BLUE}从 ${VERSIONS_JSON_PATH#$PWD/} 读取缓存的 SHA256...${NC}"
     HTTP_META_BUNDLE_SHA=$(get_cached_digest http_meta_bundle_sha256)
     HTTP_META_TPL_SHA=$(get_cached_digest http_meta_tpl_sha256)
@@ -328,18 +318,18 @@ if [ "$USE_DEFAULT_VERSIONS" == "true" ]; then
     SING_BOX_AMD64_SHA=$(get_cached_digest sing_box_amd64_sha256)
     SING_BOX_ARM64_SHA=$(get_cached_digest sing_box_arm64_sha256)
 
-    # 任一缺失则提示用户先跑一次非 default 模式
+    # 任一缺失则提示用户先跑 refresh 模式
     _missing=0
     for key in $DIGEST_KEYS; do
         if [ -z "$(get_cached_digest "$key")" ]; then _missing=1; break; fi
     done
     if [ $_missing -eq 1 ]; then
         echo -e "${RED}✗ versions.json 中缺少缓存 digest${NC}" >&2
-        echo -e "${YELLOW}  先运行一次 \`./build.sh\`（不带 default）以从 GitHub API 获取并写回；或手动编辑 versions.json 的 .digests 字段${NC}" >&2
+        echo -e "${YELLOW}  请运行 \`./build.sh refresh\` 从 GitHub API 拉取并写回 digests${NC}" >&2
         exit 1
     fi
 else
-    # ---------- API 模式：从 GitHub API 获取（会写回 versions.json 缓存） ----------
+    # ---------- 刷新模式：从 GitHub API 获取 digests，写回 versions.json ----------
     check_gh_rate_limit 6
 
     _extract_arg() { echo "$BUILD_ARGS" | grep -oE "$1=[^ ]+" | cut -d= -f2- | tail -1; }
@@ -375,8 +365,8 @@ _require_sha "CLOUDFLARED_ARM64_SHA256" "$CLOUDFLARED_ARM64_SHA"
 _require_sha "SING_BOX_AMD64_SHA256"    "$SING_BOX_AMD64_SHA"
 _require_sha "SING_BOX_ARM64_SHA256"    "$SING_BOX_ARM64_SHA"
 
-# API 模式下把新获取的 digest 写回 versions.json，供后续 default 模式使用
-if [ "$USE_DEFAULT_VERSIONS" != "true" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
+# 刷新模式下把新获取的 digest 写回 versions.json，供后续 offline 模式使用
+if [ "$MODE" == "refresh" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
     _tmp_versions=$(mktemp)
     # 顺序与 build.sh 中 check_version 调用保持一致，便于人工检查
     # 注意：不使用 -S（会按字母表排序破坏语义顺序）
@@ -405,7 +395,7 @@ if [ "$USE_DEFAULT_VERSIONS" != "true" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
             sing_box_amd64_sha256: $sing_box_amd64_sha256,
             sing_box_arm64_sha256: $sing_box_arm64_sha256
         }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
-    echo -e "  ${GREEN}✓ digests 已写回 versions.json（下次 default 模式可直接使用）${NC}"
+    echo -e "  ${GREEN}✓ digests 段已写回 versions.json${NC}"
 fi
 
 BUILD_ARGS="${BUILD_ARGS} \

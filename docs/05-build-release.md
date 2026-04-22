@@ -53,51 +53,53 @@ export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 ## 2. 自动构建脚本（build.sh）
 
-`build.sh` 是推荐的构建入口，它自动从 GitHub API 获取所有组件的最新版本号并传递给 Docker。
+`build.sh` 是推荐的构建入口。**单一真相源是仓库根目录的 `versions.json`**，`build.sh` 既不硬编码任何组件版本，也不在本地构建期间与 CI 产生漂移：
+
+- 日常构建直接读 `versions.json`（已由 CI 每天刷新并提交），纯离线、可复现
+- 需要跟最新上游版本时用 `./build.sh refresh`，会像 CI 一样调用 GitHub API 拉取 versions + digests，写回 `versions.json`，然后构建
 
 ### 2.1 基本用法
 
 一条命令完成构建并同时推送 `:版本号` 和 `:latest` 两个 tag，两者始终指向同一 Image ID。
 
 ```bash
-./build.sh              # 自动获取最新版本（推荐）
-./build.sh default      # 使用默认版本（适合离线/限速环境）
+./build.sh              # 离线模式（默认）：读 versions.json 构建，不触网
+./build.sh refresh      # 刷新模式：GitHub API 拉最新 → 写回 versions.json → 构建
+./build.sh --local      # 单架构 linux/amd64，--load 到本地，不 push；可与上面两种组合
 ```
+
+`./build.sh default` / `./build.sh offline` 作为旧名称保留为离线模式别名。
 
 ### 2.2 工作流程
 
 ```mermaid
 flowchart TD
-    Start(("./build.sh\n[参数]")) --> Mode{"传入参数?"}
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef data     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:3px,color:#fff
 
-    Mode -- "无参数" --> Fetch["调用 GitHub API\n获取 11 个组件最新版本"]
-    Mode -- "default" --> Default["使用硬编码的默认版本号"]
+    Start(["./build.sh [refresh] [--local]"]):::entry --> Mode{"模式?"}:::decision
 
-    Fetch --> Check["逐一检查版本获取结果"]
-    Default --> Check
+    Mode -- "offline (默认)" --> Read["读 versions.json<br/>versions + digests"]:::data
+    Mode -- "refresh" --> API["GitHub API<br/>拉 versions + digests"]:::process
+    API --> Write["写回 versions.json"]:::data
+    Write --> Read
 
-    Check --> Version{"版本获取成功?"}
-    Version -- "成功" --> Clean["去除 v 前缀\n记录 XRAY_VERSION_FINAL"]
-    Version -- "失败" --> Fallback["使用默认版本\n同样记录 XRAY_VERSION_FINAL"]
-
-    Clean --> Build["docker buildx build\n--tag :VERSION\n--tag :latest\n--push"]
-    Fallback --> Build
-
-    Build --> Done(["✅ 构建完成\n:VERSION + :latest\nImage ID 一致"])
-
-    style Start fill:#0984e3,stroke:#0566b3,color:#fff
-    style Done fill:#00b894,stroke:#009577,color:#fff
+    Read --> Validate["校验每个字段<br/>(semver + 非空)"]:::process
+    Validate --> Build["docker buildx build<br/>--tag :VERSION<br/>--tag :latest"]:::process
+    Build --> Done(["构建完成"]):::terminal
 ```
 
-### 2.3 版本获取策略
-
-脚本对不同组件采用不同的版本获取方式：
+### 2.3 版本获取策略（仅 refresh 模式用到）
 
 | 策略 | API 端点 | 适用组件 |
 |:---|:---|:---|
-| **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr, Mihomo, Http-Meta, Sub-Store, S-UI |
-| **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100` | Xray / sing-box / x-ui / dufs / cloudflared(取首个排除 `rc/beta/alpha` 的 tag,稳定版优先) |
-| **Latest Stable Tag** | `/repos/{owner}/{repo}/tags` + 过滤 | Dufs, Cloudflared, 3x-ui, Sing-box (排除 rc/beta/alpha) |
+| **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr、Mihomo、Http-Meta、Sub-Store、S-UI |
+| **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100`（过滤 `rc/beta/alpha`） | Xray、Sing-box、3x-ui、Dufs、Cloudflared |
+
+`.github/workflows/daily-build.yml` 每日跑相同逻辑：调用 API → 计算 digests → 提交 `versions.json`。所以本地 `./build.sh` 和 CI 的最新产物始终位级一致。
 
 ---
 
@@ -194,23 +196,31 @@ supervisor dumb-init fail2ban acme.sh
 
 ## 4. 组件版本管理
 
-### 4.1 当前默认版本
+### 4.1 当前组件版本
 
-以下是 `build.sh` 中硬编码的 Fallback 版本（当 GitHub API 不可用时使用）：
+所有版本由仓库根目录 `versions.json` 统一声明，CI 每日从 GitHub API 刷新并提交。`build.sh` 离线模式直接读取该文件，因此**本地构建与 CI 产物始终一致**。查阅当前组件版本：
 
-| 组件 | 默认版本 | Build Arg |
-|:---|:---|:---|
-| Shoutrrr | 0.8.0 | `SHOUTRRR_VERSION` |
-| Mihomo | 1.19.0 | `MIHOMO_VERSION` |
-| Http-Meta | 1.0.6 | `HTTP_META_VERSION` |
-| Sub-Store 前端 | 2.16.13 | `SUB_STORE_FRONTEND_VERSION` |
-| Sub-Store 后端 | 2.21.21 | `SUB_STORE_BACKEND_VERSION` |
-| S-UI | 1.3.9 | `SUI_VERSION` |
-| Dufs | 0.45.0 | `DUFS_VERSION` |
-| Cloudflared | 2026.2.0 | `CLOUDFLARED_VERSION` |
-| 3x-ui | 2.8.10 | `XUI_VERSION` |
-| Sing-box | 1.12.21 | `SING_BOX_VERSION` |
-| Xray | 26.2.6 | `XRAY_VERSION` |
+```bash
+jq -r 'to_entries[] | select(.key != "digests") | "\(.key): \(.value)"' versions.json
+```
+
+对应的 Docker build-arg 名称：
+
+| 组件（`versions.json` 字段） | Build Arg |
+|:---|:---|
+| `shoutrrr` | `SHOUTRRR_VERSION` |
+| `mihomo` | `MIHOMO_VERSION` |
+| `http_meta` | `HTTP_META_VERSION` |
+| `sub_store_frontend` | `SUB_STORE_FRONTEND_VERSION` |
+| `sub_store_backend` | `SUB_STORE_BACKEND_VERSION` |
+| `s_ui` | `SUI_VERSION` |
+| `dufs` | `DUFS_VERSION` |
+| `cloudflared` | `CLOUDFLARED_VERSION` |
+| `x_ui` | `XUI_VERSION` |
+| `sing_box` | `SING_BOX_VERSION` |
+| `xray` | `XRAY_VERSION` |
+
+配套的二进制 SHA256 校验值存于 `versions.json` 的 `digests` 字段（由 CI 同步刷新），Dockerfile 通过 build-arg 传入并在下载阶段强制校验。任何 digest 缺失都会导致 `build.sh` 直接退出。
 
 ### 4.2 版本覆盖
 
@@ -277,14 +287,17 @@ docker buildx build \
 
 ### Q1: GitHub API 返回 403 / Rate Limit
 
-**原因**: 未配置 GitHub Token 导致匿名限流（60 次/小时）
+**原因**: 未配置 GitHub Token 导致匿名限流（60 次/小时）。注意只有 `./build.sh refresh` 会调 GitHub API —— 默认 `./build.sh` 完全离线。
 
 **解决**:
 ```bash
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+# 离线构建（直接用仓库 versions.json，无需 API）
 ./build.sh
+
+# 若确实需要刷新到最新上游版本
+export GITHUB_TOKEN=<your-personal-access-token>
+./build.sh refresh
 ```
-或使用默认版本模式：`./build.sh default`
 
 ### Q2: Sub-Store 前端构建失败
 
