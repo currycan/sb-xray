@@ -12,6 +12,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed（变更）
 
+- **Shoutrrr forwarder:迁入 `sb_xray` 包 + 吞错 bug 修复 + 产品文档重写**:
+  - **架构**:新增 `scripts/sb_xray/shoutrrr.py`,与 `geo.py` / `display.py` 统一形态,`run(port, urls, title_prefix)` 参数化入口,`Handler` 从模块全局改为闭包工厂,杜绝跨测试污染。
+  - **入口**:`scripts/entrypoint.py` argparse 新增 `shoutrrr-forward` 子命令;`templates/supervisord/daemon.ini` 的 `[program:shoutrrr-forwarder]` 改为 `command=python3 /scripts/entrypoint.py shoutrrr-forward`。program block 名保持 `shoutrrr-forwarder` 不动,`config_builder.py` 的 `ENABLE_SHOUTRRR` trim 映射和 `test_smoke.sh:M1-5` 的 grep 断言均无需更新。
+  - **Bug 修复 — 吞错再无**:原实现 `subprocess.run(check=False, capture_output=True)` 把 shoutrrr 子进程的 stdout/stderr/exit code 全吞掉,导致"forwarder 返回 204 但通道里没消息"完全无迹可循(本次用户真实踩坑:bot 非频道管理员,shoutrrr 返回 exit=69 + "need administrator rights" 但 forwarder 日志一片干净)。修复后每条推送都会记 `send ok scheme=telegram event=...` 或 `send failed scheme=telegram exit=69 stderr='Bad Request: ...'`,token 不泄露(只记 URL scheme);subprocess 崩溃单独记 `send crashed`。
+  - **配置**:`docker-compose.yml` 第 46–50 行新增 `SHOUTRRR_URLS=` / `SHOUTRRR_TITLE_PREFIX=[sb-xray]` / `SHOUTRRR_FORWARDER_PORT=18085` 三行(默认 dry-run,不外推),运维改两个字符就能接上 Telegram/Discord。
+  - **清理**:`scripts/shoutrrr-forwarder.py` 91 行物理删除;`test_smoke.sh` 必需文件清单同步为 `scripts/sb_xray/shoutrrr.py`。
+  - **测试**:新增 `tests/test_shoutrrr.py` 10 条(`_parse_urls` 4 种输入 / dry-run 不 spawn subprocess / 多 URL 成功路径 + 日志脱敏 / 非零 exit + stderr 透传回归 / subprocess 崩溃 / healthz 200 / 404 / POST 204 / POST 400 / `run()` env 回退),从 303 升至 **313 全绿**。
+  - **产品文档**:新增独立文档 `docs/07-event-bus-shoutrrr.md`(11 节 ~450 行),含 ASCII 架构图 + Mermaid 序列图 + 环境变量对照表 + Telegram 5 分钟快速开始(含 bot 提管理员/chat.id/409 冲突/`:` URL-encode 等所有真实踩坑)+ URL 语法速查 + 故障排查对照表 + payload 字段说明 + 降噪/多通道/trim 进阶 + 诊断命令集。`docs/features/0421-new-features-guide.md` §1 缩为引流段。
+  - **行为零变化**:对外 env var、监听端口 18085、webhook payload 格式、supervisord log 路径、`ENABLE_SHOUTRRR=false` trim 行为全部保持不变;升级只需 `docker compose up -d sb-xray --force-recreate` 重建容器让新 env 生效。
+
 - **GeoIP/GeoSite 规则库:Python 重写 + 持久化 (`geo_update.sh` 退役)**:
   - 新增 `scripts/sb_xray/geo.py`:httpx + `ThreadPoolExecutor(6)` 并行下载 6 个 `.dat`(Loyalsoldier/chocolate4u/runetfreedom),`os.replace` 原子写入,失败不污染旧缓存。
   - 规则库落盘目录从镜像内的临时路径 `/usr/local/bin/bin/` 迁移到持久化卷 `/geo`(`docker-compose.yml` 新增 `./geo:/geo`;Dockerfile 追加 `VOLUME /geo`)。容器重启不再重下 ~100 MB,首次冷启动 `/geo` 空目录时才全量下载。
