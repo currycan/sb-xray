@@ -271,7 +271,7 @@ docker exec sb-xray crontab -l | grep isp-retest
 ### 3.1 安全体系总览
 
 ```mermaid
-graph TD
+flowchart TD
     A["访问请求"] --> B{"携带 Token?"}
     B -- "是" --> C{"Token 正确?"}
     C -- "是" --> D["允许访问"]

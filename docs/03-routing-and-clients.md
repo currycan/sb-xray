@@ -133,10 +133,10 @@ flowchart LR
         L --> N["Policy-Priority 命中 super:+30\n最高优先级，无视延迟差距"]
     end
 
-    style I fill:#fdcb6e,stroke:#e17055,color:black
-    style J fill:#00b894,stroke:#00b894,color:white
-    style M fill:#74b9ff,color:white
-    style N fill:#a29bfe,color:white
+    style I fill:#fdcb6e,stroke:#e0a33e,color:#333
+    style J fill:#00b894,stroke:#009577,color:#fff
+    style M fill:#0984e3,stroke:#0566b3,color:#fff
+    style N fill:#a29bfe,stroke:#6c5ce7,color:#fff
 ```
 
 #### 启动日志结构示例
@@ -220,7 +220,7 @@ flowchart LR
 - **Policy-Priority（定级）**：只负责给范围内的候选者进行「多维打分」。例如，同等条件下，优质节点加分，Reality 协议加分。
 
 ```mermaid
-graph LR
+flowchart LR
     A["全网几百个节点"] --> B("Filter: 筛选阶段")
     B -->|"保留所需节点"| C{"Policy-Priority: 评分阶段"}
     C -->|"分析节点名称"| D["地区偏好权重"]
@@ -229,9 +229,9 @@ graph LR
     D & E & F --> G(("总得分最高者"))
     G --> H["节点上任服务"]
 
-    style B fill:#e1f5fe,stroke:#03a9f4,stroke-width:2px
-    style C fill:#fff3e0,stroke:#ff9800,stroke-width:2px
-    style G fill:#e8f5e9,stroke:#4caf50,stroke-width:3px
+    style B fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    style C fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    style G fill:#00b894,stroke:#009577,stroke-width:3px,color:#fff
 ```
 
 ### 2.2 节点命名架构与特征提取
@@ -404,7 +404,7 @@ proxy-groups:
 ### 3.1 清洗流转架构
 
 ```mermaid
-graph TD
+flowchart TD
     A["输入: 原始混杂的 Proxy 节点列表"] --> F0
 
     subgraph Pipeline
@@ -420,8 +420,8 @@ graph TD
 
     R --> Z["输出: 标准化的 Proxy 节点列表"]
 
-    style A fill:#f9f,stroke:#333,stroke-width:2px
-    style Z fill:#6f9,stroke:#333,stroke-width:2px
+    style A fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    style Z fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
 ```
 
 ### 3.2 核心清洗动作

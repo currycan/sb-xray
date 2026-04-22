@@ -45,20 +45,22 @@
 以下图表展示了当一个请求到达服务器时，它所经历的完整路径。
 
 ```mermaid
-graph TD
-    classDef entry fill:#f96,stroke:#333,stroke-width:2px,color:white
-    classDef nginx fill:#61dafb,stroke:#333,stroke-width:2px,color:black
-    classDef xray fill:#b19cd9,stroke:#333,stroke-width:2px,color:white
-    classDef sing fill:#98fb98,stroke:#333,stroke-width:2px,color:black
-    classDef app fill:#f4a460,stroke:#333,stroke-width:2px,color:white
+flowchart TD
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef gateway  fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef sing     fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#333
+    classDef app      fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
+    classDef outbound fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef external fill:#2d3436,stroke:#636e72,stroke-width:3px,color:#fff
 
-    User((用户 / 客户端))
+    User(["用户 / 客户端"]):::entry
 
-    subgraph 外部端口监听
-        P443["端口 443 TCP/UDP"]:::entry
-        PHysteria["Hysteria2 端口 UDP"]:::entry
-        PTuic["TUIC 端口 UDP"]:::entry
-        PAnyTLS["AnyTLS 端口 TCP"]:::entry
+    subgraph Ports ["外部端口监听"]
+        P443["端口 443<br/>TCP + UDP"]:::entry
+        PHysteria["Hysteria2 端口<br/>UDP"]:::entry
+        PTuic["TUIC 端口<br/>UDP"]:::entry
+        PAnyTLS["AnyTLS 端口<br/>TCP"]:::entry
     end
 
     User ==> P443
@@ -66,43 +68,42 @@ graph TD
     User ==> PTuic
     User ==> PAnyTLS
 
-    subgraph 内部核心路由
-        NginxStream{{"Nginx Stream 分流器"}}:::nginx
-        NginxWeb{{"Nginx Web 服务"}}:::nginx
+    subgraph Core ["内部核心路由"]
+        NginxStream{{"Nginx Stream 分流器"}}:::gateway
+        NginxWeb{{"Nginx Web 服务"}}:::gateway
         XrayReality(("Xray Reality 核心")):::xray
-        XrayHy2(("Xray Hy2 核心<br/>2026-04 迁入")):::xray
-        SingBox(("Sing-box 核心<br/>仅 TUIC/AnyTLS")):::sing
-        UDS_Reality["udsreality.sock"]
-        UDS_CDN["cdnh2.sock SSL"]
-        UDS_Nginx["nginx.sock 明文"]
+        XrayHy2(("Xray Hy2 核心")):::xray
+        SingBox(("Sing-box 核心<br/>TUIC / AnyTLS")):::sing
+        UDS_Reality["udsreality.sock"]:::app
+        UDS_CDN["cdnh2.sock (TLS)"]:::app
+        UDS_Nginx["nginx.sock (明文)"]:::app
     end
 
-    P443 -- TCP 流量 --> NginxStream
-    P443 -- UDP/QUIC 流量 --> NginxWeb
+    P443 -- "TCP 流量" --> NginxStream
+    P443 -- "UDP / QUIC 流量" --> NginxWeb
 
     NginxStream -- "伪装域名 SNI" --> UDS_Reality --> XrayReality
     NginxStream -- "CDN 域名 SNI" --> UDS_CDN --> NginxWeb
 
-    XrayReality -- "Vision 验证通过" --> ProxyOut1["代理流量出站"]:::xray
+    XrayReality -- "Vision 验证通过" --> ProxyOut1["代理流量出站"]:::outbound
     XrayReality -- "非 Vision 流量" --> UDS_Nginx
     UDS_Nginx --> NginxWeb
 
-    PHysteria --> XrayHy2
-    XrayHy2 --> ProxyOut1
+    PHysteria --> XrayHy2 --> ProxyOut1
     PTuic --> SingBox
     PAnyTLS --> SingBox
-    SingBox --> ProxyOut2["代理流量出站"]:::sing
+    SingBox --> ProxyOut2["代理流量出站"]:::outbound
 
-    ProxyOut1 -.-> ISPAuto["isp-auto 健康选优\n(urltest / balancer)"]:::entry
+    ProxyOut1 -.-> ISPAuto["isp-auto 健康选优<br/>(urltest / balancer)"]:::outbound
     ProxyOut2 -.-> ISPAuto
-    ISPAuto -.-> ISP["ISP 落地代理池"]:::entry
-    ISPAuto -.-> DirectFB["direct 回退"]
-    ProxyOut1 --> Internet((互联网))
+    ISPAuto -.-> ISP["ISP 落地代理池"]:::outbound
+    ISPAuto -.-> DirectFB["direct / block 回退"]:::app
+    ProxyOut1 --> Internet(["互联网"]):::external
     ProxyOut2 --> Internet
     ISP --> Internet
     DirectFB --> Internet
 
-    subgraph 内部应用与服务
+    subgraph Apps ["内部应用与服务"]
         AppXHTTP["Xray XHTTP 协议"]:::xray
         AppVMess["Xray VMess 协议"]:::xray
         AppWeb["伪装站点 / 404"]:::app
@@ -111,11 +112,11 @@ graph TD
         AppFiles["Dufs 文件服务"]:::app
     end
 
-    NginxWeb -- "路径 /xhttp 通过 gRPC" --> AppXHTTP
-    NginxWeb -- "路径 /vmess 通过 WS" --> AppVMess
-    NginxWeb -- "路径 /xui" --> AppXUI
-    NginxWeb -- "路径 /sui" --> AppSUI
-    NginxWeb -- "路径 /myfiles" --> AppFiles
+    NginxWeb -- "/xhttp (gRPC)" --> AppXHTTP
+    NginxWeb -- "/vmess (WS)" --> AppVMess
+    NginxWeb -- "/xui" --> AppXUI
+    NginxWeb -- "/sui" --> AppSUI
+    NginxWeb -- "/myfiles" --> AppFiles
     NginxWeb -- "其他路径" --> AppWeb
 ```
 
@@ -124,44 +125,48 @@ graph TD
 外部流量如何进入服务器的物理端口。
 
 ```mermaid
-graph TD
+flowchart TD
     User((外部客户端))
     subgraph 边缘网关监听层
         P443["TCP/UDP 443 端口 由 Nginx 接管"]:::entry
-        PHy2["Hy2 UDP 6443 由 Xray 接管 (2026-04 迁入)"]:::entry
+        PHy2["Hy2 UDP 6443 由 Xray 接管"]:::entry
         PHigh["TUIC/AnyTLS 高位端口 由 Sing-box 接管"]:::entry
     end
     User -->|"伪装域名 / CDN 域名"| P443
     User -->|"UDP 6443 Hysteria2 竞速"| PHy2
     User -->|"TUIC/AnyTLS 直连"| PHigh
-    classDef entry fill:#f96,stroke:#333,stroke-width:2px,color:white
+    classDef entry fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
 ```
 
-* **解释**：Hysteria2（2026-04 起由 **Xray** 原生承载）/ TUIC / AnyTLS 等协议基于纯 UDP 或 QUIC，拥有极强的抗丢包特性，因此直接绕过 Nginx，监听独立的随机高位端口，实现暴力竞速。
+* **解释**：Hysteria2（由 Xray 原生承载）/ TUIC / AnyTLS 等协议基于纯 UDP 或 QUIC，拥有极强的抗丢包特性，因此直接绕过 Nginx，监听独立的随机高位端口，实现暴力竞速。
 
 ### 2.3 视角二：Reality 核心鉴权与回落
 
 当流量通过 443 端口进入系统后，Xray Reality 是如何处理它的。
 
 ```mermaid
-graph TD
-    Start["流量到达 UDS Reality 入口"] --> Handshake{"Reality TLS 握手合法?"}
+flowchart TD
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef external fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
 
-    Handshake -- "失败: SNI不匹配或恶意盲扫" --> Bypass["透明管道: 直连 Target 站点"]
-    Bypass --> Reject["表现为真实的 Cloudflare 网站 完美伪装"]
+    Start(["流量到达 UDS Reality 入口"]):::entry --> Handshake{"Reality TLS<br/>握手合法?"}:::decision
 
-    Handshake -- "成功: 解密 TLS" --> CheckUser{"VLESS 身份验证?"}
+    Handshake -- "SNI 不匹配或恶意盲扫" --> Bypass["透明管道<br/>直连 target 站点"]:::external
+    Bypass --> Reject["表现为真实的<br/>Cloudflare 网站(完美伪装)"]:::external
 
-    CheckUser -- "成功: UUID/Flow 正确" --> Vision["Xray Vision 核心"]
-    Vision --> VLESS_Proxy["代理上网"]
+    Handshake -- "解密 TLS 成功" --> CheckUser{"VLESS 身份验证?"}:::decision
 
-    CheckUser -- "失败: 非 VLESS 协议" --> Fallback["触发默认 Fallback"]
+    CheckUser -- "UUID / Flow 正确" --> Vision["Xray Vision 核心"]:::process
+    Vision --> VLESS_Proxy["代理上网"]:::process
 
-    Fallback -- "xver: 1 携带真实IP" --> Nginx["转发至 nginx.sock"]
+    CheckUser -- "非 VLESS 协议" --> Fallback["触发默认 Fallback"]:::process
+    Fallback -- "xver:1 携带真实 IP" --> Nginx["转发至 nginx.sock"]:::process
 
-    Nginx --> Analyze{"Nginx 分析 Path"}
-    Analyze -- "/xhttp" --> XHTTP["转发至 Xray Xhttp"]
-    Analyze -- "其他路径" --> WebPage["显示 404 或伪装页"]
+    Nginx --> Analyze{"Nginx 分析 Path"}:::decision
+    Analyze -- "/xhttp" --> XHTTP["转发至 Xray XHTTP"]:::process
+    Analyze -- "其他路径" --> WebPage["404 或伪装页"]:::external
 ```
 
 > **关键安全设计**：配置中限制了 `serverNames: ["${DEST_HOST}"]`。如果攻击者使用错误的 SNI 连接，Reality 直接将流量透传给 `target`。攻击者看到的永远是真实目标站点（如 Cloudflare 测速页面）的正规证书和页面。
@@ -171,17 +176,19 @@ graph TD
 对于走 CDN 通道或触发回落的流量，Nginx HTTP 引擎如何进行业务分发。
 
 ```mermaid
-graph TD
-    NginxWeb((Nginx Web 请求分发器))
+flowchart TD
+    classDef gateway  fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef app      fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
 
-    NginxWeb -- "URI: /xhttp 通过 gRPC" --> Xhttp["Xray XHTTP 安全隧道"]
-    NginxWeb -- "URI: /vmess 通过 WebSocket" --> VMess["Xray VMess CDN 兼容节点"]
-    NginxWeb -- "URI: /xui" --> XUI["X-UI 协议管理面板"]
-    NginxWeb -- "URI: /sui" --> SUI["S-UI 监控面板"]
-    NginxWeb -- "URI: /myfiles" --> Dufs["Dufs 私密文件网盘"]
-    NginxWeb -- "URI: 其他未知路径" --> FakeWeb["高纯度伪装站点 / 404"]
+    NginxWeb(("Nginx Web<br/>请求分发器")):::gateway
 
-    style NginxWeb fill:#61dafb,stroke:#333,color:black
+    NginxWeb -- "/xhttp (gRPC)" --> Xhttp["Xray XHTTP 安全隧道"]:::xray
+    NginxWeb -- "/vmess (WebSocket)" --> VMess["Xray VMess CDN 兼容节点"]:::xray
+    NginxWeb -- "/xui" --> XUI["X-UI 协议管理面板"]:::app
+    NginxWeb -- "/sui" --> SUI["S-UI 监控面板"]:::app
+    NginxWeb -- "/myfiles" --> Dufs["Dufs 私密文件网盘"]:::app
+    NginxWeb -- "其他路径" --> FakeWeb["伪装站点 / 404"]:::app
 ```
 
 ### 2.5 四大场景详细流程
@@ -211,7 +218,7 @@ graph TD
 
 * **适用协议**：Hysteria2 (UDP)、TUIC V5 (UDP)、AnyTLS (TCP)
 * **客户端行为**：连接服务器的**独立端口**（Hysteria2/TUIC 支持端口跳跃）
-* **流转过程**：流量直接到达独立端口。**Hysteria2 由 Xray 承载**（2026-04 起永久迁移，`templates/xray/04_hy2_inbounds.json`）；**TUIC / AnyTLS 仍由 Sing-box 承载**（`templates/sing-box/01_tuic_inbounds.json` / `02_anytls_inbounds.json`）。均不经过 Nginx。损耗最小。
+* **流转过程**：流量直接到达独立端口。**Hysteria2 由 Xray 承载**（`templates/xray/04_hy2_inbounds.json`）；**TUIC / AnyTLS 由 Sing-box 承载**（`templates/sing-box/01_tuic_inbounds.json` / `02_anytls_inbounds.json`）。均不经过 Nginx，损耗最小。
 
 #### 场景四：管理与维护
 
@@ -249,11 +256,15 @@ graph TD
 * **局限**: 无法同时作为标准 HTTPS Web 服务器，CDN 流量配置繁琐。
 
 ```mermaid
-graph LR
-    User -->|"TCP 443"| Xray("Xray 核心 Reality 监听")
-    Xray -- "Reality 流量" --> Proxy["代理处理"]
-    Xray -- "非 Reality 回落" --> LocalWeb("本地 Nginx/Caddy")
-    LocalWeb -- "80/8080 端口" --> App["伪装网站"]
+flowchart LR
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef app      fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
+
+    User(["用户"]):::entry -- "TCP 443" --> Xray(("Xray Reality 监听")):::xray
+    Xray -- "Reality 流量" --> Proxy["代理处理"]:::xray
+    Xray -- "非 Reality 回落" --> LocalWeb(("本地 Nginx / Caddy")):::app
+    LocalWeb -- "80 / 8080 端口" --> App["伪装网站"]:::app
 ```
 
 ### 方案 B：Nginx 前置（本项目架构）
@@ -261,17 +272,24 @@ graph LR
 * **特点**: Nginx 独占 443，分流精确，支持 Reality 回落与 CDN 流量共存。
 
 ```mermaid
-graph LR
-    User -->|"TCP 443"| Stream("Nginx Stream")
-    Stream -- "SNI: 伪装域名" --> Reality("Xray Reality")
-    Stream -- "SNI: CDN 域名" --> WebSSL("Nginx Web SSL")
-    Reality -- "Vision 流量" --> Out1["直连出站"]
-    Reality -- "Fallback 明文" --> WebPlain("Nginx Web Plain")
-    WebSSL -- "解密后" --> AppRoute{"路由分发"}
+flowchart LR
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef gateway  fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef app      fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
+
+    User(["用户"]):::entry -- "TCP 443" --> Stream(("Nginx Stream")):::gateway
+    Stream -- "SNI: 伪装域名" --> Reality(("Xray Reality")):::xray
+    Stream -- "SNI: CDN 域名" --> WebSSL(("Nginx Web SSL")):::gateway
+    Reality -- "Vision 流量" --> Out1["直连出站"]:::process
+    Reality -- "Fallback 明文" --> WebPlain(("Nginx Web Plain")):::gateway
+    WebSSL -- "解密后" --> AppRoute{"路由分发"}:::decision
     WebPlain --> AppRoute
-    AppRoute -- "/xhttp" --> Xhttp("Xray Xhttp")
-    AppRoute -- "/xui" --> Panel["管理面板"]
-    AppRoute -- "/vmess" --> VMess("Xray VMess")
+    AppRoute -- "/xhttp" --> Xhttp(("Xray XHTTP")):::xray
+    AppRoute -- "/xui" --> Panel["管理面板"]:::app
+    AppRoute -- "/vmess" --> VMess(("Xray VMess")):::xray
 ```
 
 ### 深度优劣势对比
@@ -324,60 +342,79 @@ Entrypoint 有三个子命令:
 
 ### 5.1 整体生命周期流转图
 
+下图把上节 15 段流水线按**职能**聚合成 5 个阶段,展示从容器冷启动到 supervisord 接管的完整路径,以及唯一一处可以"秒速开机"的缓存短路。
+
 ```mermaid
-graph TD
-    classDef init fill:#2d3436,stroke:#74b9ff,stroke-width:2px,color:#fff
-    classDef vars fill:#0984e3,stroke:#74b9ff,stroke-width:2px,color:#fff
-    classDef cert fill:#e17055,stroke:#fab1a0,stroke-width:2px,color:#fff
-    classDef server fill:#00b894,stroke:#55efc4,stroke-width:2px,color:#fff
-    classDef client fill:#6c5ce7,stroke:#a29bfe,stroke-width:2px,color:#fff
-    classDef final fill:#d63031,stroke:#ff7675,stroke-width:3px,color:#fff
+flowchart TB
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef data     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef external fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
+    classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:3px,color:#fff
 
-    Start(("Docker 容器启动")):::init
+    Start(["Docker 容器启动<br/>dumb-init → entrypoint.py run"]):::entry
 
-    subgraph S1 ["阶段一: 助手加载区"]
-        A["加载日志、颜色及统一样式"]:::init
-        B["加载 http_probe 网络探针核"]:::init
+    subgraph P1 ["① 环境加载"]
+        direction TB
+        L1["读取 ENV_FILE / STATUS_FILE / SECRET_FILE"]:::process
+        L2["基础网络探测<br/>IP_TYPE · GeoIP · 受限地区标志"]:::process
+        L1 --> L2
     end
 
-    subgraph S2 ["阶段二: 变量加工与体检判定区"]
-        C["获取 IP Type/GeoIP 等属性存入冷盘"]:::vars
-        D{"缓存 status/sb-xray 是否存留?"}:::vars
-        E["深度测速与多维媒体探测"]:::vars
-        F["写回风控数据并选出最优 ISP_TAG"]:::vars
-        D -- "有缓存 秒速开机" --> G
-        D -- "无缓存或强制重配" --> E
-        E --> F
+    subgraph P2 ["② 测速选路"]
+        direction TB
+        D1{"STATUS_FILE 中<br/>ISP_LAST_RETEST_TS<br/>在缓存 TTL 内?"}:::decision
+        S1["逐 ISP 节点带宽实测<br/>按 Mbps 排序写入 STATUS_FILE"]:::process
+        S2["流媒体/AI 可达性探针<br/>计算 *_OUT 策略"]:::process
+        S3["读缓存 speeds<br/>后台线程异步刷新"]:::data
+        D1 -- "命中" --> S3
+        D1 -- "未命中/过期" --> S1 --> S2
     end
 
-    subgraph S3 ["阶段三: 证书加密流"]
-        G["云端 Acme.sh TLS 获取"]:::cert
-        H["DH Key 参数安全防爆生成"]:::cert
+    subgraph P3 ["③ 证书与密钥"]
+        direction TB
+        C1["ACME TLS 证书申请/续签<br/>acme.sh (Let's Encrypt / ZeroSSL / Google)"]:::process
+        C2["UUID · Reality 密钥对 · MLKEM768 种子<br/>首次生成并持久化到 SECRET_FILE"]:::process
+        C3["DH 参数<br/>(首次 ~30s,后续秒级)"]:::process
+        C1 --> C2 --> C3
     end
 
-    subgraph S4 ["阶段四和五: 离线构建与装配区"]
-        I["组装客户端 Clash YAML 规则集"]:::client
-        J["渲染 Xray/Sing-box JSON 配置"]:::server
-        K["装配 Nginx Auth 与 Fail2ban 边界防护"]:::server
-        L["X-UI / S-UI 面板帐密配置"]:::server
-        M["整合外部 Provider 云分发规则"]:::client
+    subgraph P4 ["④ 配置渲染与装配"]
+        direction TB
+        R1["出站 JSON 装配<br/>isp-auto / 按服务分桶 balancer"]:::process
+        R2["模板渲染<br/>xray · sing-box · nginx · supervisord"]:::process
+        R3["按 ENABLE_* 开关裁剪 daemon.ini<br/>关闭小内存节点的可选子进程"]:::process
+        R4["X-UI / S-UI 数据库初始化<br/>Nginx htpasswd 凭据"]:::process
+        R5["Cron 安装<br/>geo-update (03:00) · isp-retest (每 6h)"]:::process
+        R1 --> R2 --> R3 --> R4 --> R5
     end
 
-    Z(("移交 Supervisord 接管全场")):::final
+    subgraph P5 ["⑤ 接管常驻服务"]
+        direction TB
+        F1["打印订阅链接 banner"]:::process
+        F2[["os.execvp('supervisord', ...)<br/>Python 进程退出<br/>supervisord 成为新 PID 1"]]:::terminal
+        F1 --> F2
+    end
 
-    Start --> A
-    A --> B
-    B --> C
-    C --> D
-    F --> G
-    G --> H
-    H --> I
-    I --> J
-    J --> K
-    K --> L
-    L --> M
-    M --> Z
+    Daemons[["xray · sing-box · nginx · cron · X-UI / S-UI / shoutrrr-forwarder<br/>(supervisord 守护,策略在 daemon.ini 中声明)"]]:::external
+
+    Start --> P1 --> P2
+    S2 --> P3
+    S3 --> P3
+    P3 --> P4 --> P5
+    F2 -.接管.-> Daemons
 ```
+
+**图例**: 🔵 入口 / ① 起点　🟢 常规处理步骤　🟡 运行时决策点　🟣 数据读写(缓存 / 密钥持久化)　⚫ 进程移交(`os.execvp` 替换当前进程)　⬜ 移交后由 supervisord 守护的外部服务。
+
+**阅读导引**:
+
+1. **①→②** 是「我在哪、怎么连外网」的体检。`ENV_FILE` 读用户声明,`STATUS_FILE` 读上次运行的缓存,`SECRET_FILE` 读持久化密钥;紧接着用 ipapi.is / ip.sb / ip111.cn 三路探测判 IP 类型与地区。
+2. **②** 是整条流水线中**唯一的性能短路**。`ISP_SPEED_CACHE_TTL_MIN`(默认 60 分钟)窗口内冷启动不跑实测,读缓存直接进入 ③;同时起一个后台线程异步跑实测,结果写回 `STATUS_FILE`。缓存过期则串行跑带宽实测 + 服务可达性探针。
+3. **③** 是唯一对外部系统强依赖的阶段。证书阶段命中 ACME CA,密钥阶段仅首次生成、之后恒等读缓存;DH 参数首次较慢是单次成本。
+4. **④** 全部离线完成 — 拿 ② 得出的 speeds、③ 得出的证书和密钥,渲染出 xray / sing-box / nginx / supervisord 的完整配置,再按 `ENABLE_*` 开关裁剪 `daemon.ini`。
+5. **⑤** 用 `os.execvp` 把当前 Python 进程替换为 supervisord。替换之后 Python 上下文整体消失,supervisord 以 PID 1 身份接管 xray / sing-box / nginx / cron 等常驻进程。
 
 ### 5.2 各层核心功能透视
 
