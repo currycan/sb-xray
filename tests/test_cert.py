@@ -11,9 +11,10 @@ from sb_xray import cert
 
 
 class _FakeCompleted:
-    def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
         self.returncode = returncode
         self.stdout = stdout
+        self.stderr = stderr
 
 
 def test_default_ssl_path_reads_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,6 +335,26 @@ def test_issue_nonzero_exit_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(RuntimeError, match=r"acme\.sh --issue exited 1"):
         cert.ensure_certificate(name="bundle", params="vpn.example.com:ali", ssl_path=ssl_path)
+
+
+def test_issue_failure_hint_rate_limit() -> None:
+    """CA rate-limit (retryafter=) → hint mentions ACMESH_SERVER_NAME swap."""
+    acme_out = "[...] The retryafter=86400 value is too large (> 600), will not retry anymore."
+    hint = cert._issue_failure_hint(acme_out, server="zerossl", first_domain="a.b")
+    assert "rate-limited" in hint
+    assert "ACMESH_SERVER_NAME=letsencrypt" in hint
+
+
+def test_issue_failure_hint_dns_credentials() -> None:
+    """Missing DNS creds → hint mentions ALI_KEY/CF_TOKEN."""
+    acme_out = "You don't specify aliyun api key and secret yet."
+    hint = cert._issue_failure_hint(acme_out, server="zerossl", first_domain="a.b")
+    assert "ALI_KEY" in hint and "CF_TOKEN" in hint
+
+
+def test_issue_failure_hint_generic_fallback() -> None:
+    hint = cert._issue_failure_hint("random failure text", server="zerossl", first_domain="a.b")
+    assert "DNS credentials" in hint  # generic-but-actionable fallback
 
 
 def test_acme_env_translates_dns_credential_names(

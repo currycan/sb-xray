@@ -11,6 +11,7 @@ from __future__ import annotations
 import enum
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -100,6 +101,45 @@ def _acme_env() -> dict[str, str]:
         if value and not env.get(dst):
             env[dst] = value
     return env
+
+
+def _issue_failure_hint(output: str, *, server: str, first_domain: str) -> str:
+    """Translate common acme.sh --issue failure patterns to actionable hints.
+
+    The raw "exited N" message is almost never enough: operators want
+    to know WHY and WHAT TO DO. This helper scans acme.sh's own
+    stdout+stderr for known failure signatures and emits a
+    single-line operator-directed hint.
+    """
+    lower = output.lower()
+    if "retryafter=" in lower or "rate limit" in lower or "too many" in lower:
+        return (
+            f"CA '{server}' rate-limited this account (retry-after / rate-limit "
+            "hit — often from accumulated pending orders after earlier failed "
+            "attempts). Remediation: wait 24h OR switch to a different CA by "
+            "setting ACMESH_SERVER_NAME=letsencrypt (or google/buypass) in "
+            "docker-compose and restarting."
+        )
+    if "you don't specify" in lower or ("dns_ali.sh" in lower and "error" in lower):
+        return (
+            "DNS plugin rejected the credentials. Verify "
+            "ALI_KEY/ALI_SECRET (for aliyun) and CF_TOKEN/CF_ZONE_ID/"
+            "CF_ACCOUNT_ID (for cloudflare) in SECRET_FILE."
+        )
+    if "dns problem" in lower or "nxdomain" in lower:
+        return (
+            f"DNS lookup of {first_domain} or its TXT challenge failed. "
+            "Check public DNS propagation and zone delegation."
+        )
+    if "account" in lower and ("quota" in lower or "limit" in lower):
+        return (
+            f"CA '{server}' account-level quota hit. Wait or switch CA "
+            "(ACMESH_SERVER_NAME=letsencrypt/google/buypass)."
+        )
+    return (
+        "Check DNS credentials (ALI_KEY/ALI_SECRET, CF_TOKEN/CF_ZONE_ID/"
+        "CF_ACCOUNT_ID) and acme.sh output above."
+    )
 
 
 def _parse_params(params: str) -> list[tuple[str, str]]:
@@ -208,18 +248,28 @@ def ensure_certificate(
     # file or directory" and silently "succeeded" with no files on
     # disk).
     _register_account()
-    issue_rc = subprocess.run(
+    issue_result = subprocess.run(
         ["acme.sh", *_build_issue_args(params, server)],
         check=False,
         env=_acme_env(),
-    ).returncode
+        capture_output=True,
+        text=True,
+    )
+    # Stream acme.sh's output live so boot logs still show it; we only
+    # capture to pattern-match for hints below.
+    if issue_result.stdout:
+        sys.stdout.write(issue_result.stdout)
+    if issue_result.stderr:
+        sys.stderr.write(issue_result.stderr)
+    issue_rc = issue_result.returncode
     if issue_rc not in (0, 2):
         # 0 = issued now; 2 = already valid, skip (acme.sh convention).
-        raise RuntimeError(
-            f"acme.sh --issue exited {issue_rc} for {first_domain}; "
-            "check DNS credentials (ALI_KEY/ALI_SECRET, CF_TOKEN/CF_ZONE_ID/CF_ACCOUNT_ID)"
-            " and acme.sh log"
+        hint = _issue_failure_hint(
+            issue_result.stdout + issue_result.stderr,
+            server=server,
+            first_domain=first_domain,
         )
+        raise RuntimeError(f"acme.sh --issue exited {issue_rc} for {first_domain}. {hint}")
 
     ssl_path.mkdir(parents=True, exist_ok=True)
     # 证书安装前清空 nginx 动态配置目录 (entrypoint.sh:899 等价)。
