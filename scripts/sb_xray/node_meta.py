@@ -4,7 +4,7 @@ Reads ``GEOIP_INFO``, ``DOMAIN``, ``ISP_TAG``, ``IS_8K_SMOOTH``, ``IP_TYPE``
 from ``os.environ`` and writes the derived presentation fields back into
 ``os.environ`` so ``subscription._remark`` and ``display`` can render them:
 
-* ``NODE_NAME``    — first label of ``DOMAIN`` (e.g. ``jp.ansandy.com`` → ``jp``)
+* ``NODE_NAME``    — first label of ``DOMAIN`` (e.g. ``jp.example.com`` → ``jp``)
 * ``NODE_IP``      — portion of ``GEOIP_INFO`` after the first ``|``
 * ``REGION_INFO``  — portion before the ``|`` (e.g. ``Tokyo Japan``)
 * ``FLAG_INFO``    — emoji flag matching ``REGION_INFO``

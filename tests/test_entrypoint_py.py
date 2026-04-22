@@ -213,7 +213,7 @@ def test_load_env_file_overrides_empty_dockerfile_env(
     ``source`` would overwrite the empty placeholder. Python must too,
     otherwise ``cert.ensure_certificate`` sees empty strings as
     'missing' (``os.environ.get(k)`` is falsy for ``""``) and the ACME
-    stage fails — exactly the bug hit on cn2 prod after 4 fix attempts.
+    stage fails — exactly the bug hit on production after 4 fix attempts.
     """
     secret_file = tmp_path / "secret"
     secret_file.write_text(
@@ -491,7 +491,7 @@ def test_issue_bundle_certificate_raises_when_files_missing_post_install(
     silent failure (wrong DNS cred etc.) returns INSTALLED without
     writing files. Without post-install verification, downstream
     nginx/xray then hit 'no such file' and restart-loop forever — the
-    exact failure pattern observed on cn2 prod."""
+    exact failure pattern observed on production."""
     import sb_xray.cert as sbcert
 
     monkeypatch.setenv("DOMAIN", "vpn.example.com")

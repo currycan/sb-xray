@@ -18,7 +18,7 @@
 
 [MetaCubeX/meta-rules-dat: rules-dat for mihomo](https://github.com/MetaCubeX/meta-rules-dat)
 
-https://mylink.ansandy.top/sub?
+https://sub.example.com/sub?
 http://172.18.18.254:25500/sub?
 
 https://raw.githubusercontent.com/currycan/sb-xray/main/sources/ACL4SSR/Blacklist-Full.ini

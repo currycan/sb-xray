@@ -85,7 +85,7 @@ def _acme_env() -> dict[str, str]:
        right before the --issue call. Skipping the translation in the
        Python port caused ``dns_ali`` to log
        "You don't specify aliyun api key and secret yet."
-       and acme.sh exited 1 — the exact cn2 prod failure.
+       and acme.sh exited 1 — the exact production failure.
     """
     env = os.environ.copy()
     env.pop("LOG_LEVEL", None)
@@ -244,8 +244,8 @@ def ensure_certificate(
     # brittle — acme.sh --list prints the Main_Domain column even when
     # the underlying ${LE_CONFIG_HOME}/<domain>_ecc/ca.cer is gone
     # (observed on cn2 after a failed past attempt: --list lied about
-    # having cn2.ansandy.com, we skipped --issue, --install-cert then
-    # errored with "cat: /acmecerts/cn2.ansandy.com_ecc/ca.cer: No such
+    # having vpn.example.com, we skipped --issue, --install-cert then
+    # errored with "cat: /acmecerts/vpn.example.com_ecc/ca.cer: No such
     # file or directory" and silently "succeeded" with no files on
     # disk).
     _register_account()

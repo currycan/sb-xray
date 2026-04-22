@@ -35,7 +35,7 @@
       - SHOUTRRR_URLS=telegram://BOT_TOKEN@telegram?chats=@YOUR_CHANNEL
       # 也支持多通道并发（逗号分隔）
       # - SHOUTRRR_URLS=telegram://...,discord://TOKEN@WEBHOOK_ID
-      - SHOUTRRR_TITLE_PREFIX=[sb-xray-bracknerd]
+      - SHOUTRRR_TITLE_PREFIX=[sb-xray-<NODE>]
 ```
 
 `SHOUTRRR_URLS=""`（默认）时 forwarder 进入 dry-run 模式，事件只写入 `/var/log/supervisor/shoutrrr-forwarder.out.log`，不发外部通知。
@@ -262,7 +262,7 @@ docker exec sb-xray sh -c 'ls /sb-xray/xray/ | grep xicmp && cat /proc/self/stat
 # 期望：05_xicmp_emergency_inbounds.json 存在；CapEff 含 cap_net_raw
 
 # 客户端测试（需要有 XICMP client 工具或自建 xray client）
-ping bracknerd.ansandy.com  # 确认 ICMP 可达
+ping vpn.example.com  # 确认 ICMP 可达
 # 然后用 xray client 通过 XICMP outbound 访问任一 HTTPS 站
 ```
 

@@ -38,7 +38,7 @@ def test_envsubst_preserves_unset_references(env: Path) -> None:
     vars — GNU envsubst leaves them untouched. Replacing with empty
     string collapses ``map $src $dst {...}`` into ``map   {...}``
     which nginx rejects with 'invalid number of arguments in map
-    directive' (the exact failure observed on cn2 prod)."""
+    directive' (the exact failure observed on production)."""
     # Unset → keep literal form
     assert cb._envsubst("$FOO-$BAR") == "$FOO-$BAR"
     assert cb._envsubst("${FOO}:${BAZ}") == "${FOO}:${BAZ}"

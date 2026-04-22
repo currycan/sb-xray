@@ -22,7 +22,7 @@ def test_default_ssl_path_reads_env_var(tmp_path: Path, monkeypatch: pytest.Monk
     render ``${SSL_PATH}`` (``/pki`` by Dockerfile) so nginx / xray /
     sing-box look for certs under ``/pki/sb_xray_bundle.crt`` while the
     old Python default wrote them to ``/ssl/`` → infinite nginx/xray
-    restart loop observed on cn2 prod."""
+    restart loop observed on production."""
     ssl_path = tmp_path / "pki"
     ssl_path.mkdir()
     for suffix in (".crt", ".key", "-ca.crt"):
@@ -92,8 +92,6 @@ def test_issue_when_cert_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     # a cert whose files on disk were gone, causing --install-cert to
     # silently fail).
     assert "--register-account" in acme_flags
-    assert "--issue" in acme_flags
-    assert "--install-cert" in acme_flags
     assert "--issue" in acme_flags
     assert "--install-cert" in acme_flags
 
@@ -310,7 +308,7 @@ def test_install_quits_reloadcmd_nginx_and_clears_pid(
 
 def test_issue_nonzero_exit_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: acme.sh --issue returning a bad code must abort the
-    stage. Observed on cn2 prod — the acme.sh store was stale (leftover
+    stage. Observed on production — the acme.sh store was stale (leftover
     Main_Domain entry but no ca.cer), --issue silently failed and
     --install-cert then 'installed' non-existent files."""
     ssl_path = tmp_path / "ssl"
@@ -363,7 +361,7 @@ def test_issue_failure_hint_generic_fallback() -> None:
 def test_acme_env_translates_dns_credential_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression (cn2 prod): acme.sh's dns_ali / dns_cf plugins read
+    """Regression (production): acme.sh's dns_ali / dns_cf plugins read
     mixed-case names (Ali_Key / Ali_Secret / CF_Token / CF_Zone_ID /
     CF_Account_ID) but the SECRET_FILE convention — and bash
     entrypoint.sh's own SECRET_FILE — uses upper-case ALI_KEY etc.

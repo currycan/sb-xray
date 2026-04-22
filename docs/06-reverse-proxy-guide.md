@@ -9,7 +9,7 @@
 ## 0. 适用场景
 
 - 家里跑了 **NAS / HomeAssistant / 软路由 web 界面**，想在外网访问却没有公网 IP
-- 已有 sb-xray 公网节点（`bracknerd.ansandy.com` 等），不想再跑 frp / cloudflared tunnel
+- 已有 sb-xray 公网节点（`vpn.example.com` 等），不想再跑 frp / cloudflared tunnel
 - 希望**外部访问流量直接通过已有 REALITY 隧道**，不开新端口、不暴露家宽 IP
 
 ---
@@ -96,7 +96,7 @@ wget https://raw.githubusercontent.com/currycan/sb-xray/main/templates/reverse_b
 
 ```bash
 sed -i \
-  -e "s|\${DOMAIN}|bracknerd.ansandy.com|g" \
+  -e "s|\${DOMAIN}|vpn.example.com|g" \
   -e "s|\${LISTENING_PORT}|443|g" \
   -e "s|\${DEST_HOST}|speed.cloudflare.com|g" \
   -e "s|\${XRAY_REVERSE_UUID}|<你的 UUID>|g" \
@@ -193,7 +193,7 @@ bridge 断线时，公网端 Xray 的 observatory 会在 1 分钟内标记隧道
 |---|---|
 | `REALITY: processed invalid connection` | UUID / shortId 填错 |
 | `tls: handshake failure` | `XRAY_REALITY_PUBLIC_KEY` 填错，或 portal 侧 `DEST_HOST` 不一致 |
-| `i/o timeout` | 家宽禁出 443？先 `curl -v https://bracknerd.ansandy.com:443` |
+| `i/o timeout` | 家宽禁出 443？先 `curl -v https://vpn.example.com:443` |
 | `server rejects account` | reverse UUID 跟公网端 `XRAY_REVERSE_UUID` 不同 |
 
 ### portal 侧 route 命中但不走 reverse
