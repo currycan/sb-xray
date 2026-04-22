@@ -10,6 +10,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed（修复）
+
+- **Pre-release 识别改为依赖 GitHub API 元数据而非字符串匹配** —— 上一版用 `tags?per_page=100` + 正则排除 `rc|beta|alpha` 做 stable 过滤，当上游（如 XTLS）把 Pre-release 打成纯数字型 tag（`v26.4.17` 标记 `prerelease: true` 但 tag 名不含 rc/beta/alpha）时，字符串过滤会漏掉，CI 再次把 xray pin 回退为预览版。现 `build.sh:get_latest_stable_tag` 与 `daily-build.yml:get_stable_tag` 改为查 `releases?per_page=100` 并按 `prerelease == false` 布尔过滤 —— 这是 GitHub UI 判定 Pre-release 徽章的唯一真相源。两处注释保留了 v26.4.17 的历史教训，防后续维护者再次换回字符串过滤。同步把 CI 错误写回 `versions.json` 的 `xray: 26.4.17` 手动回退为 `26.3.27`。
+
+### Changed（变更）
+
+- **`build.sh`：`versions.json` 成为 versions + digests 的单一真相源**。原实现存在三方割裂:离线模式 `./build.sh default` 只读 digests、versions 用硬编码 fallback;无参模式每次打 GitHub API;Dockerfile ARG 又是第四套默认值 —— 三方可能漂移。现重构为两模式对称:
+  - `./build.sh`（默认离线）— versions + digests 都从 `versions.json` 读，完全不触网，与 CI 每日提交的产物位级一致
+  - `./build.sh refresh` — 拉 GitHub API → 写回 `versions.json` → 构建（等价 CI 动作）
+  - `./build.sh --local` — 单架构 linux/amd64 + `--load`,不推 registry;可与两模式组合
+  - `./build.sh default` / `./build.sh offline` 保留为离线模式别名
+  删除 `update_script_default()` 与 `VERSIONS_UPDATED` 机制（不再有需要回写的硬编码默认版本）；`check_version` 从 4 参数精简为 3 参数，版本缺失即 `exit 1`，消除隐式 fallback。
+- **`release.sh` 同步切到 stable release selector**。`docs/05-build-release.md §2 §4.1` 同步改写为两模式 CLI 说明 + 「`versions.json` 是单一真相源」导航。
+
+### Docs（文档）
+
+- **readme.md 精修**（净减 33 行）:
+  - §4 业务级智能路由分发 改写为三点，突出 `isp-auto` 健康选优闭环（带宽信号 probe URL / 按服务分桶 / 周期重测 / 策略驱动 fallback），链接到 01 §6.4 架构图
+  - §环境变量全集 从 6 张 `<details>` 子表（含若干已不存在的 ghost env）压缩为 11 行速查表 + 指向 `docs/04 §2` 的完整参考
+  - §目录结构 + §挂载卷补齐新增文件（`events.py` / `service_spec.py` / `stages/isp_retest.py` / `versions.json` / `CONTRIBUTING-diagrams.md`）与 `/geo` 持久化卷
+  - §开发与跨平台构建 CLI 更新为 `./build.sh` / `./build.sh refresh` 两模式
+  - §证书默认值纠错 `ACMESH_SERVER_NAME=letsencrypt`（与 Dockerfile 实际 ENV 一致，原表错标为 `zerossl`）
+  - §1.1 Sing-box 引擎描述与鸣谢章节里 "Hysteria2 于 2026-04 永久迁至 Xray" 改为中性表述
+
 ## [26.3.27] — 2026-04-22 · Hotfix: 稳定版回滚
 
 ### Fixed（修复）
