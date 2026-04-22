@@ -124,77 +124,31 @@ flowchart TD
 **1. 前置准备工作**
 确保您的宿主机已安装 Docker 环境，并放行了 TCP `80`、`443` 以及高位 UDP 端口（如果需要 Hysteria2 竞速）。准备好您的**主域名**与**CDN防护域名**，并将其 DNS 的 A 记录指向该服务器 IP。
 
-**2. 编写部署清单 (docker-compose.yml)**
+**2. 克隆并配置部署清单**
 
-```yaml
-services:
-  sb-xray:
-    image: docker.io/currycan/sb-xray:latest
-    container_name: sb-xray
-    environment:
-      - DOMAIN=$domain # 必填: 您的私有主域名
-      - CDNDOMAIN=$cdndomain # 必填: 您的 CDN 保护域名
-      - DECODE=$code # 可选: 自定义解码密钥
-      - ACMESH_DEBUG=1 # 证书调试日志级别 (0-2)
-      # CA 机构 (均支持 DNS-01 通配符)：
-      #   letsencrypt 无需 EAB，默认推荐
-      #   zerossl     acme.sh 自动申领 EAB；失败多次后会触发 retryafter=86400
-      #   google      需手动 EAB 凭据（Google Cloud Shell 获取，7 天内有效）
-      # 注意：buypass 不支持通配符，勿用
-      - ACMESH_SERVER_NAME=letsencrypt
-      # 仅 Google / 预分配 ZeroSSL EAB 时填；letsencrypt 忽略
-      - ACMESH_EAB_KID=$eab_kid
-      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key
-      - DEST_HOST=speed.cloudflare.com # Reality 伪装目标站点
-      - LISTENING_PORT=443 # 主监听端口
-      - DUFS_PATH_PREFIX=/myfiles # 文件服务 URL 前缀
-      - XUI_WEBBASEPATH=3xadmin # X-UI 面板访问路径
-      # Gemini 直连策略: true=直连, false=使用代理, 空=自动判断
-      - GEMINI_DIRECT=
-      # 节点名称后缀 (如: ✈ 高速)
-      - NODE_SUFFIX=
-      # ISP 落地代理: 留空则不启用
-      - DEFAULT_ISP=
-      # # 外部订阅源 (多个用换行分隔)
-      # - |
-      #   PROVIDERS=机场名称|https://<host>/api/v1/client/subscribe?token=xxx&flag=clash.meta|super
-    ports:
-      - "443:443/tcp"
-      - "443:443/udp" # UDP 端口用于 HTTP/3 (QUIC)
-    volumes:
-      - ./pki:/pki # TLS 证书存储
-      - ./acmecerts:/acmecerts # ACME 账户与中间证书
-      - ./.envs:/.env # 运行时环境变量缓存 (UUID/密钥等)
-      - ./sb-xray:/sb-xray # 生成的订阅文件与客户端配置
-      - ./x-ui:/etc/x-ui/ # X-UI 数据库 (持久化面板数据)
-      - ./x-ui:/x-ui/db # X-UI 数据库 (备份路径)
-      - ./s-ui:/s-ui/db # S-UI 数据库
-      - ./sub-store:/sub-store/data # Sub-Store 数据库
-      - ./nginx/http:/etc/nginx/conf.d # 自定义 Nginx HTTP 配置
-      - ./nginx/tcp:/etc/nginx/stream.d # 自定义 Nginx Stream 配置
-      - ./nginx-dhparam:/etc/nginx/dhparam # DH 密钥参数 (首次生成后缓存)
-      - ./data:/data # Dufs 文件服务数据存储
-      - ./logs:/var/log # 全部日志文件
-      # - /lib/modules:/lib/modules:ro              # 可选: 内核模块 (TUN 模式需要)
-    restart: always
-    tty: true
-    network_mode: host # 必须: 直接使用宿主机网络
-    # cap_add:                                      # 可选: TUN 透明代理需要
-    #   - NET_ADMIN
-    #   - SYS_MODULE
-    ulimits:
-      nproc: 65535
-      nofile:
-        soft: 65536
-        hard: 65536
+仓库根目录已提供维护好的 `docker-compose.yml`，克隆后只需修改 3 个必填环境变量：
+
+```bash
+git clone https://github.com/currycan/sb-xray.git
+cd sb-xray
+vim docker-compose.yml    # 改好以下 3 项后保存
 ```
 
-> **关键说明**：
+| 必填变量 | 示例 | 说明 |
+|---|---|---|
+| `DOMAIN` | `xray.example.com` | 主域名（Reality / 高位端口协议使用），DNS A 记录指向本机 |
+| `CDNDOMAIN` | `cdn.example.com` | CDN 保护域名（XHTTP / VMess-WS 使用），DNS CNAME 指向 CDN |
+| `DECODE` | `your-32-char-random-secret` | 订阅解码密钥（任意 32 位字符串） |
+
+可选的 CA 选择、节点后缀、流媒体路由、isp-auto 优化、小内存降载开关等均有合理默认值，参照 `docker-compose.yml` 文件内注释或 [完整配置指南](#-完整配置指南-configuration) 按需调整。
+
+> **架构选择要点**：
 >
-> - `network_mode: host` — 直接使用宿主机网络栈，避免 Docker NAT 带来的性能损耗和 UDP 转发问题
-> - `ports` 中同时声明了 TCP 和 UDP 443 — UDP 用于 HTTP/3 (QUIC) 协议支持
-> - `ulimits` — 将文件句柄数提升至 65536，防止高并发时出现 "too many open files" 错误
-> - `tty: true` — 保持终端分配，便于 `docker exec` 交互调试
+> - `network_mode: host` — 直连宿主机网络栈，绕过 Docker NAT 带来的 UDP 性能损耗与 QUIC / Hysteria2 端口跳跃限制
+> - `mem_limit: 460m` — 小内存 VPS 的安全围栏，防止 xray VSZ 暴涨触发宿主级 OOM；节点内存 ≥ 2 GB 时可放宽或移除
+> - `ulimits.nofile: 65536` — 高并发连接下避免 "too many open files"
+> - `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` — 小内存节点降载开关，每个组件注释里标了内存回收量
+> - `tty: true` — 保留终端分配，便于 `docker exec sb-xray bash` 交互排障
 
 **3. 一键启动引擎**
 
