@@ -90,13 +90,6 @@ jobs:
             validate_version "${tag#v}"
           }
 
-          # 获取 latest tag (去 v 前缀)
-          get_tag() {
-            local tag
-            tag=$(gh api "repos/$1/tags?per_page=1" --jq '.[0].name' 2>/dev/null || echo "")
-            validate_version "${tag#v}"
-          }
-
           echo "::group::Fetching latest versions"
           SHOUTRRR=$(get_release "containrrr/shoutrrr")
           MIHOMO=$(get_release "MetaCubeX/mihomo")

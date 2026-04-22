@@ -50,19 +50,6 @@ get_latest_release() {
     fi
 }
 
-# 辅助函数: 获取最新 Tag
-get_latest_tag() {
-    local repo=$1
-    local url="https://api.github.com/repos/$repo/tags"
-    local response=$(fetch_url "$url")
-
-    if [ -n "$response" ]; then
-        echo "$response" | jq -r '.[0].name'
-    else
-        echo ""
-    fi
-}
-
 # 辅助函数: 获取 GitHub Release JSON（按 repo@tag 文件缓存）
 # 相同 release 的多个 asset 只触发一次 API 调用，避免速率限额
 # 使用文件缓存而非关联数组，保持 bash 3.2 兼容（macOS /bin/bash）
