@@ -84,9 +84,56 @@ def test_sorts_by_speed_and_sets_fastest_env(monkeypatch: pytest.MonkeyPatch) ->
     assert os.environ["ISP_USER"] == "u2"
     assert os.environ["ISP_SECRET"] == "p2"
 
-    urltest = json.loads(out["SB_ISP_URLTEST"])
+    # SB_ISP_URLTEST ends with a trailing comma for template splice;
+    # strip it before re-parsing.
+    assert out["SB_ISP_URLTEST"].endswith(",")
+    urltest = json.loads(out["SB_ISP_URLTEST"].rstrip(","))
     assert urltest["type"] == "urltest"
     assert urltest["outbounds"][0] == "proxy-hk-isp"
+
+
+def test_sb_json_template_round_trips_to_valid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end regression: splice ``SB_CUSTOM_OUTBOUNDS`` +
+    ``SB_ISP_URLTEST`` into the exact sb.json outbounds skeleton and
+    confirm ``json.loads`` accepts it. Catches the line-44 ',' delimiter
+    crash observed on prod when either fragment drops its trailing comma."""
+    import json
+    from string import Template
+
+    monkeypatch.setenv("HAS_ISP_NODES", "true")
+    monkeypatch.setenv("FASTEST_PROXY_TAG", "proxy-hk-isp")
+    monkeypatch.setenv("HK_ISP_IP", "1.1.1.1")
+    monkeypatch.setenv("HK_ISP_PORT", "1081")
+    monkeypatch.setenv("HK_ISP_USER", "u")
+    monkeypatch.setenv("HK_ISP_SECRET", "p")
+    monkeypatch.setenv("CN2_ISP_IP", "2.2.2.2")
+    monkeypatch.setenv("CN2_ISP_PORT", "1080")
+    monkeypatch.setenv("CN2_ISP_USER", "u")
+    monkeypatch.setenv("CN2_ISP_SECRET", "p")
+
+    env = sbisp.build_client_and_server_configs(
+        speeds={"proxy-hk-isp": 120.0, "proxy-cn2-isp": 80.0}
+    )
+
+    # Minimal "outbounds" skeleton matching templates/sing-box/sb.json
+    # lines 35-46 verbatim (array with direct/block sentinels + 2 splice
+    # points).
+    skeleton = Template(
+        '{"outbounds":['
+        '{"type":"direct","tag":"direct"},'
+        "${SB_CUSTOM_OUTBOUNDS}"
+        "${SB_ISP_URLTEST}"
+        '{"type":"block","tag":"block"}'
+        "]}"
+    )
+    rendered = skeleton.substitute(
+        SB_CUSTOM_OUTBOUNDS=env["SB_CUSTOM_OUTBOUNDS"],
+        SB_ISP_URLTEST=env["SB_ISP_URLTEST"],
+    )
+    # MUST be valid JSON — this was broken on prod.
+    doc = json.loads(rendered)
+    tags = [o["tag"] for o in doc["outbounds"]]
+    assert tags == ["direct", "proxy-hk-isp", "proxy-cn2-isp", "isp-auto", "block"]
 
 
 def test_service_rules_use_env_or_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

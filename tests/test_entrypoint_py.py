@@ -145,7 +145,8 @@ def test_load_env_file_accepts_bareword_assignment(
     ):
         monkeypatch.delenv(key, raising=False)
 
-    ep._load_env_file(secret_file)
+    injected = ep._load_env_file(secret_file)
+    assert injected >= 7
     assert os.environ["ACMESH_REGISTER_EMAIL"] == "alice@example.com"
     assert os.environ["ACMESH_SERVER_NAME"] == "letsencrypt"
     assert os.environ["ALI_KEY"] == "ali-key-123"
@@ -153,6 +154,68 @@ def test_load_env_file_accepts_bareword_assignment(
     assert os.environ["CF_TOKEN"] == "cf-token-xyz"
     assert os.environ["CF_ZONE_ID"] == "zone-1"
     assert os.environ["CF_ACCOUNT_ID"] == "acct-1"
+
+
+def test_load_env_file_handles_shell_constructs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delegating to bash means the loader gets ``$()`` command
+    substitution, multi-line values, spaces, and special chars for free
+    — the same behavior as ``source "${SECRET_FILE}"`` in the original
+    bash entrypoint. Critical because crypctl-decrypted files have been
+    observed using all of these constructs across different sb-xray
+    deployments."""
+    secret_file = tmp_path / "secret"
+    secret_file.write_text(
+        "SIMPLE_VAL=plain\n"
+        "COMPUTED=$(printf hello)\n"
+        'SPACED="value with spaces"\n'
+        "MULTILINE=$(printf 'line1\\nline2')\n"
+        "LITERAL='$(NOT_EXPANDED)'\n",
+        encoding="utf-8",
+    )
+    for key in ("SIMPLE_VAL", "COMPUTED", "SPACED", "MULTILINE", "LITERAL"):
+        monkeypatch.delenv(key, raising=False)
+
+    ep._load_env_file(secret_file)
+    assert os.environ["SIMPLE_VAL"] == "plain"
+    assert os.environ["COMPUTED"] == "hello"
+    assert os.environ["SPACED"] == "value with spaces"
+    assert os.environ["MULTILINE"] == "line1\nline2"
+    assert os.environ["LITERAL"] == "$(NOT_EXPANDED)"
+
+
+def test_load_env_file_preserves_parent_shell_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Values set in the parent process (``docker-compose environment:``)
+    must win over whatever SECRET_FILE says — setdefault semantics."""
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("MY_VAR=from_file\n", encoding="utf-8")
+    monkeypatch.setenv("MY_VAR", "from_shell")
+
+    injected = ep._load_env_file(secret_file)
+    assert injected == 0
+    assert os.environ["MY_VAR"] == "from_shell"
+
+
+def test_load_env_file_missing_file_is_noop(tmp_path: Path) -> None:
+    assert ep._load_env_file(tmp_path / "does-not-exist") == 0
+
+
+def test_load_env_file_skips_bash_internal_vars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SHLVL`` / ``PWD`` / ``_`` are set inside the bash subshell but
+    must not leak into the parent's ``os.environ``."""
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("REAL_VAR=value\n", encoding="utf-8")
+    monkeypatch.delenv("REAL_VAR", raising=False)
+    old_shlvl = os.environ.get("SHLVL")
+
+    ep._load_env_file(secret_file)
+    assert os.environ["REAL_VAR"] == "value"
+    assert os.environ.get("SHLVL") == old_shlvl
 
 
 def test_probe_base_env_persists_fields(

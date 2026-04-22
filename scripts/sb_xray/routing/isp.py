@@ -99,11 +99,28 @@ def _sort_tags_desc(speeds: dict[str, float]) -> list[str]:
 
 
 def build_sb_urltest(speeds: dict[str, float]) -> str:
-    """Sing-box urltest outbound (empty when no ISP nodes)."""
+    """Sing-box urltest outbound JSON fragment (empty when no ISP nodes).
+
+    The return value is spliced verbatim into ``templates/sing-box/sb.json``
+    between ``${SB_CUSTOM_OUTBOUNDS}`` and the literal ``{"type":"block",
+    ...}`` entry::
+
+        "outbounds": [
+            {"type":"direct","tag":"direct"},
+            ${SB_CUSTOM_OUTBOUNDS}       ← ends with ",\\n"
+            ${SB_ISP_URLTEST}            ← THIS fragment, must also end with ","
+            {"type":"block","tag":"block"}
+        ]
+
+    So a non-empty return MUST carry a trailing comma to keep the
+    outer array valid JSON (same contract as ``build_xray_balancer``
+    fragments). Empty speeds → "" (bash parity; no placeholder, no
+    trailing comma either).
+    """
     if not speeds:
         return ""
     outbounds = [*_sort_tags_desc(speeds), "direct"]
-    return json.dumps(
+    payload = json.dumps(
         {
             "type": "urltest",
             "tag": "isp-auto",
@@ -115,6 +132,7 @@ def build_sb_urltest(speeds: dict[str, float]) -> str:
         },
         ensure_ascii=False,
     )
+    return f"{payload},"
 
 
 def build_xray_balancer(speeds: dict[str, float]) -> tuple[str, str]:

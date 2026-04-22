@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -180,59 +180,99 @@ def _init_dirs(env_file: Path) -> None:
     _safe_mkdir(Path(os.environ.get("SUB_STORE_DATA_BASE_PATH", "/opt/substore")))
 
 
-_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-
-
 def _load_env_file(path: Path) -> int:
-    """Parse bash-style env / secret files into ``os.environ``.
+    """``source "${path}"`` by delegating to bash; inject new vars into env.
 
-    Returns the number of NEW variables actually injected (useful for
-    operator-visible log lines in step 2).
+    entrypoint.sh used ``source "${FILE}"`` for ENV_FILE / STATUS_FILE /
+    SECRET_FILE. ``source`` is a full bash feature — it handles quoted
+    and bareword assignments, ``export`` prefix, nested quotes, inline
+    comments, multi-line here-docs, CRLF line endings, BOM, command
+    substitutions like ``KEY=$(date +%s)``, and every other construct
+    that shows up in the wild.
 
-    Accepts **both** formats bash ``source`` accepts::
+    We previously hand-rolled a regex parser and kept finding new edge
+    cases that broke ACME credential loading. This rewrite outsources
+    the parsing to bash itself by invoking::
 
-        export KEY='VALUE'     # Dockerfile-generated ENV_FILE / STATUS_FILE
-        KEY=VALUE              # crypctl-decrypted SECRET_FILE (no 'export')
+        bash -c 'set -a; [ -f "$1" ] && . "$1"; env -0' _ "${path}"
 
-    Without the second form the ACMESH_* / ALI_* / CF_* credentials
-    decrypted from ``${SECRET_FILE}`` never reach ``os.environ`` and
-    ``cert.ensure_certificate`` raises 'required environment variables
-    missing' (entrypoint.sh invoked ``source`` which tolerates both).
+    and diffs the resulting env against the current process env. Any
+    key **not** already in ``os.environ`` is injected via
+    ``setdefault`` (shell-set vars still win). Values are NUL-delimited
+    so embedded newlines are preserved correctly.
 
-    Missing files are ignored. Comments and blank lines are skipped.
-    Shell-set vars always win (``setdefault``).
+    Returns the number of NEW variables actually injected (surfaced to
+    operators in the step-2 log). Missing file → ``0`` (no-op),
+    matching bash ``source`` of a missing file followed by ``|| true``.
     """
-    injected = 0
     if not path.is_file():
-        return injected
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
+        return 0
+
+    try:
+        result = subprocess.run(
+            [
+                "/usr/bin/env",
+                "bash",
+                "-c",
+                'set -a; [ -f "$1" ] && . "$1"; env -0',
+                "_",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        sblog.log("WARN", f"[env-load] bash source {path} failed: {exc}")
+        return 0
+
+    injected = 0
+    for record in result.stdout.split(b"\x00"):
+        if not record:
             continue
-        # Strip an optional leading `export ` (with or without a space).
-        if line.startswith("export "):
-            line = line[len("export ") :].lstrip()
-        if not _ASSIGN_RE.match(line):
+        key_b, sep, value_b = record.partition(b"=")
+        if not sep:
             continue
-        key, _, value_raw = line.partition("=")
-        value = value_raw.strip()
-        # Strip a trailing inline comment — ``KEY=value # note`` is valid
-        # in sourced bash when value is unquoted. Only applied when value
-        # is *not* quoted (otherwise ``KEY='hash # in value'`` would break).
-        if value and value[0] not in ("'", '"'):
-            hash_idx = value.find(" #")
-            if hash_idx >= 0:
-                value = value[:hash_idx].rstrip()
-        # Peel matching surrounding quotes until none remain — some
-        # deployments wrote ``export PORT_HY='"9121"'`` (nested quotes from
-        # Dockerfile ENV round-tripping). Without this, ``int('"9121"')``
-        # crashes downstream stages.
-        while len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
-        if key not in os.environ:
-            injected += 1
-        os.environ.setdefault(key, value)
+        try:
+            key = key_b.decode("utf-8")
+            value = value_b.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        # Drop bash-internal vars we never want to bleed in.
+        if key in _BASH_INTERNAL_VARS or key.startswith("BASH_"):
+            continue
+        if key in os.environ:
+            continue
+        os.environ[key] = value
+        injected += 1
     return injected
+
+
+# Variables bash sets inside the subshell but which we must NOT leak out
+# (they'd shadow the parent process's values or pollute os.environ).
+_BASH_INTERNAL_VARS = frozenset(
+    {
+        "_",
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "IFS",
+        "PS1",
+        "PS2",
+        "PS4",
+        "UID",
+        "EUID",
+        "PPID",
+        "RANDOM",
+        "SECONDS",
+        "LINENO",
+        "HOSTNAME",
+        "HOSTTYPE",
+        "MACHTYPE",
+        "OSTYPE",
+        "SHELL",
+    }
+)
 
 
 def bootstrap(env_file: Path) -> EnvManager:
