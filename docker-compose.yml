@@ -59,8 +59,6 @@ services:
       # - ISP_PROBE_INTERVAL=5m           # 小内存节点建议降频
       # - ISP_PER_SERVICE_SB=true         # 开启 sing-box 按服务分桶（Netflix/OpenAI/Claude/Gemini/Disney/YouTube 独立 balancer）
       # - ISP_FALLBACK_STRATEGY=block     # CN/HK/RU 拒绝静默走 direct
-      # - ISP_FALLBACK_STRATEGY=warp      # 受限地区 + 自备 warp outbound
-      # - WARP_ENABLED=true               # 与 FALLBACK_STRATEGY=warp 配合
       # - ISP_RETEST_INTERVAL_HOURS=0     # 完全禁用周期性重测
     ports:
       - "443:443/tcp"

@@ -237,16 +237,23 @@ docker compose restart
 | `ISP_RETEST_DELTA_PCT` | `15` | 3 | 重测后触发 daemon restart 的最小速率变化百分比；`999` 实质禁用重启 |
 | `ISP_RETEST_ENABLED` | `true` | 3 | 即使 cron 已安装,也可以通过此开关让子命令 no-op |
 | `ISP_PER_SERVICE_SB` | `false` | 4 | 开启后 sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 生成独立 `isp-auto-<service>` urltest balancer,各自用该服务的真实域名探测;xray 因 observatory 单例不受影响 |
-| `ISP_FALLBACK_STRATEGY` | `direct` | 5 | `direct`(等价旧版) / `block`(fail-closed,CN/HK/RU 建议) / `warp`(受限地区 + `WARP_ENABLED=true` 时串 `[warp, direct]`) |
-| `WARP_ENABLED` | `false` | 5 | 声明容器内存在 `warp` 出站 tag;仅在 `ISP_FALLBACK_STRATEGY=warp` 时有效 |
+| `ISP_FALLBACK_STRATEGY` | `direct` | 5 | `direct`(等价旧版) / `block`(fail-closed,CN/HK/RU 建议) |
 | `ISP_SPEED_CACHE_TTL_MIN` | `60` | 5 | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
 | `ISP_SPEED_CACHE_ASYNC` | `true` | 5 | 缓存命中时是否后台线程异步刷新速度;`false` 仅用于调试 |
 
 > **典型组合**
 > - **小内存节点（OOM 敏感）**: `ISP_PROBE_INTERVAL=5m`, `ISP_PER_SERVICE_SB=false`, `ISP_RETEST_INTERVAL_HOURS=12`
 > - **CN / HK / RU 受限地区 fail-closed**: `ISP_FALLBACK_STRATEGY=block`
-> - **受限地区 + WARP 兜底**: `ISP_FALLBACK_STRATEGY=warp`, `WARP_ENABLED=true`（需模板里有 `warp` outbound）
 > - **追求极致解锁命中率**: `ISP_PER_SERVICE_SB=true` + 保持 `ISP_PROBE_URL` 默认
+
+**升级后验证周期性重测已注册**（从旧镜像升级过来的部署,首次启动会注入 `isp-retest` cron entry）:
+
+```bash
+docker exec sb-xray crontab -l | grep isp-retest
+# 期望: 0 */6 * * * /scripts/entrypoint.py isp-retest >> /var/log/isp_retest.log 2>&1
+```
+
+若无输出,说明 pipeline stage 16 未跑到(容器未完成 boot) — 等待或查 `docker logs sb-xray | grep 'Cron 定时任务'`。禁用后确认: `ISP_RETEST_INTERVAL_HOURS=0` 重启,该 entry 应消失。
 
 **Entrypoint 事件流**（`SHOUTRRR_URLS` 未设置时仅 stdout）:
 - `isp.speed_test.result` — 每次速度测试完成

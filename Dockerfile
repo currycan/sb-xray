@@ -342,9 +342,8 @@ ENV ISP_RETEST_ENABLED="true"
 # Phase 4: sing-box 按服务分桶 (默认关闭;开启后 7 个 urltest × probe → 流量 ×7)
 ENV ISP_PER_SERVICE_SB="false"
 # Phase 5: fallback 策略 + 冷启动 TTL 缓存
-#   ISP_FALLBACK_STRATEGY: direct / block (fail-closed) / warp (需 WARP_ENABLED=true)
+#   ISP_FALLBACK_STRATEGY: direct (默认) / block (fail-closed，拒绝静默走 direct)
 ENV ISP_FALLBACK_STRATEGY="direct"
-ENV WARP_ENABLED="false"
 ENV ISP_SPEED_CACHE_TTL_MIN="60"
 ENV ISP_SPEED_CACHE_ASYNC="true"
 

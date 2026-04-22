@@ -7,36 +7,14 @@ from sb_xray.routing import isp
 
 
 @pytest.mark.parametrize(
-    ("strategy", "restricted", "has_warp", "expected"),
+    ("strategy", "expected"),
     [
-        # direct — byte-compatible with Phases 1–4
-        ("direct", False, False, ["direct"]),
-        ("direct", True, False, ["direct"]),
-        ("direct", True, True, ["direct"]),
-        ("direct", False, True, ["direct"]),
-        # block — fail-closed regardless of region
-        ("block", False, False, ["block"]),
-        ("block", True, False, ["block"]),
-        ("block", True, True, ["block"]),
-        ("block", False, True, ["block"]),
-        # warp — only materialises when restricted + has_warp
-        ("warp", True, True, ["warp", "direct"]),
-        ("warp", True, False, ["direct"]),
-        ("warp", False, True, ["direct"]),
-        ("warp", False, False, ["direct"]),
+        ("direct", ["direct"]),  # byte-compatible default
+        ("block", ["block"]),  # fail-closed
     ],
 )
-def test_resolve_fallback_tags_matrix(
-    strategy: str, restricted: bool, has_warp: bool, expected: list[str]
-) -> None:
-    assert (
-        isp._resolve_fallback_tags(
-            strategy=strategy,
-            is_restricted=restricted,
-            has_warp=has_warp,
-        )
-        == expected
-    )
+def test_resolve_fallback_tags_matrix(strategy: str, expected: list[str]) -> None:
+    assert isp._resolve_fallback_tags(strategy=strategy) == expected
 
 
 def test_unknown_strategy_falls_back_to_direct(
@@ -45,21 +23,19 @@ def test_unknown_strategy_falls_back_to_direct(
     import logging
 
     caplog.set_level(logging.WARNING, logger="sb_xray.routing.isp")
-    result = isp._resolve_fallback_tags(strategy="nonsense", is_restricted=False, has_warp=False)
+    result = isp._resolve_fallback_tags(strategy="nonsense")
     assert result == ["direct"]
     assert any("unknown ISP_FALLBACK_STRATEGY" in r.message for r in caplog.records)
 
 
 def test_env_drives_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ISP_FALLBACK_STRATEGY", "block")
-    assert isp._resolve_fallback_tags(is_restricted=False, has_warp=False) == ["block"]
+    assert isp._resolve_fallback_tags() == ["block"]
 
 
-def test_env_has_warp_reads_warp_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ISP_FALLBACK_STRATEGY", "warp")
-    monkeypatch.setenv("WARP_ENABLED", "true")
-    monkeypatch.setenv("GEOIP_INFO", "HongKong|192.0.2.1")
-    assert isp._resolve_fallback_tags() == ["warp", "direct"]
+def test_env_default_is_direct(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ISP_FALLBACK_STRATEGY", raising=False)
+    assert isp._resolve_fallback_tags() == ["direct"]
 
 
 def test_xray_fallback_tag_follows_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -68,15 +44,13 @@ def test_xray_fallback_tag_follows_strategy(monkeypatch: pytest.MonkeyPatch) -> 
     assert '"fallbackTag": "block"' in bal
 
 
-def test_sb_urltest_chain_with_warp(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ISP_FALLBACK_STRATEGY", "warp")
-    monkeypatch.setenv("WARP_ENABLED", "true")
-    monkeypatch.setenv("GEOIP_INFO", "HongKong|192.0.2.1")
+def test_sb_urltest_tail_with_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ISP_FALLBACK_STRATEGY", "block")
     import json
 
     out = isp.build_sb_urltest({"proxy-hk": 100.0})
     data = json.loads(out.rstrip(","))
-    assert data["outbounds"] == ["proxy-hk", "warp", "direct"]
+    assert data["outbounds"] == ["proxy-hk", "block"]
 
 
 def test_network_get_fallback_proxy_delegates_to_resolver(

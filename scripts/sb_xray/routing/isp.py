@@ -150,18 +150,12 @@ def _sort_tags_desc(speeds: dict[str, float]) -> list[str]:
     return [t for t, _ in sorted(speeds.items(), key=lambda kv: kv[1], reverse=True)]
 
 
-_VALID_FALLBACK_STRATEGIES: Final[frozenset[str]] = frozenset({"direct", "block", "warp"})
-
-
-def _has_warp() -> bool:
-    return os.environ.get("WARP_ENABLED", "").strip().lower() == "true"
+_VALID_FALLBACK_STRATEGIES: Final[frozenset[str]] = frozenset({"direct", "block"})
 
 
 def _resolve_fallback_tags(
     *,
     strategy: str | None = None,
-    is_restricted: bool | None = None,
-    has_warp: bool | None = None,
 ) -> list[str]:
     """Policy-driven fallback for both sing-box urltest and xray balancer.
 
@@ -169,6 +163,10 @@ def _resolve_fallback_tags(
     urltest concatenates them; xray takes ``list[0]`` as ``fallbackTag``).
     Byte-compatible with Phase 1–4 when ``ISP_FALLBACK_STRATEGY`` is
     ``direct`` (the default) — always returns ``["direct"]``.
+
+    ``block`` is the fail-closed alternative for operators who refuse a
+    silent ``direct`` fallback in restricted regions; the sing-box / xray
+    ``block`` outbound is always defined in the templates.
     """
     if strategy is None:
         strategy = os.environ.get("ISP_FALLBACK_STRATEGY", "direct").strip().lower()
@@ -178,22 +176,8 @@ def _resolve_fallback_tags(
             strategy,
         )
         strategy = "direct"
-    if has_warp is None:
-        has_warp = _has_warp()
-    if is_restricted is None:
-        is_restricted = is_restricted_region()
-
     if strategy == "block":
         return ["block"]
-    if strategy == "warp":
-        if is_restricted and has_warp:
-            return ["warp", "direct"]
-        if is_restricted and not has_warp:
-            logger.warning(
-                "ISP_FALLBACK_STRATEGY=warp requested but WARP_ENABLED != true — "
-                "falling back to 'direct'"
-            )
-        return ["direct"]
     return ["direct"]
 
 

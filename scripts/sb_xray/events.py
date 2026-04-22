@@ -67,7 +67,7 @@ def emit_event(name: str, payload: dict[str, Any]) -> None:
         return
     try:
         httpx.post(_shoutrrr_endpoint(), content=body, timeout=_HTTP_TIMEOUT)
-    except httpx.HTTPError as exc:  # pragma: no cover — network path
+    except httpx.HTTPError as exc:
         logger.debug("events: shoutrrr POST failed for %s: %s", name, exc)
-    except OSError as exc:  # pragma: no cover — connection refused etc.
+    except OSError as exc:
         logger.debug("events: shoutrrr POST OSError for %s: %s", name, exc)
