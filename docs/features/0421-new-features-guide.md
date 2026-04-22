@@ -107,7 +107,7 @@ docker exec sb-xray cat /sb-xray/xray/xr.json \
 ```
 
 **故障排查**：
-- `jq: error: object .reverse not a bool`：Xray v26.4.17 里 `reverse` 是 `{tag:string}` 对象而非 bool；落地机模板用**扁平化 simplified 格式**，嵌套 `servers[]` 会被静默忽略
+- `jq: error: object .reverse not a bool`：Xray v26.3.27 里 `reverse` 是 `{tag:string}` 对象而非 bool；落地机模板用**扁平化 simplified 格式**，嵌套 `servers[]` 会被静默忽略
 - bridge 断连：检查家宽侧 xray 日志，常见原因是出口网络封 REALITY；换条链路再试
 - 撤销 reverse：`ENABLE_REVERSE=false` + `docker compose up -d` 重建容器；entrypoint 从原始模板重新渲染，孤儿条目被覆盖清理
 

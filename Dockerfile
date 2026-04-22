@@ -217,7 +217,7 @@ RUN set -ex; \
   mv /tmp/sing-box /usr/local/bin/
 
 # --- Xray ---
-ARG XRAY_VERSION="26.4.17"
+ARG XRAY_VERSION="26.3.27"
 # 完整性：从上游发布的 ${BINARY_FILE}.dgst 文件中提取 SHA2-256 字段校验
 RUN set -ex; \
   case "${TARGETARCH}" in \
@@ -304,7 +304,7 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 ENV ENABLE_REVERSE="false"
 ENV REVERSE_DOMAINS=""
 
-# M4 新入站 feature flag（Xray v26.4.17）
+# 新入站 feature flag（Xray v26.3.27）
 #   Hy2 / XHTTP-H3 已永久启用（无开关，见 templates/xray/04_hy2_inbounds.json 与 02_xhttp_h3_inbounds.json）
 #   ENABLE_XICMP     ：ICMP echo 承载代理的紧急通道（仅极端封锁场景；需要 cap_add=NET_RAW）
 #   ENABLE_XDNS      ：DNS 查询载荷承载代理的紧急通道（仅极端封锁场景；需要用户控制的 NS 域名 XDNS_DOMAIN）

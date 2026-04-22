@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed（修复）
+
+- **版本选择器意外放行 Pre-release 导致 Xray pin 在 v26.4.17 (XTLS 官方 Pre-release)**：`build.sh` 对 Xray 使用无过滤的 `get_latest_tag()`(底层 `/tags?per_page=1`,取首个 tag),未与 sing-box / x-ui / dufs / cloudflared 等组件一致走 `get_latest_stable_tag()`(过滤 `rc|beta|alpha`)。同样的 bug 也存在于 `.github/workflows/daily-build.yml` 的 `get_tag` 调用路径。现 Xray 统一切到 `get_latest_stable_tag` / `get_stable_tag`,fallback 默认值同步为 `26.3.27`。
+- **Xray-core pin 从 v26.4.17 回退到稳定版 v26.3.27**：同步更新 `Dockerfile` / `pyproject.toml` / `sb_xray.__version__` / `versions.json`。本项目全部功能(后量子 MLKEM768、Xray-native Hysteria2、marktag webhook、XHTTP/3、ECH 等)的兼容性调研本就基于 v26.3.27 稳定版,无功能回退。
+
 ### Added（新增功能）
 
 - **`isp-auto` 健康选优系统升级（5 阶段闭环）**——把原本仅"启动时测一次"的 ISP 选路,改造为「冷启动缓存 → 速度实测 → 配置渲染 → 内核健康选优 → 周期重测」的完整闭环,所有行为由 12 个 env flag 控制,默认值在 Dockerfile 注册,不改 docker-compose 即可开箱运行。

@@ -96,7 +96,7 @@ flowchart TD
 | 策略 | API 端点 | 适用组件 |
 |:---|:---|:---|
 | **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr, Mihomo, Http-Meta, Sub-Store, S-UI |
-| **Latest Tag** | `/repos/{owner}/{repo}/tags` | Xray (取第一个 tag，含 beta) |
+| **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100` | Xray / sing-box / x-ui / dufs / cloudflared(取首个排除 `rc/beta/alpha` 的 tag,稳定版优先) |
 | **Latest Stable Tag** | `/repos/{owner}/{repo}/tags` + 过滤 | Dufs, Cloudflared, 3x-ui, Sing-box (排除 rc/beta/alpha) |
 
 ---
