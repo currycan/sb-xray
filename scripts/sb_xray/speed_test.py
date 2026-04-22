@@ -246,12 +246,12 @@ def _discover_isp_nodes() -> list[tuple[str, str, str, str, str]]:
         if not key.endswith("_ISP_IP") or not value:
             continue
         prefix = key[: -len("_IP")]
-        port = os.environ.get(f"{prefix}_PORT", "")
+        port = os.environ.get(f"{prefix}_PORT", "").strip().strip("'\"")
         if not port:
             continue
-        user = os.environ.get(f"{prefix}_USER", "")
-        password = os.environ.get(f"{prefix}_SECRET", "")
-        nodes.append((prefix, value, port, user, password))
+        user = os.environ.get(f"{prefix}_USER", "").strip().strip("'\"")
+        password = os.environ.get(f"{prefix}_SECRET", "").strip().strip("'\"")
+        nodes.append((prefix, value.strip().strip("'\""), port, user, password))
     return nodes
 
 
@@ -344,11 +344,9 @@ def run_isp_speed_tests(
         else int(os.environ.get("SPEED_SAMPLES", _SPEED_SAMPLES_DEFAULT))
     )
 
-    sblog.log("INFO", "[阶段 2] 测速与选路...")
-
     cached_tag = os.environ.get("ISP_TAG", "").strip()
     if cached_tag:
-        sblog.log("INFO", f"[阶段 2] ISP_TAG 已缓存 ({cached_tag})，跳过测速")
+        sblog.log("INFO", f"[选路] 命中缓存 ISP_TAG={cached_tag}，跳过测速")
         nodes = _discover_isp_nodes()
         if nodes:
             os.environ["HAS_ISP_NODES"] = "true"
@@ -374,7 +372,7 @@ def run_isp_speed_tests(
     region = os.environ.get("GEOIP_INFO", "").split("|", 1)[0] or "未知"
     sblog.log(
         "INFO",
-        f"[阶段 2] 环境: IP_TYPE={os.environ.get('IP_TYPE', '未知')} | "
+        f"[选路] IP_TYPE={os.environ.get('IP_TYPE', '未知')} | "
         f"地区={region} | DEFAULT_ISP={os.environ.get('DEFAULT_ISP', '未设置')}",
     )
 
@@ -383,7 +381,7 @@ def run_isp_speed_tests(
     show_report(direct_mbps, name="Direct")
     sblog.log(
         "INFO",
-        f"[阶段 2] 直连基准: {direct_mbps:.2f} Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）",
+        f"[测速] 直连基准: {direct_mbps:.2f} Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）",
     )
 
     nodes = _discover_isp_nodes()
@@ -391,13 +389,13 @@ def run_isp_speed_tests(
     if not nodes:
         sblog.log(
             "WARN",
-            "[阶段 2] 未发现 ISP 节点（无 *_ISP_IP 环境变量），将回退直连",
+            "[测速] 未发现 ISP 节点（无 *_ISP_IP 环境变量），将回退直连",
         )
     else:
         os.environ["HAS_ISP_NODES"] = "true"
         sblog.log(
             "INFO",
-            f"[阶段 2] 发现 ISP 节点: {len(nodes)} 个，开始逐节点测速（采样={sample_count}次）...",
+            f"[测速] 发现 ISP 节点 {len(nodes)} 个，逐节点采样 {sample_count} 次",
         )
         for prefix, ip, port, user, password in nodes:
             tag = _isp_tag_for(prefix)
@@ -442,7 +440,7 @@ def run_isp_speed_tests(
     _write_status_line("ISP_TAG", decision.isp_tag)
     sblog.log(
         "INFO",
-        f"[阶段 2] 完成 ISP_TAG={decision.isp_tag} IS_8K_SMOOTH={os.environ['IS_8K_SMOOTH']}",
+        f"[选路] ISP_TAG={decision.isp_tag} IS_8K_SMOOTH={os.environ['IS_8K_SMOOTH']}",
     )
 
 

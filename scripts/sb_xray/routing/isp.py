@@ -243,9 +243,10 @@ def _discover_isp_nodes_with_tags() -> dict[str, tuple[str, str, str, str, str]]
         if not key.endswith("_ISP_IP") or not value:
             continue
         prefix = key[: -len("_IP")]
-        port = os.environ.get(f"{prefix}_PORT", "")
+        port = os.environ.get(f"{prefix}_PORT", "").strip().strip("'\"")
         if not port:
             continue
+        value = value.strip().strip("'\"")
         user = os.environ.get(f"{prefix}_USER", "")
         password = os.environ.get(f"{prefix}_SECRET", "")
         nodes[_prefix_to_tag(prefix)] = (prefix, value, port, user, password)
@@ -268,8 +269,6 @@ def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -
 
     if speeds is None:
         speeds = sbspeed.load_isp_speeds()
-
-    sblog.log("INFO", "[阶段 4] 生成客户端/服务端配置片段...")
 
     for v in (
         "CUSTOM_OUTBOUNDS",
@@ -345,5 +344,4 @@ def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -
     }
     for k, v in result.items():
         os.environ[k] = v
-    sblog.log("INFO", "[阶段 4] 完成")
     return result

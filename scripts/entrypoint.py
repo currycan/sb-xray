@@ -192,7 +192,13 @@ def _load_env_file(path: Path) -> None:
             continue
         _, _, assign = line.partition("export ")
         key, _, value_raw = assign.partition("=")
-        value = value_raw.strip().strip("'")
+        value = value_raw.strip()
+        # Peel matching surrounding quotes until none remain — some
+        # deployments wrote ``export PORT_HY='"9121"'`` (nested quotes from
+        # Dockerfile ENV round-tripping). Without this, ``int('"9121"')``
+        # crashes downstream stages.
+        while len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
         os.environ.setdefault(key, value)
 
 
@@ -210,7 +216,7 @@ def probe_base_env(mgr: EnvManager) -> None:
     """Full port of ``analyze_base_env`` (entrypoint.sh:1118-1148)."""
     from sb_xray import random_gen as sbrand
 
-    sblog.log("INFO", "[阶段 1] 初始化基础环境变量...")
+    sblog.log("DEBUG", "[env] 按三层优先级填充 16 个基础变量")
 
     def _strategy() -> str:
         v4, v6 = sbnet.probe_ip_sb()
@@ -239,9 +245,9 @@ def probe_base_env(mgr: EnvManager) -> None:
 
     sblog.log(
         "INFO",
-        f"[阶段 1] 完成 port_hy2={os.environ.get('PORT_HYSTERIA2', '?')} "
-        f"port_tuic={os.environ.get('PORT_TUIC', '?')} "
-        f"port_anytls={os.environ.get('PORT_ANYTLS', '?')}",
+        f"[env] hy2={os.environ.get('PORT_HYSTERIA2', '?')} "
+        f"tuic={os.environ.get('PORT_TUIC', '?')} "
+        f"anytls={os.environ.get('PORT_ANYTLS', '?')}",
     )
 
 
@@ -264,23 +270,29 @@ def issue_bundle_certificate() -> None:
         sblog.log("WARN", "[cert] DOMAIN/CDNDOMAIN 未就绪,跳过证书签发")
         return
     params = f"{domain}:ali|{cdn}:cf"
-    sblog.log("INFO", f"[步骤 8]  ensure_certificate(sb_xray_bundle, {params})")
+    sblog.log("INFO", f"  [cert] ensure_certificate(sb_xray_bundle, {params})")
     try:
         status = sbcert.ensure_certificate(name="sb_xray_bundle", params=params)
-        sblog.log("INFO", f"[步骤 8]  status={status.value}")
+        sblog.log("INFO", f"  [cert] status={status.value}")
     except Exception as exc:  # pragma: no cover — don't block boot on cert IO
-        sblog.log("ERROR", f"[步骤 8]  证书阶段失败,继续启动: {exc}")
+        sblog.log("ERROR", f"  [cert] 失败，继续启动: {exc}")
 
 
 def run_media_probes() -> dict[str, str]:
     """entrypoint.sh ``analyze_ai_routing_env`` media portion."""
     from sb_xray.routing import media as sbmedia
 
-    sblog.log("INFO", "[阶段 3] 流媒体/AI 可达性检测")
+    sblog.log(
+        "DEBUG",
+        "[media] 运行 8 个可达性探针 (Netflix/Disney/YouTube/Social/TikTok/ChatGPT/Claude/Gemini)",
+    )
     results = sbmedia.check_all()
     for key, value in results.items():
         os.environ[key] = value
-    sblog.log("INFO", "[阶段 3] " + " ".join(f"{k}={v}" for k, v in results.items()))
+    sblog.log(
+        "INFO",
+        "[media] " + " ".join(f"{k.replace('_OUT', '').lower()}={v}" for k, v in results.items()),
+    )
     return results
 
 
@@ -363,79 +375,76 @@ def run_pipeline(
 
     def _run(name: str, fn: Callable[[], None]) -> None:
         if name in skips:
-            sblog.log("INFO", f"[skip] stage '{name}' skipped via --skip-stage")
+            sblog.log("INFO", f"  [skip] stage '{name}' skipped via --skip-stage")
             return
         fn()
 
-    sblog.log("INFO", "────────────────────────────────────────────────")
-    sblog.log("INFO", "  SB-Xray 启动初始化 (Startup Pipeline)")
-    sblog.log("INFO", "────────────────────────────────────────────────")
+    def _step(n: int, label: str) -> None:
+        sblog.log("INFO", f"[{n:>2}/15] {label}")
 
-    sblog.log("INFO", "[步骤 1]  初始化目录与文件")
+    sblog.log("INFO", "▶ SB-Xray 启动初始化 (15 阶段 Python pipeline)")
+
+    _step(1, "初始化目录与文件")
     _init_dirs(env_file)
 
-    sblog.log("INFO", "[步骤 2]  解密远端密钥库")
+    _step(2, "解密远端密钥库")
 
     def _secrets() -> None:
         try:
             status = sbsecrets.decrypt_remote_secrets(secret_file=_secret_file())
-            sblog.log("INFO", f"[步骤 2]  secrets status={status.value}")
+            sblog.log("INFO", f"  [secrets] status={status.value}")
         except RuntimeError as exc:
-            sblog.log("WARN", f"[步骤 2]  远端密钥解密失败,继续启动: {exc}")
+            sblog.log("WARN", f"  [secrets] 解密失败，继续启动: {exc}")
 
     _run("secrets", _secrets)
 
-    sblog.log("INFO", "[步骤 3]  加载持久化状态 (ENV/STATUS/SECRET)")
+    _step(3, "加载持久化状态 (ENV/STATUS/SECRET)")
     mgr = bootstrap(env_file)
     _load_env_file(_status_file())
     _load_env_file(_secret_file())
 
-    sblog.log("INFO", "[步骤 4]  基础环境变量初始化")
+    _step(4, "基础环境变量初始化")
     _run("probe", lambda: probe_base_env(mgr))
 
-    sblog.log("INFO", "[步骤 5]  ISP 测速与选路")
+    _step(5, "ISP 测速与选路")
     _run("speed", lambda: run_isp_speed_tests())
 
-    sblog.log("INFO", "[步骤 6]  流媒体/AI 可达性检测 + 密钥对")
+    _step(6, "流媒体/AI 可达性检测")
     _run("media", lambda: _cache_media_probes(mgr))
+
+    _step(7, "生成加密密钥对")
     _run("keys", lambda: sbkeys.ensure_all_keys(mgr))
 
-    sblog.log("INFO", "[步骤 7]  生成客户端/服务端配置片段")
+    _step(8, "生成客户端/服务端配置片段")
     _run("outbounds", lambda: sbisp.build_client_and_server_configs())
 
-    sblog.log("INFO", "[步骤 8]  TLS 证书申请/续签")
+    _step(9, "TLS 证书申请/续签")
     _run("cert", issue_bundle_certificate)
 
-    sblog.log("INFO", "[步骤 9]  生成 DH 参数")
+    _step(10, "生成 DH 参数")
     _run("dhparam", lambda: sbdh.ensure_dhparam())
 
-    sblog.log("INFO", "[步骤 10] 更新 GeoIP/GeoSite 数据库")
+    _step(11, "更新 GeoIP/GeoSite 数据库")
     _run("geoip", lambda: sbgeo.update_geo_data())
 
-    sblog.log("INFO", "[步骤 11] 渲染配置模板")
+    _step(12, "渲染配置模板 + Proxy Providers")
     _run("config", lambda: sbcfg.create_config())
     _run("providers", lambda: sbprov.generate_and_export())
-
-    sblog.log("INFO", "[步骤 11b] 精简 supervisord 配置")
     _run("trim", lambda: sbcfg.trim_runtime_configs())
 
-    sblog.log("INFO", "[步骤 12] 初始化 X-UI / S-UI 管理面板")
+    _step(13, "初始化 X-UI / S-UI 管理面板")
     _run("panels", lambda: sbpanels.init_panels())
 
-    sblog.log("INFO", "[步骤 13] 配置 Nginx Basic Auth")
+    _step(14, "配置 Nginx Basic Auth + Cron")
     _run("nginx_auth", lambda: sbauth.setup_basic_auth())
-
-    sblog.log("INFO", "[步骤 14] 配置 Cron 定时任务")
     _run("cron", lambda: sbcron.install_crontab())
 
-    sblog.log("INFO", "── 配置总览 ──")
+    _step(15, "打印订阅链接 banner")
     _run("show", lambda: _banner_best_effort(env_file))
 
     sblog.log_summary_box(*_SUMMARY_KEYS)
 
-    sblog.log("INFO", "────────────────────────────────────────────────")
-    sblog.log("INFO", "  ✅ 初始化完成，移交 Supervisord 接管")
-    sblog.log("INFO", "────────────────────────────────────────────────")
+    sblog.log("INFO", "✅ 初始化完成，移交 Supervisord 接管")
 
     if dry_run:
         sblog.log("INFO", "dry-run complete, skipping supervisord exec")

@@ -72,6 +72,6 @@ def ensure_mlkem_keys(mgr: EnvManager) -> dict[str, str]:
 
 def ensure_all_keys(mgr: EnvManager) -> None:
     """Ensure every key pair the downstream templates rely on."""
-    sblog.log("INFO", "[阶段 3] 生成加密密钥对...")
+    sblog.log("INFO", "[keys] Reality (x25519) + MLKEM768 密钥对")
     ensure_reality_keys(mgr)
     ensure_mlkem_keys(mgr)
