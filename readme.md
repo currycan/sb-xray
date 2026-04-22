@@ -84,7 +84,7 @@ flowchart TD
 ### 1. 🚀 智能双核引擎驱动 (Dual-Core Engine)
 
 - **Xray 核心 (隐蔽主干)**: 主理 Reality 协议与 XTLS-Vision 流控，在提供极高防探测能力的同时，确保高频数据通信（如日常网络代理、AI 接口调用）的绝对稳定。
-- **Sing-box 核心 (竞速加速)**: 专注处理 TUIC、AnyTLS 等 UDP 竞速协议（Hysteria2 于 2026-04 永久迁至 Xray 原生入站，客户端订阅参数不变），在严重丢包弱网环境下暴力竞速压榨带宽。
+- **Sing-box 核心 (竞速加速)**: 专注处理 TUIC、AnyTLS 等 UDP 竞速协议（Hysteria2 由 Xray 原生承载，客户端订阅参数无感），在严重丢包弱网环境下暴力竞速压榨带宽。
 
 ### 2. 🛡️ 零信任前置网关 (Zero-Trust Gateway)
 
@@ -97,8 +97,11 @@ flowchart TD
 
 ### 4. 🔀 业务级智能路由分发 (Smart Routing & Distribution)
 
-- **多 ISP 原生链式落地**: 支持无缝挂载多个第三方住宅 IP (ISP Socks5)。内核级路由引擎可根据目标域名（如 Netflix, ChatGPT）自动引流至原生节点，彻底解决数据中心 IP 被阻断的问题。
-- **自动化订阅节点清洗**: 系统内嵌 Sub-Store，在将节点下发给 Clash / Surge 客户端前，自动执行地名标准化、挂载国旗 Emoji、过滤失效节点，提升客户端策略组分流的精准度。
+- **isp-auto 健康选优闭环**: 多 ISP SOCKS5 落地节点自动按带宽排序 + 运行时按 RTT 选最优；探测 URL 默认 Cloudflare 1 MiB 携带带宽信号（而非传统 0 字节 `generate_204`），被限速节点自然下沉；支持 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 按服务独立 balancer；每 6 小时 cron 周期重测，仅当节点组成或排序变化时重启守护进程。
+- **策略驱动 Fallback**: ISP 全部不可达时按 `ISP_FALLBACK_STRATEGY` 回退 —— 默认 `direct`，或 `block` 实现 fail-closed（适合 CN / HK / RU 拒绝静默走直连的场景）。
+- **自动化订阅节点清洗**: 系统内嵌 Sub-Store，在将节点下发给 Clash / Surge / Stash 客户端前自动执行地名标准化、挂载国旗 Emoji、过滤失效节点，提升客户端策略组分流精准度。
+
+> 完整运行时闭环架构图见 [01. 架构 §6.4](./docs/01-architecture-and-traffic.md#64-完整运行时闭环)；十余个可覆盖的 env 开关见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
 
 ---
 
@@ -164,101 +167,68 @@ docker compose up -d
 
 ### 环境变量全集
 
-以下是所有可用的环境变量及其作用（可在 `docker-compose.yml` 中配置）：
+仓库根 `docker-compose.yml` 内按段落给出了所有可用 env 的用法注释；完整分层表格（核心配置 / 证书 / 节点降载 / Shoutrrr 事件总线 / `isp-auto` 十余个优化开关 / 自动检测状态）见 [04. 运维与排障 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量与状态文件)。下面速查表只列最常被问到的几项：
 
-<details>
-<summary>点击展开完整环境变量列表</summary>
+| 类别 | 关键变量 | 默认 | 要点 |
+|:---|:---|:---|:---|
+| **必填** | `DOMAIN` / `CDNDOMAIN` / `DECODE` | — | 主域名 / CDN 域名 / 订阅解码密钥 |
+| **证书** | `ACMESH_SERVER_NAME` | `letsencrypt` | 也可 `zerossl` / `google`（后两者需 EAB 凭据） |
+| **伪装** | `DEST_HOST` | `www.microsoft.com` | Reality 伪装目标站点；推荐改 `speed.cloudflare.com` |
+| **ISP 节点** | `<PREFIX>_ISP_IP` / `_PORT` / `_USER` / `_SECRET` | — | 多 ISP 全部声明，`isp-auto` 自动选优 |
+| **AI 路由** | `GEMINI_DIRECT` | 空 | `true` / `false` / 空（自动探测） |
+| **节点后缀** | `NODE_SUFFIX` | 空 | 附加到所有生成节点名尾部（如 ` ✈ 高速`） |
+| **日志** | `LOG_LEVEL` / `SB_LOG_LEVEL` | `warning` / `INFO` | xray / sing-box 用前者，Python entrypoint 用后者，刻意分离 |
+| **降载开关** | `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true` | 小内存节点按需关闭可省 20–200 MB |
+| **资源** | `GOMEMLIMIT` / `GOGC` | `320MiB` / `50` | Go 四件套共享 GC 上限 |
+| **事件总线** | `SHOUTRRR_URLS` | 空 | 留空 = 仅写本地日志；填 Telegram / Discord URL 推送 |
+| **`isp-auto` 优化** | `ISP_PROBE_URL` / `ISP_PER_SERVICE_SB` / `ISP_FALLBACK_STRATEGY` / `ISP_RETEST_INTERVAL_HOURS` 等 | 有默认 | 开箱即用，按需调优见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选) |
 
-#### 核心配置
-
-| 变量名           | 默认值              | 说明                                                     |
-| :--------------- | :------------------ | :------------------------------------------------------- |
-| `DOMAIN`         | _必填_              | 您的私有主域名（如 `example.com`）                       |
-| `CDNDOMAIN`      | _必填_              | CDN 保护域名（如 `cdn.example.com`）                     |
-| `DECODE`         | _空_                | 自定义解码密钥                                           |
-| `DEST_HOST`      | `www.microsoft.com` | Reality 伪装目标站点（推荐 `speed.cloudflare.com`）      |
-| `LISTENING_PORT` | `443`               | 主监听端口（TCP，Nginx/Xray 共用）                       |
-| `PORT_HYSTERIA2` | `6443`              | Hysteria2 协议 UDP 监听端口                              |
-| `PORT_TUIC`      | `8443`              | TUIC 协议 UDP 监听端口                                   |
-| `PORT_ANYTLS`    | `4433`              | AnyTLS 协议 TCP 监听端口                                 |
-| `NODE_SUFFIX`    | _空_                | 节点名称后缀（如 ` ✈ 高速`），会附加在所有生成的节点名后 |
-
-#### 证书配置
-
-| 变量名                  | 默认值    | 说明                                           |
-| :---------------------- | :-------- | :--------------------------------------------- |
-| `ACMESH_SERVER_NAME`    | `zerossl` | CA 机构：`zerossl`（推荐）或 `google`          |
-| `ACMESH_REGISTER_EMAIL` | _空_      | ACME 注册邮箱                                  |
-| `ACMESH_EAB_KID`        | _空_      | Google CA EAB keyId（仅 Google CA 需要）       |
-| `ACMESH_EAB_HMAC_KEY`   | _空_      | Google CA EAB b64MacKey（仅 Google CA 需要）   |
-| `ACMESH_DEBUG`          | `2`       | 证书调试日志级别：`0`=关闭, `1`=基础, `2`=详细 |
-
-#### ISP 落地代理
-
-| 变量名          | 默认值   | 说明                                                    |
-| :-------------- | :------- | :------------------------------------------------------ |
-| `DEFAULT_ISP`   | `LA_ISP` | 默认落地出口标签（如 `LA_ISP`、`KR_ISP`），留空则不启用 |
-| `XX_ISP_IP`     | _空_     | ISP 代理 IP 地址（`XX` 为自定义标签前缀）               |
-| `XX_ISP_PORT`   | _空_     | ISP 代理端口                                            |
-| `XX_ISP_USER`   | _空_     | ISP 代理用户名（可选）                                  |
-| `XX_ISP_SECRET` | _空_     | ISP 代理密码（可选）                                    |
-
-#### AI 路由策略
-
-| 变量名          | 默认值           | 说明                                                                      |
-| :-------------- | :--------------- | :------------------------------------------------------------------------ |
-| `GEMINI_DIRECT` | _空（自动判断）_ | Gemini 直连策略：`true`=强制直连, `false`=强制代理, 空=自动探测 IP 可用性 |
-
-#### Provider 订阅源
-
-| 变量名      | 默认值 | 说明                                                                                                  |
-| :---------- | :----- | :---------------------------------------------------------------------------------------------------- |
-| `PROVIDERS` | _空_   | 外部机场订阅源，格式：`名称\|URL\|质量标签`，多个用换行分隔。质量标签：`super`(+30分) / `good`(+10分) |
-
-#### 管理面板
-
-| 变量名            | 默认值  | 说明                                       |
-| :---------------- | :------ | :----------------------------------------- |
-| `XUI_WEBBASEPATH` | `xui`   | X-UI 面板 URL 路径（建议修改为随机字符串） |
-| `XUI_ACCOUNT`     | `admin` | X-UI 默认用户名                            |
-| `XUI_PORT`        | `8888`  | X-UI 内部端口                              |
-| `SUI_WEBBASEPATH` | `sui`   | S-UI 面板 URL 路径                         |
-| `SUI_PORT`        | `3095`  | S-UI 内部端口                              |
-
-#### Dufs 文件服务
-
-| 变量名              | 默认值  | 说明              |
-| :------------------ | :------ | :---------------- |
-| `DUFS_PATH_PREFIX`  | `/dufs` | 文件服务 URL 前缀 |
-| `DUFS_SERVE_PATH`   | `/data` | 文件存储路径      |
-| `DUFS_ALLOW_UPLOAD` | `true`  | 是否允许上传      |
-| `DUFS_ALLOW_DELETE` | `true`  | 是否允许删除      |
-
-</details>
+> Provider 订阅、Hysteria2 / TUIC / AnyTLS 端口覆盖、实验性 feature flag（`ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE`）等非日常调整项也都在 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量与状态文件) 内列出。
 
 ### 目录结构说明
 
 ```
 sb-xray/
 ├── docker-compose.yml        # 部署清单
-├── build.sh                  # 自动构建脚本
+├── build.sh                  # 构建脚本（离线模式 = 读 versions.json；refresh 模式 = 调 API 刷新）
+├── release.sh                # Release 脚本（自动同步 Git tag 与镜像版本）
+├── versions.json             # 所有组件版本 + 二进制 SHA256 的单一真相源（CI 每日刷新）
 ├── Dockerfile                # 四阶段构建文件
+├── CONTRIBUTING-diagrams.md  # 维护者文档图表样式指引（调色板 / 形状 / pre-submit checklist）
 ├── scripts/
-│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1；argparse run/show/trim/geo-update；run 一次性编排 15 段启动流水线；trim 按 ENABLE_* 精简 supervisord 配置；geo-update 供 cron 调用）
-│   ├── sb_xray/              # Python 包：env/logging/cert/config_builder/speed_test/routing/geo/stages/...
-│   └── show                  # Python `entrypoint.py show` 子命令 shim
+│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1；argparse run/show/trim/geo-update/isp-retest/shoutrrr-forward）
+│   ├── sb_xray/
+│   │   ├── events.py             #  结构化事件总线（stdout JSON + 可选 shoutrrr 推送）
+│   │   ├── speed_test.py         #  ISP 带宽实测 + TTL 冷启动缓存
+│   │   ├── cert.py               #  acme.sh 封装 + 续签判定
+│   │   ├── config_builder.py     #  渲染 xray/sing-box/nginx/supervisord 模板
+│   │   ├── routing/
+│   │   │   ├── isp.py            #     isp-auto balancer + 服务分桶渲染
+│   │   │   ├── media.py          #     流媒体/AI 可达性探针
+│   │   │   └── service_spec.py   #     服务 → probe URL 单一真相源
+│   │   └── stages/
+│   │       ├── cron.py           #     geo-update + isp-retest crontab 注册
+│   │       ├── isp_retest.py     #     周期重测编排（6h）
+│   │       └── …
+│   └── show                  # `entrypoint.py show` 子命令 shim
 ├── templates/
-│   ├── xray/                 # Xray 入站/出站/路由 JSON 模板
-│   ├── sing-box/             # Sing-box 入站/出站/路由 JSON 模板
+│   ├── xray/                 # Xray 入站 / 出站 / 路由 JSON 模板
+│   ├── sing-box/             # Sing-box 入站 / 出站 / 路由 JSON 模板
 │   ├── nginx/                # Nginx 站点配置模板
-│   ├── dufs/                 # Dufs 文件服务配置模板
 │   ├── supervisord/          # Supervisor 进程管理配置模板
-│   ├── proxies/              # 代理节点配置模板
-│   ├── client_template/      # 客户端订阅模板 (Mihomo/OneSmartPro/Surge/Stash)
-│   └── providers/            # 订阅源提供者模板
-├── docs/                     # 技术文档
+│   └── …                     # Dufs / client_template / providers / proxies 等
+├── docs/
+│   ├── 01-architecture-and-traffic.md        # 系统架构与全流量链路
+│   ├── 02-protocols-and-security.md          # 协议详解与安全加密
+│   ├── 03-routing-and-clients.md             # 路由决策与客户端分发
+│   ├── 04-ops-and-troubleshooting.md         # 运维与排障（含 env 全集）
+│   ├── 05-build-release.md                   # 构建部署与版本发布
+│   └── 07-event-bus-shoutrrr.md              # shoutrrr 事件总线指南
+├── tests/                    # pytest 单元/集成测试（~380 用例）
 └── sources/                  # 静态资源与伪装站点素材
 ```
+
+> 容器内 `/geo` 目录由 `./geo:/geo` 卷挂载，用于持久化 GeoIP / GeoSite 规则库（避免重启重下 ~100 MB）。
 
 ### 挂载卷说明
 
@@ -275,6 +245,7 @@ sb-xray/
 | `./nginx/http`    | `/etc/nginx/conf.d`       | 自定义 Nginx HTTP 配置                |
 | `./nginx/tcp`     | `/etc/nginx/stream.d`     | 自定义 Nginx Stream 配置              |
 | `./nginx-dhparam` | `/etc/nginx/dhparam`      | DH 密钥参数（首次生成后缓存）         |
+| `./geo`           | `/geo`                    | GeoIP / GeoSite 规则缓存（避免重启重下 ~100 MB） |
 | `./logs`          | `/var/log`                | 所有日志文件                          |
 
 ### Provider（外部订阅源）配置
@@ -331,17 +302,13 @@ docker exec -it sb-xray bash
 <details>
 <summary>点击查看快速构建命令</summary>
 
-### 自动整合构建（推荐）
-
 ```bash
-./build.sh
+./build.sh              # 离线模式（默认）：读 versions.json 构建，不触网
+./build.sh refresh      # 刷新模式：GitHub API → 写回 versions.json → 构建
+./build.sh --local      # 单架构 amd64，--load 到本地，不 push；可与上面组合
 ```
 
-### 使用默认版本构建（离线环境）
-
-```bash
-./build.sh default
-```
+`versions.json` 是所有组件版本 + 二进制 SHA256 的单一真相源，由 `daily-build.yml` CI 每日自动刷新并提交。离线模式与 CI 产物位级一致；需要提前跟最新上游时再用 `refresh` 模式。
 
 </details>
 
@@ -356,7 +323,7 @@ docker exec -it sb-xray bash
 | 项目                    | 作用                                                 | 链接                                                      |
 | :---------------------- | :--------------------------------------------------- | :-------------------------------------------------------- |
 | **Xray-core**           | VLESS/VMess/Reality/XHTTP 协议核心，XTLS-Vision 流控 | [XTLS/Xray-core](https://github.com/XTLS/Xray-core)       |
-| **Sing-box**            | TUIC/AnyTLS 等 UDP/QUIC 协议核心（Hysteria2 2026-04 迁至 Xray） | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) |
+| **Sing-box**            | TUIC / AnyTLS 等 UDP / QUIC 协议核心 | [SagerNet/sing-box](https://github.com/SagerNet/sing-box) |
 | **Mihomo (Clash Meta)** | 客户端智能路由内核，Smart 模式策略组引擎             | [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)   |
 
 ### 🖥️ 管理面板与前端
