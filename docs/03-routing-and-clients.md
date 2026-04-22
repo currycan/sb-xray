@@ -44,7 +44,16 @@ flowchart TD
     HC -- "全部故障" --> Direct["自动回退 direct"]:::pass
 ```
 
-> **关键变化**：旧版将所有服务路由静态指向单个 ISP tag（如 `proxy-la-isp`），ISP 挂了流量直接黑洞。新版所有服务路由指向 `isp-auto`，由 Sing-box `urltest` / Xray `balancer` 在运行时自动选优并回退 `direct`。
+> **关键变化**：旧版将所有服务路由静态指向单个 ISP tag（如 `proxy-la-isp`），ISP 挂了流量直接黑洞。新版所有服务路由指向 `isp-auto`，由 Sing-box `urltest` / Xray `balancer` 在运行时自动选优并回退。
+>
+> **进一步的 Phase 1–5 优化**（默认零行为变化，按需开启）:
+> - probe URL 默认 Cloudflare 1 MiB（携带带宽信号;`ISP_PROBE_URL`）
+> - sing-box 可按服务分桶 balancer（`ISP_PER_SERVICE_SB=true` 启用 6 个 `isp-auto-<service>`）
+> - fallback 策略可选 `direct`(默认) / `block`(fail-closed)
+> - 每 6h cron 周期重测,组成变化才 restart
+> - 冷启动 TTL 缓存（60 min）+ 后台异步刷新
+>
+> 完整运行时闭环架构图见 `docs/01-architecture-and-traffic.md` §6.4；env 变量与典型组合见 `docs/04-ops-and-troubleshooting.md` §2.6。
 
 ### 1.3 多 ISP 环境注入实操
 
@@ -184,7 +193,7 @@ flowchart LR
 >
 > `_is_restricted_region` 仅作日志修饰，不单独控制分支走向；IP 类型（`IP_TYPE`）与地区限制同级参与条件评估。
 >
-> **运行时保障**：即使启动时选中的 ISP 在运行期间故障，Sing-box `urltest` / Xray `observatory` 会在下次探测（1 分钟间隔）后自动切换到存活节点或回退 `direct`，避免流量黑洞。
+> **运行时保障**：即使启动时选中的 ISP 在运行期间故障，Sing-box `urltest` / Xray `observatory` 会在下次探测（`ISP_PROBE_INTERVAL`，默认 1 分钟）后自动切换到存活节点或回退（`ISP_FALLBACK_STRATEGY`，默认 `direct`；`block` 实现 fail-closed），避免流量黑洞。每 `ISP_RETEST_INTERVAL_HOURS`（默认 6h）会周期性重跑带宽测试、仅当组成/排序变化时重渲染配置并重启内核。
 
 #### 8K 判定阈值
 

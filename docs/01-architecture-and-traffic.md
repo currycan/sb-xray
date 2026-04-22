@@ -516,12 +516,13 @@ flowchart LR
 | 机制 | Sing-box | Xray |
 |:---|:---|:---|
 | **实现** | `urltest` 出站类型 | `observatory` + `balancer` |
-| **探测 URL** | `https://www.gstatic.com/generate_204` | 同左 |
-| **探测间隔** | 1 分钟 | 1 分钟 |
-| **选优策略** | 最低延迟（tolerance 300ms） | `leastPing`（最低延迟） |
-| **回退机制** | `outbounds` 列表末尾包含 `direct` | `fallbackTag: "direct"` |
+| **探测 URL** | `ISP_PROBE_URL`，默认 `https://speed.cloudflare.com/__down?bytes=1048576`（1 MiB 携带带宽信号） | 同左 |
+| **探测间隔** | `ISP_PROBE_INTERVAL`，默认 `1m`（小内存节点建议 `5m`） | 同左 |
+| **选优策略** | 最低延迟（`ISP_PROBE_TOLERANCE_MS`，默认 300ms） | `leastPing`（最低延迟） |
+| **回退机制** | `outbounds` 末尾追加 `ISP_FALLBACK_STRATEGY`（默认 `direct`，可设 `block` 实现 fail-closed） | `fallbackTag` 同左策略 |
 | **故障切换** | `interrupt_exist_connections: true` | observatory 自动标记不健康 |
-| **配置生成** | `build_sb_urltest()` → `${SB_ISP_URLTEST}` | `build_xray_balancer()` → `${XRAY_OBSERVATORY_SECTION}` + `${XRAY_BALANCERS_SECTION}` |
+| **服务分桶** | `ISP_PER_SERVICE_SB=true` 时 legacy `isp-auto` + 6 个 `isp-auto-<service>`（Netflix / OpenAI / Claude / Gemini / Disney / YouTube），各自用该服务真实域名做 probe | **不支持**（observatory 全局单例） |
+| **配置生成** | `build_sb_urltest()` / `build_sb_urltest_set()` → `${SB_ISP_URLTEST}` | `build_xray_balancer()` → `${XRAY_OBSERVATORY_SECTION}` + `${XRAY_BALANCERS_SECTION}` |
 
 #### Xray 动态路由规则
 
@@ -534,6 +535,85 @@ flowchart LR
 ```
 
 由 `build_xray_service_rules()` 在 `analyze_ai_routing_env()` 之后调用，遍历所有 `*_OUT` 变量动态拼接注入 `${XRAY_SERVICE_RULES}` 占位符。
+
+### 6.4 完整运行时闭环
+
+Phase 1–5 优化后，`isp-auto` 形成一个「冷启动缓存 → 速度测量 → 配置渲染 → 内核健康选优 → 周期重测」的闭环，操作员通过 12 个 env flag 控制节奏、可观测性与失败语义。
+
+```mermaid
+flowchart TB
+    classDef boot fill:#74b9ff,stroke:#0984e3,color:#fff
+    classDef cache fill:#fdcb6e,stroke:#e17055,color:#333
+    classDef render fill:#55efc4,stroke:#00b894,color:#333
+    classDef runtime fill:#a29bfe,stroke:#6c5ce7,color:#fff
+    classDef cron fill:#fd79a8,stroke:#e84393,color:#fff
+    classDef event fill:#dfe6e9,stroke:#636e72,color:#333
+
+    subgraph Boot["容器启动（entrypoint pipeline）"]
+        direction TB
+        B0["stage: 测速与选路"]:::boot
+        B0 --> Cache{"ISP_SPEED_CACHE_TTL_MIN > 0<br/>且 STATUS_FILE.ISP_LAST_RETEST_TS<br/>在 TTL 内?"}:::cache
+        Cache -- "命中" --> FastBoot["读缓存 speeds<br/>启动 &lt; 1s<br/>emit isp.speed_test.cache_hit"]:::cache
+        FastBoot -.后台线程.-> Live
+        Cache -- "未命中 / 过期" --> Live["逐 ISP 节点 SOCKS5 带宽实测<br/>2 次采样，按 Mbps 排序"]:::boot
+        Live --> Persist["写 _ISP_SPEEDS_JSON / ISP_TAG / IS_8K_SMOOTH<br/>→ STATUS_FILE + os.environ"]:::boot
+        Persist --> Render
+    end
+
+    subgraph Render["配置渲染 (build_client_and_server_configs)"]
+        direction TB
+        Render[("per_service?")]
+        Render -- "ISP_PER_SERVICE_SB=false<br/>(默认)" --> Legacy["sing-box: 单 isp-auto urltest<br/>xray: 单 observatory + balancer"]:::render
+        Render -- "ISP_PER_SERVICE_SB=true" --> Multi["sing-box: isp-auto +<br/>isp-auto-netflix / -openai / -claude<br/>/ -gemini / -disney / -youtube<br/>每个用真实服务域名探测"]:::render
+        Legacy --> Tail
+        Multi --> Tail
+        Tail["fallback tail:<br/>ISP_FALLBACK_STRATEGY ∈ {direct, block}"]:::render
+    end
+
+    Tail --> RT
+
+    subgraph RT["运行时（sing-box / xray 内核）"]
+        direction TB
+        Probe["每 ISP_PROBE_INTERVAL<br/>（默认 1m）<br/>HTTP GET ISP_PROBE_URL"]:::runtime
+        Probe --> Rank["按 RTT 排序<br/>（Cloudflare 1 MiB probe<br/>携带带宽信号）"]:::runtime
+        Rank --> Pick["客户端请求命中<br/>geosite:netflix/openai/...<br/>→ 当前最快 ISP"]:::runtime
+        Pick -- "所有 ISP 挂" --> FB["回退 direct 或 block<br/>（随 ISP_FALLBACK_STRATEGY）"]:::runtime
+    end
+
+    RT --> Cron
+
+    subgraph Cron["周期性重测 (crond)"]
+        direction TB
+        C0["每 ISP_RETEST_INTERVAL_HOURS<br/>（默认 6h）<br/>cron 触发<br/>/scripts/entrypoint.py isp-retest"]:::cron
+        C0 --> C1["run_isp_speed_tests(force=True)"]:::cron
+        C1 --> Diff{"新速度 vs 旧 _ISP_SPEEDS_JSON<br/>组成变 / top-1 tag 变 /<br/>delta > ISP_RETEST_DELTA_PCT?"}:::cron
+        Diff -- "是" --> Reload["重新渲染 sb.json + xr.json<br/>supervisorctl restart xray sing-box<br/>emit isp.retest.completed"]:::cron
+        Diff -- "否" --> NoOp["emit isp.retest.noop<br/>不重启 daemon<br/>（纯 RTT 波动留给 urltest 在线处理）"]:::cron
+        Reload -.-> RT
+        NoOp -.-> RT
+    end
+
+    subgraph Events["可观测性 (emit_event)"]
+        direction LR
+        E0["stdout: event=... payload={...}"]:::event
+        E1["SHOUTRRR_URLS 非空时<br/>POST /xray → Telegram/Discord/Slack"]:::event
+    end
+
+    Persist -.发.-> Events
+    Reload -.发.-> Events
+    NoOp -.发.-> Events
+    FastBoot -.发.-> Events
+```
+
+**闭环保证**:
+1. **冷启动快** — 缓存命中 <1s 启动,后台异步刷新(Phase 5)
+2. **选优有带宽信号** — probe URL 默认 Cloudflare 1 MiB,限速节点 RTT 自然变长下沉(Phase 1)
+3. **解锁按服务分桶** — sing-box 可为 Netflix / OpenAI 等各配独立 balancer + 真实域名探测(Phase 4)
+4. **ISP 挂不黑洞** — fallback 可选 `direct`(静默) 或 `block`(fail-closed,CN/HK/RU 适用)(Phase 5)
+5. **长时间漂移自愈** — 每 6h cron 重测,仅组成变化时重启 daemon,避免无谓 OOM 风险(Phase 3)
+6. **每个决策留痕** — 6 种结构化事件(`isp.speed_test.result` / `.cache_hit` / `.error` / `isp.retest.completed` / `.noop` / `.error`),stdout 必落盘,shoutrrr 按需推送(Phase 2)
+
+> 所有 flag 的默认值在 `Dockerfile` ENV 注册,保证**零行为变化** = 不改 docker-compose 时等价旧版 `isp-auto` 逻辑。完整表格与典型组合见 `docs/04-ops-and-troubleshooting.md` §2.6。
 
 ---
 
