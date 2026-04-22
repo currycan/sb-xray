@@ -150,6 +150,53 @@ def _sort_tags_desc(speeds: dict[str, float]) -> list[str]:
     return [t for t, _ in sorted(speeds.items(), key=lambda kv: kv[1], reverse=True)]
 
 
+_VALID_FALLBACK_STRATEGIES: Final[frozenset[str]] = frozenset({"direct", "block", "warp"})
+
+
+def _has_warp() -> bool:
+    return os.environ.get("WARP_ENABLED", "").strip().lower() == "true"
+
+
+def _resolve_fallback_tags(
+    *,
+    strategy: str | None = None,
+    is_restricted: bool | None = None,
+    has_warp: bool | None = None,
+) -> list[str]:
+    """Policy-driven fallback for both sing-box urltest and xray balancer.
+
+    Returns the ordered tag list that follows the ISP selector (sing-box
+    urltest concatenates them; xray takes ``list[0]`` as ``fallbackTag``).
+    Byte-compatible with Phase 1–4 when ``ISP_FALLBACK_STRATEGY`` is
+    ``direct`` (the default) — always returns ``["direct"]``.
+    """
+    if strategy is None:
+        strategy = os.environ.get("ISP_FALLBACK_STRATEGY", "direct").strip().lower()
+    if strategy not in _VALID_FALLBACK_STRATEGIES:
+        logger.warning(
+            "unknown ISP_FALLBACK_STRATEGY=%r — falling back to 'direct'",
+            strategy,
+        )
+        strategy = "direct"
+    if has_warp is None:
+        has_warp = _has_warp()
+    if is_restricted is None:
+        is_restricted = is_restricted_region()
+
+    if strategy == "block":
+        return ["block"]
+    if strategy == "warp":
+        if is_restricted and has_warp:
+            return ["warp", "direct"]
+        if is_restricted and not has_warp:
+            logger.warning(
+                "ISP_FALLBACK_STRATEGY=warp requested but WARP_ENABLED != true — "
+                "falling back to 'direct'"
+            )
+        return ["direct"]
+    return ["direct"]
+
+
 def _build_sb_urltest_fragment(
     *,
     tag: str,
@@ -157,9 +204,11 @@ def _build_sb_urltest_fragment(
     url: str,
     interval: str,
     tolerance_ms: int,
+    fallback_tags: list[str] | None = None,
 ) -> str:
     """Internal: one urltest JSON object (used by legacy + per-service builders)."""
-    outbounds = [*_sort_tags_desc(speeds), "direct"]
+    tail = fallback_tags or _resolve_fallback_tags()
+    outbounds = [*_sort_tags_desc(speeds), *tail]
     return json.dumps(
         {
             "type": "urltest",
@@ -274,13 +323,16 @@ def build_xray_balancer(
         },
         ensure_ascii=False,
     )
+    fallback_tail = _resolve_fallback_tags()
     balancer = json.dumps(
         {
             "balancers": [
                 {
                     "tag": "isp-auto",
                     "selector": selector,
-                    "fallbackTag": "direct",
+                    # Xray's balancer only supports a single fallbackTag; pick
+                    # the first tag from the resolved chain (warp > direct).
+                    "fallbackTag": fallback_tail[0],
                     "strategy": {"type": "leastPing"},
                 }
             ]

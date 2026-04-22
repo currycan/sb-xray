@@ -9,8 +9,10 @@ surface the fastest one — preserving the Bash ``proxy_max_speed`` /
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -525,6 +527,11 @@ def run_isp_speed_tests(
     sample_count = _resolve_sample_count(samples)
 
     if not force:
+        # Phase 5: optional TTL cache. Use last retest timestamp + cached
+        # speeds on cold boot; kick off a daemon thread to refresh in the
+        # background so the boot stays fast.
+        if _try_speed_cache_hit():
+            return
         cached_tag = os.environ.get("ISP_TAG", "").strip()
         if cached_tag and _try_cache_hit(cached_tag):
             return
@@ -534,6 +541,106 @@ def run_isp_speed_tests(
     direct_mbps = _measure_direct_baseline(url, sample_count)
     ctx = _measure_isp_nodes(url, sample_count)
     _persist_routing_decision(direct_mbps, ctx)
+
+
+def _try_speed_cache_hit() -> bool:
+    """Phase 5 cold-boot cache.
+
+    Returns True if the STATUS_FILE has a recent ``_ISP_SPEEDS_JSON`` +
+    ``ISP_LAST_RETEST_TS`` pair within ``ISP_SPEED_CACHE_TTL_MIN`` (default
+    60 minutes, ``0`` disables). When hit, the cached speeds are loaded
+    into env and an async daemon thread refreshes in the background.
+
+    Defensive: any parse / filesystem error turns into a cache miss (log
+    at DEBUG, run the full speed test normally).
+    """
+    raw_ttl = os.environ.get("ISP_SPEED_CACHE_TTL_MIN", "60").strip()
+    try:
+        ttl_min = float(raw_ttl) if raw_ttl else 60.0
+    except ValueError:
+        ttl_min = 60.0
+    if ttl_min <= 0:
+        return False
+
+    path = _status_file()
+    if not path.is_file():
+        return False
+
+    status: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^export (\w+)=['\"]?(.*?)['\"]?$", line.strip())
+            if m:
+                status[m.group(1)] = m.group(2)
+    except OSError:
+        return False
+
+    ts_raw = status.get("ISP_LAST_RETEST_TS", "")
+    speeds_raw = status.get("_ISP_SPEEDS_JSON", "")
+    isp_tag = status.get("ISP_TAG", "")
+    is_8k = status.get("IS_8K_SMOOTH", "")
+    if not (ts_raw and speeds_raw and isp_tag):
+        return False
+    try:
+        ts = int(ts_raw)
+    except ValueError:
+        return False
+
+    import time
+
+    age_min = (time.time() - ts) / 60.0
+    if age_min > ttl_min:
+        logger.info(
+            "speed cache stale (age=%.1fmin > ttl=%.1fmin) — running live test",
+            age_min,
+            ttl_min,
+        )
+        return False
+
+    # Validate parsed speeds before accepting.
+    try:
+        _json.loads(speeds_raw)
+    except _json.JSONDecodeError:
+        return False
+
+    os.environ["_ISP_SPEEDS_JSON"] = speeds_raw
+    os.environ["ISP_TAG"] = isp_tag
+    if is_8k:
+        os.environ["IS_8K_SMOOTH"] = is_8k
+    os.environ["HAS_ISP_NODES"] = "true" if isp_tag not in ("", "direct", "block") else ""
+    logger.info(
+        "speed cache hit (age=%.1fmin ttl=%.1fmin) — deferring live test to background",
+        age_min,
+        ttl_min,
+    )
+
+    from sb_xray.events import emit_event
+
+    emit_event(
+        "isp.speed_test.cache_hit",
+        {"age_min": round(age_min, 2), "ttl_min": ttl_min, "isp_tag": isp_tag},
+    )
+
+    if os.environ.get("ISP_SPEED_CACHE_ASYNC", "true").strip().lower() != "false":
+        _spawn_async_refresh()
+    return True
+
+
+def _spawn_async_refresh() -> None:
+    """Background daemon refreshing speeds after a cache hit."""
+    import threading
+
+    def _runner() -> None:
+        try:
+            run_isp_speed_tests(force=True)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning("async speed refresh failed: %s", exc)
+            from sb_xray.events import emit_event
+
+            emit_event("isp.speed_test.error", {"error": repr(exc), "stage": "async_refresh"})
+
+    t = threading.Thread(target=_runner, name="isp-speed-refresh", daemon=True)
+    t.start()
 
 
 def _json_speeds(speeds: dict[str, float]) -> str:
