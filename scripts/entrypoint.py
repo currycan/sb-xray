@@ -132,6 +132,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Download GeoIP/GeoSite rule-sets (cron entry; forces refresh + xray reload).",
     )
 
+    sub.add_parser(
+        "shoutrrr-forward",
+        help="Run the shoutrrr event-bus HTTP receiver (long-running; supervisord-managed).",
+    )
+
     args, extras = parser.parse_known_args(argv)
     args.extras = extras
 
@@ -665,6 +670,11 @@ def main(argv: list[str] | None = None) -> int:
         from sb_xray import geo
 
         return geo.refresh(on_startup=False)
+
+    if args.command == "shoutrrr-forward":
+        from sb_xray import shoutrrr
+
+        return shoutrrr.run()
 
     sblog.log(
         "INFO",

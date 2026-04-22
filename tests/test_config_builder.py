@@ -289,7 +289,7 @@ command=node /sub-store/http-meta.bundle.js
 priority=15
 
 [program:shoutrrr-forwarder]
-command=python3 /scripts/shoutrrr-forwarder.py
+command=python3 /scripts/entrypoint.py shoutrrr-forward
 priority=18
 
 [program:xray]

@@ -115,7 +115,7 @@ for required in \
     "templates/supervisord/daemon.ini" \
     "scripts/entrypoint.py" \
     "scripts/sb_xray/config_builder.py" \
-    "scripts/shoutrrr-forwarder.py"; do
+    "scripts/sb_xray/shoutrrr.py"; do
     if [ -f "${REPO_ROOT}/${required}" ]; then
         ok "存在: ${required}"
     else
