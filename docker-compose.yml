@@ -11,10 +11,15 @@ services:
       - CDNDOMAIN=$cdndomain
       - DECODE=$code
       - ACMESH_DEBUG=1
-      # zerossl/google
-      - ACMESH_SERVER_NAME=zerossl
-      - ACMESH_EAB_KID=$eab_kid # 填入 Google EAB keyId
-      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key # 填入 Google EAB b64MacKey
+      # CA 候选（均支持 DNS-01 通配符证书）：
+      #   letsencrypt  无需 EAB，50 cert/domain/week，默认推荐
+      #   zerossl      acme.sh 自动申领 EAB；失败多次后会触发 retryafter=86400 冷却
+      #   google       手动 EAB 凭据（Google Cloud Shell 获取，7 天内一次性有效）
+      # 注意：buypass 不支持通配符，本项目场景勿选
+      - ACMESH_SERVER_NAME=letsencrypt
+      # 仅 Google / 预分配 ZeroSSL EAB 时需要填；letsencrypt 忽略
+      - ACMESH_EAB_KID=$eab_kid
+      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key
       - DEST_HOST=speed.cloudflare.com
       - LISTENING_PORT=443
       # xray / sing-box 日志级别：debug | info | warning | error，默认 warning

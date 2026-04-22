@@ -353,7 +353,7 @@ ENV PORT_ANYTLS="4433"
 # acme.sh
 ENV ACMESH_REGISTER_EMAIL=""
 # zerossl/google
-ENV ACMESH_SERVER_NAME="zerossl"
+ENV ACMESH_SERVER_NAME="letsencrypt"
 # certs path
 ENV SSL_PATH=/pki
 
