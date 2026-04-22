@@ -120,7 +120,7 @@ def get_fallback_proxy() -> str:
 
     Defers to :func:`sb_xray.routing.isp._resolve_fallback_tags` for the
     no-ISP case so media probes and balancer renders never drift on
-    ``ISP_FALLBACK_STRATEGY`` / ``WARP_ENABLED`` interpretation.
+    ``ISP_FALLBACK_STRATEGY`` interpretation.
     """
     if os.environ.get("HAS_ISP_NODES"):
         return "isp-auto"
