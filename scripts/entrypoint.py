@@ -183,8 +183,11 @@ def _init_dirs(env_file: Path) -> None:
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def _load_env_file(path: Path) -> None:
+def _load_env_file(path: Path) -> int:
     """Parse bash-style env / secret files into ``os.environ``.
+
+    Returns the number of NEW variables actually injected (useful for
+    operator-visible log lines in step 2).
 
     Accepts **both** formats bash ``source`` accepts::
 
@@ -199,8 +202,9 @@ def _load_env_file(path: Path) -> None:
     Missing files are ignored. Comments and blank lines are skipped.
     Shell-set vars always win (``setdefault``).
     """
+    injected = 0
     if not path.is_file():
-        return
+        return injected
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -225,7 +229,10 @@ def _load_env_file(path: Path) -> None:
         # crashes downstream stages.
         while len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
             value = value[1:-1]
+        if key not in os.environ:
+            injected += 1
         os.environ.setdefault(key, value)
+    return injected
 
 
 def bootstrap(env_file: Path) -> EnvManager:
@@ -417,20 +424,44 @@ def run_pipeline(
     _step(1, "初始化目录与文件")
     _init_dirs(env_file)
 
-    _step(2, "解密远端密钥库")
+    _step(2, "解密远端密钥库 + 加载密钥")
 
     def _secrets() -> None:
+        """Bash parity (entrypoint.sh:main_init step 2)::
+
+            decryptSecretsEnv
+            source "${SECRET_FILE}"
+
+        The ``source`` was *inside* step 2 in bash — sourcing always
+        happened after decrypt, regardless of whether the file was newly
+        decrypted or pre-existing. Without this, ACMESH_* / ALI_* / CF_*
+        never reach ``os.environ`` when the file is already on disk
+        (status=skipped) and ``cert.ensure_certificate`` later fails
+        with 'required environment variables missing' — the exact bug
+        reported after the first VPS re-deploy.
+        """
         try:
             status = sbsecrets.decrypt_remote_secrets(secret_file=_secret_file())
             sblog.log("INFO", f"  [secrets] status={status.value}")
         except RuntimeError as exc:
             sblog.log("WARN", f"  [secrets] 解密失败，继续启动: {exc}")
+        # ``source "${SECRET_FILE}"`` equivalent — idempotent; no-op if
+        # the file is missing (decrypt failed or user hasn't set it up).
+        loaded = _load_env_file(_secret_file())
+        if loaded:
+            sblog.log(
+                "INFO",
+                f"  [secrets] 已加载 {loaded} 个变量到环境 (来自 {_secret_file()})",
+            )
 
     _run("secrets", _secrets)
 
-    _step(3, "加载持久化状态 (ENV/STATUS/SECRET)")
+    _step(3, "加载持久化状态 (ENV/STATUS)")
     mgr = bootstrap(env_file)
     _load_env_file(_status_file())
+    # Safety net: if ``--skip-stage secrets`` was used, the step-2
+    # source above never ran. Re-try here so the subsequent cert step
+    # still has a chance (setdefault — won't clobber existing shell env).
     _load_env_file(_secret_file())
 
     _step(4, "基础环境变量初始化")
