@@ -165,12 +165,31 @@ def ensure_certificate(
     _check_required_env()
     server = os.environ["ACMESH_SERVER_NAME"]
 
-    if not _acme_already_has(first_domain):
-        _register_account()
-        subprocess.run(
-            ["acme.sh", *_build_issue_args(params, server)],
-            check=False,
-            env=_acme_env(),
+    # Always register + issue. Register is idempotent ("Already registered"
+    # logged then returns 0). Issue without --force is also idempotent:
+    # acme.sh skips the CA roundtrip when its own store has a fresh
+    # cert, but will re-fetch when the store is stale or missing.
+    #
+    # The previous 'if not _acme_already_has(first_domain)' guard was
+    # brittle — acme.sh --list prints the Main_Domain column even when
+    # the underlying ${LE_CONFIG_HOME}/<domain>_ecc/ca.cer is gone
+    # (observed on cn2 after a failed past attempt: --list lied about
+    # having cn2.ansandy.com, we skipped --issue, --install-cert then
+    # errored with "cat: /acmecerts/cn2.ansandy.com_ecc/ca.cer: No such
+    # file or directory" and silently "succeeded" with no files on
+    # disk).
+    _register_account()
+    issue_rc = subprocess.run(
+        ["acme.sh", *_build_issue_args(params, server)],
+        check=False,
+        env=_acme_env(),
+    ).returncode
+    if issue_rc not in (0, 2):
+        # 0 = issued now; 2 = already valid, skip (acme.sh convention).
+        raise RuntimeError(
+            f"acme.sh --issue exited {issue_rc} for {first_domain}; "
+            "check DNS credentials (ALI_KEY/ALI_SECRET, CF_TOKEN/CF_ZONE_ID/CF_ACCOUNT_ID)"
+            " and acme.sh log"
         )
 
     ssl_path.mkdir(parents=True, exist_ok=True)
@@ -184,7 +203,7 @@ def ensure_certificate(
                 if item.is_file():
                     item.unlink()
 
-    subprocess.run(
+    install_rc = subprocess.run(
         [
             "acme.sh",
             "--install-cert",
@@ -202,7 +221,9 @@ def ensure_certificate(
         ],
         check=False,
         env=_acme_env(),
-    )
+    ).returncode
+    if install_rc != 0:
+        raise RuntimeError(f"acme.sh --install-cert exited {install_rc} for {first_domain}")
     # acme.sh --reloadcmd 拉起了一个独立的 nginx 进程，但服务生命周期实际由
     # supervisord 管理。优雅关闭它并清掉 PID 文件，后续 supervisord 才能干净
     # fork 自己的 nginx（entrypoint.sh:903 等价）。

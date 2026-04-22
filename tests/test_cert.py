@@ -86,8 +86,13 @@ def test_issue_when_cert_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     cert.ensure_certificate(name="cdn", params="vpn.example.com:ali", ssl_path=ssl_path)
     acme_flags = [c[1] for c in commands if c[0] == "acme.sh" and len(c) > 1]
-    assert "--list" in acme_flags
+    # New flow: always register + issue; no '--list' short-circuit
+    # (the old guard was fragile — acme.sh --list lied about holding
+    # a cert whose files on disk were gone, causing --install-cert to
+    # silently fail).
     assert "--register-account" in acme_flags
+    assert "--issue" in acme_flags
+    assert "--install-cert" in acme_flags
     assert "--issue" in acme_flags
     assert "--install-cert" in acme_flags
 
@@ -228,7 +233,10 @@ def test_install_purges_stale_nginx_conf_dirs(
         return orig_path(*args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(cert_mod, "Path", fake_path)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompleted(returncode=1, stdout=""))
+    # Return 0 for every subprocess call — the assertion we care about
+    # is the on-disk purge side-effect between --issue and
+    # --install-cert, not subprocess exit codes.
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompleted(returncode=0, stdout=""))
     for env in (
         "ACMESH_REGISTER_EMAIL",
         "ACMESH_SERVER_NAME",
@@ -297,3 +305,61 @@ def test_install_quits_reloadcmd_nginx_and_clears_pid(
 
     assert ["/usr/sbin/nginx", "-s", "quit"] in calls
     assert not pid_file.exists()
+
+
+def test_issue_nonzero_exit_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: acme.sh --issue returning a bad code must abort the
+    stage. Observed on cn2 prod — the acme.sh store was stale (leftover
+    Main_Domain entry but no ca.cer), --issue silently failed and
+    --install-cert then 'installed' non-existent files."""
+    ssl_path = tmp_path / "ssl"
+    ssl_path.mkdir()
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+        if cmd[0] == "acme.sh" and "--issue" in cmd:
+            return _FakeCompleted(returncode=1)  # simulate DNS cred failure
+        return _FakeCompleted(returncode=0)
+
+    for env in (
+        "ACMESH_REGISTER_EMAIL",
+        "ACMESH_SERVER_NAME",
+        "ALI_KEY",
+        "ALI_SECRET",
+        "CF_TOKEN",
+        "CF_ZONE_ID",
+        "CF_ACCOUNT_ID",
+    ):
+        monkeypatch.setenv(env, f"fake-{env.lower()}")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match=r"acme\.sh --issue exited 1"):
+        cert.ensure_certificate(name="bundle", params="vpn.example.com:ali", ssl_path=ssl_path)
+
+
+def test_install_cert_nonzero_exit_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: acme.sh --install-cert failure (e.g. source .cer
+    missing from acme.sh's own store) must abort, not silently return
+    'installed'. Before this, nginx/xray restart-looped forever
+    referencing non-existent /pki/sb_xray_bundle.crt."""
+    ssl_path = tmp_path / "ssl"
+    ssl_path.mkdir()
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+        if cmd[0] == "acme.sh" and "--install-cert" in cmd:
+            return _FakeCompleted(returncode=1)
+        return _FakeCompleted(returncode=0)
+
+    for env in (
+        "ACMESH_REGISTER_EMAIL",
+        "ACMESH_SERVER_NAME",
+        "ALI_KEY",
+        "ALI_SECRET",
+        "CF_TOKEN",
+        "CF_ZONE_ID",
+        "CF_ACCOUNT_ID",
+    ):
+        monkeypatch.setenv(env, f"fake-{env.lower()}")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match=r"acme\.sh --install-cert exited 1"):
+        cert.ensure_certificate(name="bundle", params="vpn.example.com:ali", ssl_path=ssl_path)
