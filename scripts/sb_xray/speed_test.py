@@ -9,6 +9,7 @@ surface the fastest one — preserving the Bash ``proxy_max_speed`` /
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -19,7 +20,8 @@ from typing import Final
 import httpx
 
 from sb_xray import http as sbhttp
-from sb_xray import logging as sblog
+
+logger = logging.getLogger(__name__)
 
 # Thresholds from the Bash ``show_report`` ladder (Mbps)
 _THRESH_8K_HDR: Final[float] = 100.0
@@ -51,10 +53,10 @@ def _httpx_client(
             proxy=proxy,
         )
     except ImportError as exc:
-        sblog.log(
-            "WARN",
-            f"[测速] httpx 代理依赖缺失 ({exc}); 跳过该节点（视为 0 Mbps）。"
+        logger.warning(
+            "httpx 代理依赖缺失 (%s); 跳过该节点（视为 0 Mbps）。"
             " 生产镜像请确认 socksio 已 pip install。",
+            exc,
         )
         return None
 
@@ -132,11 +134,12 @@ def measure(
     ``name`` is surfaced in the summary log line when supplied.
     """
     label_name = name or "节点"
-    sblog.log(
-        "INFO",
-        f"[测速] 开始: {label_name}"
-        + (f" | 代理: {proxy}" if proxy else "")
-        + f" | 测速源: {url} | 采样: {samples}次",
+    logger.info(
+        "开始: %s%s | 测速源: %s | 采样: %d次",
+        label_name,
+        f" | 代理: {proxy}" if proxy else "",
+        url,
+        samples,
     )
 
     client = _httpx_client(timeout=timeout, proxy=proxy, proxy_auth=proxy_auth)
@@ -151,26 +154,30 @@ def measure(
             bps = _sample_once(client, url)
             kbps = bps / 1024
             mbps_raw = bps * 8 / 1024 / 1024
-            sblog.log(
-                "INFO",
-                f"[测速] {label_name} | 第 {idx}/{samples} 轮: "
-                f"{kbps:.0f} KB/s → {mbps_raw:.2f} Mbps",
+            logger.info(
+                "%s | 第 %d/%d 轮: %.0f KB/s → %.2f Mbps",
+                label_name,
+                idx,
+                samples,
+                kbps,
+                mbps_raw,
             )
             if bps > _MIN_VALID_BPS:
                 valid.append(bps)
 
     if not valid:
-        sblog.log(
-            "WARN",
-            f"[测速] {label_name}: 全部 {samples} 次采样失败，返回 0",
-        )
+        logger.warning("%s: 全部 %d 次采样失败，返回 0", label_name, samples)
         return 0.0
 
     trimmed_mean, stddev, label = _truncated_mean_with_stability(valid)
-    sblog.log(
-        "INFO",
-        f"[测速] {label_name}: {len(valid)}/{samples} 有效样本，"
-        f"截断均值 {trimmed_mean:.2f} Mbps，标准差 {stddev:.2f} Mbps {label}",
+    logger.info(
+        "%s: %d/%d 有效样本，截断均值 %.2f Mbps，标准差 %.2f Mbps %s",
+        label_name,
+        len(valid),
+        samples,
+        trimmed_mean,
+        stddev,
+        label,
     )
     return trimmed_mean
 
@@ -289,7 +296,7 @@ def _write_status_line(key: str, value: str) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        sblog.log("WARN", f"[status] cannot create {path.parent}: {exc}")
+        logger.warning("status: cannot create %s: %s", path.parent, exc)
         return
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
     import re as _re
@@ -302,7 +309,7 @@ def _write_status_line(key: str, value: str) -> None:
     try:
         path.write_text(cleaned, encoding="utf-8")
     except OSError as exc:
-        sblog.log("WARN", f"[status] cannot write {path}: {exc}")
+        logger.warning("status: cannot write %s: %s", path, exc)
 
 
 def _purge_service_caches() -> None:
@@ -338,117 +345,119 @@ def _proxy_url(ip: str, port: str) -> str:
     return f"socks5h://{ip}:{port}"
 
 
-def run_isp_speed_tests(
-    *,
-    samples: int | None = None,
-    url: str = _SPEED_TEST_URL,
-) -> None:
-    """Port of ``run_speed_tests_if_needed`` (entrypoint.sh:1153).
+_STALE_ENV_KEYS: Final[tuple[str, ...]] = (
+    "ISP_TAG",
+    "TOP_ISP_TAG",
+    "proxy_max_speed",
+    "FASTEST_PROXY_TAG",
+    "IS_8K_SMOOTH",
+    "DIRECT_SPEED",
+    "HAS_ISP_NODES",
+    "_ISP_SPEEDS_JSON",
+)
 
-    Steps (bash parity):
-      1. If ``ISP_TAG`` already cached → rebuild ``HAS_ISP_NODES`` /
-         ``ISP_SPEEDS``-like state and bail early.
-      2. Otherwise wipe stale ``*_OUT`` caches, measure the direct
-         baseline (for ``DIRECT_SPEED`` / ``IS_8K_SMOOTH`` fallback), then
-         iterate every ``*_ISP_IP`` env var, speed-testing through a
-         SOCKS5h proxy.
-      3. Hand the aggregated context to
-         :func:`sb_xray.routing.isp.apply_isp_routing_logic` and persist
-         ``ISP_TAG`` / ``IS_8K_SMOOTH`` into ``STATUS_FILE``.
+
+def _resolve_sample_count(samples: int | None) -> int:
+    """Pick the sample count from CLI arg, env, or default."""
+    if samples is not None:
+        return samples
+    return int(os.environ.get("SPEED_SAMPLES", _SPEED_SAMPLES_DEFAULT))
+
+
+def _try_cache_hit(cached_tag: str) -> bool:
+    """Handle the ``ISP_TAG`` cache. Returns True iff fully handled.
+
+    Validates the cached tag against the current ``*_ISP_IP`` env —
+    when the operator drops an ISP from SECRET_FILE without clearing
+    STATUS_FILE, xray would otherwise start with
+    ``outbound tag proxy-X not found``. A stale cache falls through
+    and the caller runs a fresh measurement.
     """
-    from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
-
-    sample_count = (
-        samples
-        if samples is not None
-        else int(os.environ.get("SPEED_SAMPLES", _SPEED_SAMPLES_DEFAULT))
+    nodes = _discover_isp_nodes()
+    available_tags = {_isp_tag_for(prefix) for prefix, *_ in nodes}
+    if cached_tag == "direct" or cached_tag in available_tags:
+        logger.info("命中缓存 ISP_TAG=%s，跳过测速", cached_tag)
+        if nodes:
+            os.environ["HAS_ISP_NODES"] = "true"
+            speeds = {tag: 0.0 for tag in available_tags}
+            if cached_tag in speeds:
+                speeds[cached_tag] = _KEEP_ON_CACHE_HIT_MBPS
+            os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(speeds)
+        return True
+    logger.warning(
+        "缓存 ISP_TAG=%s 在当前 *_ISP_IP 环境里已不存在 (现有 %s)，清缓存后重新测速",
+        cached_tag,
+        sorted(available_tags) or "无",
     )
+    return False
 
-    cached_tag = os.environ.get("ISP_TAG", "").strip()
-    if cached_tag:
-        nodes = _discover_isp_nodes()
-        available_tags = {_isp_tag_for(prefix) for prefix, *_ in nodes}
-        # Validate the cache: a cached proxy-X tag must correspond to a
-        # still-configured *_ISP_IP env var. Otherwise build_client_and_
-        # server_configs won't emit the proxy-X outbound, and xray will
-        # refuse to start with "outbound tag proxy-X not found". Happens
-        # when the operator removes an ISP from SECRET_FILE without
-        # clearing STATUS_FILE — fall through to a full speed-test run.
-        if cached_tag == "direct" or cached_tag in available_tags:
-            sblog.log("INFO", f"[选路] 命中缓存 ISP_TAG={cached_tag}，跳过测速")
-            if nodes:
-                os.environ["HAS_ISP_NODES"] = "true"
-                speeds = {tag: 0.0 for tag in available_tags}
-                if cached_tag in speeds:
-                    speeds[cached_tag] = _KEEP_ON_CACHE_HIT_MBPS
-                os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(speeds)
-            return
-        sblog.log(
-            "WARN",
-            f"[选路] 缓存 ISP_TAG={cached_tag} 在当前 *_ISP_IP 环境里已不存在 "
-            f"(现有 {sorted(available_tags) or '无'})，清缓存后重新测速",
-        )
 
+def _reset_caches_for_fresh_run() -> None:
+    """Wipe STATUS_FILE ``*_OUT`` + pop the in-process env keys."""
     _purge_service_caches()
-    for v in (
-        "ISP_TAG",
-        "TOP_ISP_TAG",
-        "proxy_max_speed",
-        "FASTEST_PROXY_TAG",
-        "IS_8K_SMOOTH",
-        "DIRECT_SPEED",
-        "HAS_ISP_NODES",
-        "_ISP_SPEEDS_JSON",
-    ):
-        os.environ.pop(v, None)
+    for key in _STALE_ENV_KEYS:
+        os.environ.pop(key, None)
 
+
+def _log_routing_inputs() -> None:
     region = os.environ.get("GEOIP_INFO", "").split("|", 1)[0] or "未知"
-    sblog.log(
-        "INFO",
-        f"[选路] IP_TYPE={os.environ.get('IP_TYPE', '未知')} | "
-        f"地区={region} | DEFAULT_ISP={os.environ.get('DEFAULT_ISP', '未设置')}",
+    logger.info(
+        "IP_TYPE=%s | 地区=%s | DEFAULT_ISP=%s",
+        os.environ.get("IP_TYPE", "未知"),
+        region,
+        os.environ.get("DEFAULT_ISP", "未设置"),
     )
 
+
+def _measure_direct_baseline(url: str, sample_count: int) -> float:
+    """Direct speed measurement, not used for routing but for 8K 判定."""
     direct_mbps = measure(url, samples=sample_count)
     os.environ["DIRECT_SPEED"] = f"{direct_mbps:.2f}"
     show_report(direct_mbps, name="Direct")
-    sblog.log(
-        "INFO",
-        f"[测速] 直连基准: {direct_mbps:.2f} Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）",
+    logger.info(
+        "直连基准: %.2f Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）",
+        direct_mbps,
     )
+    return direct_mbps
 
+
+def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
+    """Iterate every configured ISP node and return the aggregated context."""
     nodes = _discover_isp_nodes()
     ctx = IspSpeedContext()
     if not nodes:
-        sblog.log(
-            "WARN",
-            "[测速] 未发现 ISP 节点（无 *_ISP_IP 环境变量），将回退直连",
+        logger.warning("未发现 ISP 节点（无 *_ISP_IP 环境变量），将回退直连")
+        return ctx
+
+    os.environ["HAS_ISP_NODES"] = "true"
+    logger.info("发现 ISP 节点 %d 个，逐节点采样 %d 次", len(nodes), sample_count)
+    for prefix, ip, port, user, password in nodes:
+        tag = _isp_tag_for(prefix)
+        proxy_auth = f"{user}:{password}" if user and password else None
+        mbps = measure(
+            url,
+            samples=sample_count,
+            proxy=_proxy_url(ip, port),
+            proxy_auth=proxy_auth,
         )
-    else:
-        os.environ["HAS_ISP_NODES"] = "true"
-        sblog.log(
-            "INFO",
-            f"[测速] 发现 ISP 节点 {len(nodes)} 个，逐节点采样 {sample_count} 次",
-        )
-        for prefix, ip, port, user, password in nodes:
-            tag = _isp_tag_for(prefix)
-            proxy_auth = f"{user}:{password}" if user and password else None
-            mbps = measure(
-                url,
-                samples=sample_count,
-                proxy=_proxy_url(ip, port),
-                proxy_auth=proxy_auth,
+        show_report(mbps, name=prefix)
+        ctx.record(tag, mbps)
+        if ctx.fastest_tag == tag and mbps > 0:
+            logger.info("%s: %.2f Mbps → 新最优", tag, mbps)
+        else:
+            logger.info(
+                "%s: %.2f Mbps (最优仍: %s %.2f Mbps)",
+                tag,
+                mbps,
+                ctx.fastest_tag or "未定",
+                ctx.fastest_speed,
             )
-            show_report(mbps, name=prefix)
-            ctx.record(tag, mbps)
-            if ctx.fastest_tag == tag and mbps > 0:
-                sblog.log("INFO", f"[测速] {tag}: {mbps:.2f} Mbps → 新最优")
-            else:
-                sblog.log(
-                    "INFO",
-                    f"[测速] {tag}: {mbps:.2f} Mbps (最优仍: "
-                    f"{ctx.fastest_tag or '未定'} {ctx.fastest_speed:.2f} Mbps)",
-                )
+    return ctx
+
+
+def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
+    """Feed the routing logic and export the decision to env + STATUS_FILE."""
+    from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
 
     os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(ctx.speeds)
     if ctx.fastest_tag:
@@ -471,10 +480,39 @@ def run_isp_speed_tests(
 
     _write_status_line("IS_8K_SMOOTH", os.environ["IS_8K_SMOOTH"])
     _write_status_line("ISP_TAG", decision.isp_tag)
-    sblog.log(
-        "INFO",
-        f"[选路] ISP_TAG={decision.isp_tag} IS_8K_SMOOTH={os.environ['IS_8K_SMOOTH']}",
+    logger.info(
+        "ISP_TAG=%s IS_8K_SMOOTH=%s",
+        decision.isp_tag,
+        os.environ["IS_8K_SMOOTH"],
     )
+
+
+def run_isp_speed_tests(
+    *,
+    samples: int | None = None,
+    url: str = _SPEED_TEST_URL,
+) -> None:
+    """Port of ``run_speed_tests_if_needed`` (entrypoint.sh:1153).
+
+    Orchestrator — composed of 5 single-purpose helpers:
+
+      1. :func:`_try_cache_hit` — honor a valid ``ISP_TAG`` cache.
+      2. :func:`_reset_caches_for_fresh_run` — wipe stale state.
+      3. :func:`_measure_direct_baseline` — direct speed for 8K 判定.
+      4. :func:`_measure_isp_nodes` — per-``*_ISP_IP`` SOCKS5h probes.
+      5. :func:`_persist_routing_decision` — route + write STATUS_FILE.
+    """
+    sample_count = _resolve_sample_count(samples)
+
+    cached_tag = os.environ.get("ISP_TAG", "").strip()
+    if cached_tag and _try_cache_hit(cached_tag):
+        return
+
+    _reset_caches_for_fresh_run()
+    _log_routing_inputs()
+    direct_mbps = _measure_direct_baseline(url, sample_count)
+    ctx = _measure_isp_nodes(url, sample_count)
+    _persist_routing_decision(direct_mbps, ctx)
 
 
 def _json_speeds(speeds: dict[str, float]) -> str:

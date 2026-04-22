@@ -311,6 +311,8 @@ dig @ns1.example.com TXT probe.ns1.example.com
 | `SHOUTRRR_FORWARDER_PORT` | `18085` | forwarder HTTP 端口 | - |
 | `SHOUTRRR_TITLE_PREFIX` | `[sb-xray]` | 推送标题前缀 | - |
 | `LOG_LEVEL` | `warning` | xray + sing-box 日志级别（debug/info/warning/error） | - |
+| `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）；与 `LOG_LEVEL` 分离避免冲突 | - |
+| `NO_COLOR` | *(空)* | 非空 → 禁用 entrypoint 日志 ANSI 彩色；容器 stdout 非 TTY 时自动禁用 | - |
 
 ---
 

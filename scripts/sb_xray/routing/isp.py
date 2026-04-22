@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Final
 
-from sb_xray import logging as sblog
 from sb_xray.network import is_restricted_region
+
+logger = logging.getLogger(__name__)
 
 _SMOOTH_THRESHOLD_MBPS: Final[float] = 100.0
 
@@ -344,10 +346,7 @@ def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -
             )
             xray_parts.append(xray_json + ",\n")
             sb_parts.append(sb_json + ",\n")
-            sblog.log(
-                "INFO",
-                f"[ISP] 注入出站: {tag} ({speeds.get(tag, 0):.2f} Mbps)",
-            )
+            logger.info("注入出站: %s (%.2f Mbps)", tag, speeds.get(tag, 0))
 
     custom_out = "".join(xray_parts)
     sb_custom_out = "".join(sb_parts)

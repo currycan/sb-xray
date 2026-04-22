@@ -14,12 +14,15 @@ the main ``show_info_links`` banner. ``sys.stdout`` is the target
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Final
+
+logger = logging.getLogger(__name__)
 
 # ---- ANSI palette (mirrors show-config.sh header constants) ---------------
 
@@ -91,8 +94,14 @@ def get_flag_emoji(info: str) -> str:
 
 
 def tls_ping_diagnose(target: str) -> None:
-    """Invoke ``xray tls ping <target>`` and echo its output."""
-    print(f"{CYAN}{BOLD}[tls-ping] {target}{RESET}")
+    """Invoke ``xray tls ping <target>`` and log its output.
+
+    The output used to go to stdout (banner style). Now it goes to the
+    logger — since the banner itself is a one-shot report and tls-ping
+    diagnostics are verbose troubleshooting noise that should follow
+    the same verbosity controls as the rest of the pipeline.
+    """
+    logger.info("tls-ping target=%s", target)
     try:
         result = subprocess.run(
             ["xray", "tls", "ping", target],
@@ -100,13 +109,15 @@ def tls_ping_diagnose(target: str) -> None:
             capture_output=True,
             text=True,
         )
-        if result.stdout:
-            print(result.stdout)
-        if result.returncode != 0:
-            print(f"{YELLOW}[tls-ping] 失败（目标不可达或未部署证书）{RESET}")
     except FileNotFoundError:
-        print(f"{YELLOW}[tls-ping] xray CLI 不可用{RESET}")
-    print()
+        logger.warning("tls-ping 跳过: xray CLI 不可用")
+        return
+    if result.stdout:
+        # Preserve multi-line xray output as a single log record so the
+        # cert fingerprint block stays readable.
+        logger.info("tls-ping %s output:\n%s", target, result.stdout.rstrip())
+    if result.returncode != 0:
+        logger.warning("tls-ping %s 失败（目标不可达或未部署证书）", target)
 
 
 def show_qrcode(content: str, *, name: str) -> None:
@@ -115,7 +126,10 @@ def show_qrcode(content: str, *, name: str) -> None:
     Matches show-config.sh:111 params byte-for-byte: ``-s 8 -m 4 -l H -v 10
     -d 300 -k 2`` + ``-f 0 -b 255`` for the utf8 foreground/background.
     """
-    print(f"{GREEN}== {name} QR Code =={RESET}")
+    # QR codes are a visual artifact for human consumption — keep them
+    # on stdout with the surrounding subscription banner, not in the
+    # structured log stream.
+    sys.stdout.write(f"{GREEN}== {name} QR Code =={RESET}\n")
     qr_opts = ["-s", "8", "-m", "4", "-l", "H", "-v", "10", "-d", "300", "-k", "2"]
     try:
         result = subprocess.run(
@@ -127,7 +141,7 @@ def show_qrcode(content: str, *, name: str) -> None:
             sys.stdout.buffer.write(result.stdout)
             sys.stdout.buffer.flush()
     except FileNotFoundError:
-        print(f"{YELLOW}[qr] qrencode CLI 不可用{RESET}")
+        logger.warning("qr 跳过: qrencode CLI 不可用")
 
 
 # ---- banner ---------------------------------------------------------------

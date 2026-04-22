@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from sb_xray import logging as sblog
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CRON = Path("/var/spool/cron/crontabs/root")
 _GEO_ENTRY = "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
@@ -31,4 +32,4 @@ def install_crontab(
     cleaned = "\n".join(lines).rstrip() + "\n"
     cron_file.write_text(cleaned, encoding="utf-8")
     cron_file.chmod(0o600)
-    sblog.log("INFO", "[cron] Cron 定时任务已安装 (geo-update daily 03:00)")
+    logger.info("Cron 定时任务已安装 (geo-update daily 03:00)")

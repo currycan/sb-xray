@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Sequence
 
-from sb_xray import logging as sblog
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG = "/etc/supervisord.conf"
 
@@ -40,5 +41,5 @@ def build_supervisord_argv(
 def exec_supervisord(extras: Sequence[str] | None = None) -> None:
     """``os.execvp`` into supervisord (never returns on success)."""
     argv = build_supervisord_argv(extras)
-    sblog.log("INFO", f"[supervisord] 移交 Supervisord 接管: {' '.join(argv)}")
+    logger.info("移交 Supervisord 接管: %s", " ".join(argv))
     os.execvp(argv[0], argv)

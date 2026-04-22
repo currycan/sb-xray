@@ -6,10 +6,12 @@ in ``ENV_FILE`` atomically (entrypoint.sh §6 ``ensure_key_pair`` parity).
 
 from __future__ import annotations
 
+import logging
 import subprocess
 
-from sb_xray import logging as sblog
 from sb_xray.env import EnvManager
+
+logger = logging.getLogger(__name__)
 
 
 def _run_xray(cmd: list[str]) -> list[str]:
@@ -72,6 +74,6 @@ def ensure_mlkem_keys(mgr: EnvManager) -> dict[str, str]:
 
 def ensure_all_keys(mgr: EnvManager) -> None:
     """Ensure every key pair the downstream templates rely on."""
-    sblog.log("INFO", "[keys] Reality (x25519) + MLKEM768 密钥对")
+    logger.info("Reality (x25519) + MLKEM768 密钥对")
     ensure_reality_keys(mgr)
     ensure_mlkem_keys(mgr)

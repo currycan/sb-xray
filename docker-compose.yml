@@ -24,6 +24,11 @@ services:
       - LISTENING_PORT=443
       # xray / sing-box 日志级别：debug | info | warning | error，默认 warning
       - LOG_LEVEL=warning
+      # Python entrypoint 日志级别 (DEBUG|INFO|WARNING|ERROR|CRITICAL)；与 LOG_LEVEL 分离，
+      # 避免 xray 的 "warning" 字符串意外屏蔽启动阶段的 INFO 级进度日志。默认 INFO。
+      - SB_LOG_LEVEL=INFO
+      # 设为 "1" 关闭 entrypoint 日志 ANSI 彩色（非 TTY 容器 stdout 默认自动关闭）。
+      # - NO_COLOR=1
       - DUFS_PATH_PREFIX=/myfiles
       - XUI_WEBBASEPATH=3xadmin
       # Gemini直连, true=直连, false=使用代理, 空=自动判断

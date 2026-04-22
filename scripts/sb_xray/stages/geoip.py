@@ -7,14 +7,17 @@
 
 from __future__ import annotations
 
+import logging
+
 from sb_xray import geo
-from sb_xray import logging as sblog
+
+logger = logging.getLogger(__name__)
 
 
 def update_geo_data() -> int:
     """启动阶段刷新 geo 数据,返回下载失败数 (不抛异常)。"""
-    sblog.log("INFO", "[geoip] 更新 GeoIP/GeoSite 数据库")
+    logger.info("更新 GeoIP/GeoSite 数据库")
     failed = geo.refresh(on_startup=True)
     if failed:
-        sblog.log("WARN", f"[geoip] {failed} 个规则库下载失败,使用旧缓存")
+        logger.warning("%d 个规则库下载失败,使用旧缓存", failed)
     return failed

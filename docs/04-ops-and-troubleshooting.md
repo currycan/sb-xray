@@ -125,6 +125,26 @@ environment:
 | `DUFS_ALLOW_UPLOAD` | `true` | 允许上传 |
 | `DUFS_ALLOW_DELETE` | `true` | 允许删除 |
 
+#### Entrypoint 日志（Python stdlib logging）
+
+| 变量 | 默认值 | 说明 |
+|:---|:---|:---|
+| `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`（大小写不敏感，`WARN` 作为 `WARNING` 的别名）。**与给 xray/sing-box 用的 `LOG_LEVEL` 分离**，避免 xray 的 `warning` 字符串意外屏蔽阶段进度 INFO 日志。 |
+| `NO_COLOR` | *(空)* | 设为任意非空值 → 关闭 entrypoint 日志的 ANSI 彩色。容器 stdout 非 TTY 时自动关闭，无需手动配置。 |
+
+**格式**：`[ISO-8601 时区时间戳] [LEVEL] [模块名] 消息`
+
+```
+[2026-04-22T13:59:33.123+08:00] [INFO] [sb_xray.entrypoint] ▶ Stage 5/17 speed: ISP 测速与选路
+[2026-04-22T13:59:33.876+08:00] [INFO] [sb_xray.routing.isp] 注入出站: proxy-us-isp (999.00 Mbps)
+[2026-04-22T13:59:33.891+08:00] [INFO] [sb_xray.entrypoint] ✓ Stage 5/17 speed ok in 768ms
+```
+
+- 每个阶段用 `▶ / ✓ / ⋯ / ✗` 标识 start / ok / skipped / failed，带毫秒级耗时。
+- 日志走 **stderr**；`SYSTEM STRATEGY SUMMARY` 方框与订阅 banner 是 **stdout** 的一次性报告，不属于日志流。
+- 日志流末尾会留一行锚点 `handing over to supervisord; subsequent lines come from supervisord / xray / nginx`，之后的 supervisord / xray / nginx 日志保留其原生格式。
+- 排查启动问题时推荐 `SB_LOG_LEVEL=DEBUG`；稳定后改回 `INFO`。
+
 ### 2.3 远端密钥变量（`/.env/secret`，由 `DECODE` 解密注入）
 
 这些变量从加密的远端密钥库中读取，**不应出现在 `docker-compose.yml`** 中：

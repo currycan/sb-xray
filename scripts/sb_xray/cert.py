@@ -195,59 +195,35 @@ def _acme_already_has(first_domain: str) -> bool:
     return first_domain in (result.stdout or "")
 
 
-def ensure_certificate(
-    *,
-    name: str,
-    params: str,
-    ssl_path: Path | None = None,
-) -> CertStatus:
-    """Ensure a valid ACME certificate for ``name`` exists under ``ssl_path``.
+def _bundle_paths(ssl_path: Path, name: str) -> tuple[Path, Path, Path]:
+    """Standard acme.sh --install-cert output trio for ``name``."""
+    return (
+        ssl_path / f"{name}.crt",
+        ssl_path / f"{name}.key",
+        ssl_path / f"{name}-ca.crt",
+    )
 
-    ``ssl_path`` defaults to ``$SSL_PATH`` (Dockerfile sets it to
-    ``/pki`` — same path the nginx / xray / sing-box JSON templates
-    render for ``certificate_path`` / ``ssl_certificate`` etc). Falls
-    back to ``/pki`` when the env var is unset, matching Dockerfile.
 
-    Behavior mirrors entrypoint.sh ``issueCertificate``:
-      - Skip if an existing cert is valid for more than 7 days.
-      - Otherwise register (if needed), issue, and install the cert
-        via acme.sh, writing ``{name}.crt`` / ``.key`` / ``-ca.crt``.
-    """
-    if ssl_path is None:
-        ssl_path = Path(os.environ.get("SSL_PATH", "/pki"))
-    entries = _parse_params(params)
-    if not entries:
-        raise ValueError(f"invalid params (no domains found): {params!r}")
-    first_domain, _ = entries[0]
-
-    cert_path = ssl_path / f"{name}.crt"
-    key_path = ssl_path / f"{name}.key"
-    ca_path = ssl_path / f"{name}-ca.crt"
-
-    if (
+def _existing_bundle_is_fresh(cert_path: Path, key_path: Path, ca_path: Path) -> bool:
+    """All three files present + cert valid for > 7 days."""
+    return (
         cert_path.is_file()
         and key_path.is_file()
         and ca_path.is_file()
         and _cert_is_valid(cert_path)
-    ):
-        return CertStatus.SKIPPED
+    )
 
-    _check_required_env()
-    server = os.environ["ACMESH_SERVER_NAME"]
 
-    # Always register + issue. Register is idempotent ("Already registered"
-    # logged then returns 0). Issue without --force is also idempotent:
-    # acme.sh skips the CA roundtrip when its own store has a fresh
-    # cert, but will re-fetch when the store is stale or missing.
-    #
-    # The previous 'if not _acme_already_has(first_domain)' guard was
-    # brittle — acme.sh --list prints the Main_Domain column even when
-    # the underlying ${LE_CONFIG_HOME}/<domain>_ecc/ca.cer is gone
-    # (observed on cn2 after a failed past attempt: --list lied about
-    # having vpn.example.com, we skipped --issue, --install-cert then
-    # errored with "cat: /acmecerts/vpn.example.com_ecc/ca.cer: No such
-    # file or directory" and silently "succeeded" with no files on
-    # disk).
+def _issue_with_acme(params: str, *, first_domain: str, server: str) -> None:
+    """Run ``acme.sh --issue`` (register + issue, idempotent).
+
+    Register is idempotent; issue without ``--force`` is also idempotent
+    (acme.sh skips the CA roundtrip when its own store holds a fresh
+    cert, but re-fetches when stale/missing). The previous
+    ``_acme_already_has`` guard was brittle — acme.sh --list would
+    report a domain present even after ``${LE_CONFIG_HOME}/<d>_ecc/``
+    was wiped, causing a silent empty install.
+    """
     _register_account()
     issue_result = subprocess.run(
         ["acme.sh", *_build_issue_args(params, server)],
@@ -272,17 +248,30 @@ def ensure_certificate(
         )
         raise RuntimeError(f"acme.sh --issue exited {issue_rc} for {first_domain}. {hint}")
 
-    ssl_path.mkdir(parents=True, exist_ok=True)
-    # 证书安装前清空 nginx 动态配置目录 (entrypoint.sh:899 等价)。
-    # acme.sh --install-cert 会用 --reloadcmd /usr/sbin/nginx 启动 nginx；
-    # 若上一轮残留的 conf.d/ 或 stream.d/ 里有过期 upstream 引用，nginx 会
-    # 加载失败或拉起 orphan worker。createConfig 阶段稍后会重新渲染模板。
+
+def _purge_nginx_dynamic_dirs() -> None:
+    """Wipe ``/etc/nginx/{conf.d,stream.d}`` pre-install (entrypoint.sh:899).
+
+    ``acme.sh --install-cert --reloadcmd /usr/sbin/nginx`` starts nginx
+    with whatever's in those dirs. If a previous boot left stale
+    upstream references nginx will abort or spawn orphan workers.
+    ``createConfig`` stage re-renders the templates afterwards.
+    """
     for d in (Path("/etc/nginx/conf.d"), Path("/etc/nginx/stream.d")):
         if d.is_dir():
             for item in d.iterdir():
                 if item.is_file():
                     item.unlink()
 
+
+def _install_and_cleanup(
+    *,
+    first_domain: str,
+    cert_path: Path,
+    key_path: Path,
+    ca_path: Path,
+) -> None:
+    """Install the cert bundle + stop the short-lived reloadcmd nginx."""
     install_rc = subprocess.run(
         [
             "acme.sh",
@@ -304,16 +293,64 @@ def ensure_certificate(
     ).returncode
     if install_rc != 0:
         raise RuntimeError(f"acme.sh --install-cert exited {install_rc} for {first_domain}")
-    # acme.sh --reloadcmd 拉起了一个独立的 nginx 进程，但服务生命周期实际由
-    # supervisord 管理。优雅关闭它并清掉 PID 文件，后续 supervisord 才能干净
-    # fork 自己的 nginx（entrypoint.sh:903 等价）。
-    _quit_rc = subprocess.run(
+
+    # acme.sh --reloadcmd spawned a standalone nginx but the service
+    # lifecycle is owned by supervisord. Gracefully stop that copy and
+    # drop its PID file so supervisord can fork cleanly (entrypoint.sh:903).
+    quit_rc = subprocess.run(
         ["/usr/sbin/nginx", "-s", "quit"],
         check=False,
         capture_output=True,
     ).returncode
-    if _quit_rc == 0:
+    if quit_rc == 0:
         pid_file = Path("/var/run/nginx/nginx.pid")
         if pid_file.is_file():
             pid_file.unlink()
+
+
+def ensure_certificate(
+    *,
+    name: str,
+    params: str,
+    ssl_path: Path | None = None,
+) -> CertStatus:
+    """Ensure a valid ACME certificate for ``name`` exists under ``ssl_path``.
+
+    Orchestrator — delegates to 4 single-purpose helpers:
+
+      * :func:`_existing_bundle_is_fresh` — 7-day validity check.
+      * :func:`_issue_with_acme` — register + ``--issue`` with DNS plugin.
+      * :func:`_purge_nginx_dynamic_dirs` — pre-install cleanup.
+      * :func:`_install_and_cleanup` — install cert + stop reloadcmd nginx.
+
+    ``ssl_path`` defaults to ``$SSL_PATH`` (Dockerfile sets it to
+    ``/pki`` — same path the nginx / xray / sing-box JSON templates
+    render). Behavior mirrors entrypoint.sh ``issueCertificate``:
+    skip when fresh, otherwise register+issue+install via acme.sh.
+    """
+    if ssl_path is None:
+        ssl_path = Path(os.environ.get("SSL_PATH", "/pki"))
+    entries = _parse_params(params)
+    if not entries:
+        raise ValueError(f"invalid params (no domains found): {params!r}")
+    first_domain, _ = entries[0]
+
+    cert_path, key_path, ca_path = _bundle_paths(ssl_path, name)
+
+    if _existing_bundle_is_fresh(cert_path, key_path, ca_path):
+        return CertStatus.SKIPPED
+
+    _check_required_env()
+    server = os.environ["ACMESH_SERVER_NAME"]
+
+    _issue_with_acme(params, first_domain=first_domain, server=server)
+
+    ssl_path.mkdir(parents=True, exist_ok=True)
+    _purge_nginx_dynamic_dirs()
+    _install_and_cleanup(
+        first_domain=first_domain,
+        cert_path=cert_path,
+        key_path=key_path,
+        ca_path=ca_path,
+    )
     return CertStatus.INSTALLED

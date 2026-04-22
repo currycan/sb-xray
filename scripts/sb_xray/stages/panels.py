@@ -7,11 +7,12 @@ add the same post-hooks (fail2ban start, sqlite3 subURI patch for S-UI).
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 
-from sb_xray import logging as sblog
+logger = logging.getLogger(__name__)
 
 
 def _flag_enabled(name: str) -> bool:
@@ -40,7 +41,7 @@ def init_xui() -> bool:
     port = os.environ.get("XUI_LOCAL_PORT", "")
     base_path = os.environ.get("XUI_WEBBASEPATH", "")
     if not all([user, password, port, base_path]):
-        sblog.log("WARN", "[panels] X-UI 所需变量未就绪，跳过 setting")
+        logger.warning("X-UI 所需变量未就绪，跳过 setting")
         return False
 
     _run(
@@ -60,7 +61,7 @@ def init_xui() -> bool:
     # fail2ban lives inside the X-UI container and guards its login form.
     rc = _run(["fail2ban-client", "-x", "start"])
     if rc != 0:
-        sblog.log("WARN", "[panels] Fail2ban 启动失败")
+        logger.warning("Fail2ban 启动失败")
     return True
 
 
@@ -81,7 +82,7 @@ def init_sui() -> bool:
     user = os.environ.get("PUBLIC_USER", "")
     password = os.environ.get("PUBLIC_PASSWORD", "")
     if not all([port, sub_port, base_path, sub_path, user, password]):
-        sblog.log("WARN", "[panels] S-UI 所需变量未就绪，跳过 setting")
+        logger.warning("S-UI 所需变量未就绪，跳过 setting")
         return False
 
     _run(
@@ -120,10 +121,7 @@ def init_panels() -> None:
     xui_on = _flag_enabled("ENABLE_XUI")
     sui_on = _flag_enabled("ENABLE_SUI")
     if not xui_on and not sui_on:
-        sblog.log(
-            "INFO",
-            "ENABLE_XUI=ENABLE_SUI=false，两个面板均已禁用，跳过初始化",
-        )
+        logger.info("ENABLE_XUI=ENABLE_SUI=false，两个面板均已禁用，跳过初始化")
         return
 
     parts: list[str] = []
@@ -131,6 +129,6 @@ def init_panels() -> None:
         parts.append("X-UI")
     if sui_on:
         parts.append("S-UI")
-    sblog.log("INFO", f"[panels] 初始化 {' / '.join(parts)}")
+    logger.info("初始化 %s", " / ".join(parts))
     init_xui()
     init_sui()

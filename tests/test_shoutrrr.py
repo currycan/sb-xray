@@ -33,7 +33,7 @@ def test_parse_urls_splits_on_semicolons():
     ]
 
 
-def test_send_dry_run_does_not_spawn_subprocess(monkeypatch, capsys):
+def test_send_dry_run_does_not_spawn_subprocess(monkeypatch, caplog):
     called: list[object] = []
 
     def _fail(*a, **kw):
@@ -41,15 +41,17 @@ def test_send_dry_run_does_not_spawn_subprocess(monkeypatch, capsys):
         raise AssertionError("subprocess.run must not be called in dry-run")
 
     monkeypatch.setattr(shoutrrr.subprocess, "run", _fail)
+    caplog.set_level("INFO", logger="sb_xray.shoutrrr")
     shoutrrr._send(urls=[], title_prefix="[t]", event="ban_bt", payload={"k": "v"})
 
     assert called == []
-    out = capsys.readouterr().out
-    assert "dry-run event=ban_bt" in out
-    assert '"k": "v"' in out
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("dry-run event=ban_bt" in m for m in messages)
+    assert any('"k": "v"' in m for m in messages)
 
 
-def test_send_invokes_shoutrrr_once_per_url(monkeypatch, capsys):
+def test_send_invokes_shoutrrr_once_per_url(monkeypatch, caplog):
+    caplog.set_level("INFO", logger="sb_xray.shoutrrr")
     captured: list[list[str]] = []
 
     def _fake_run(cmd, **kw):
@@ -81,17 +83,19 @@ def test_send_invokes_shoutrrr_once_per_url(monkeypatch, capsys):
         assert "source: 1.2.3.4" in body
 
     # success path should log scheme (not token) + event
-    out = capsys.readouterr().out
-    assert "send ok scheme=telegram event=ban_ads" in out
-    assert "send ok scheme=discord event=ban_ads" in out
+    messages = [r.getMessage() for r in caplog.records]
+    joined = "\n".join(messages)
+    assert any("send ok scheme=telegram event=ban_ads" in m for m in messages)
+    assert any("send ok scheme=discord event=ban_ads" in m for m in messages)
     # never leak the full URL (token) into logs
-    assert "telegram://A" not in out
-    assert "discord://B" not in out
+    assert "telegram://A" not in joined
+    assert "discord://B" not in joined
 
 
-def test_send_logs_non_zero_exit_and_stderr(monkeypatch, capsys):
+def test_send_logs_non_zero_exit_and_stderr(monkeypatch, caplog):
     """Regression: shoutrrr's non-zero exit (e.g. Telegram 'need admin rights',
     exit 69) used to be silently swallowed. Must now surface in the log."""
+    caplog.set_level("INFO", logger="sb_xray.shoutrrr")
 
     def _fake_run(cmd, **kw):
         class _R:
@@ -108,13 +112,16 @@ def test_send_logs_non_zero_exit_and_stderr(monkeypatch, capsys):
         event="manual.test",
         payload={"k": "v"},
     )
-    out = capsys.readouterr().out
-    assert "send failed scheme=telegram exit=69" in out
-    assert "need administrator rights" in out
-    assert "SECRET_TOKEN" not in out  # token must never hit the log
+    messages = [r.getMessage() for r in caplog.records]
+    joined = "\n".join(messages)
+    assert any("send failed scheme=telegram exit=69" in m for m in messages)
+    assert "need administrator rights" in joined
+    assert "SECRET_TOKEN" not in joined  # token must never hit the log
 
 
-def test_send_logs_subprocess_crash(monkeypatch, capsys):
+def test_send_logs_subprocess_crash(monkeypatch, caplog):
+    caplog.set_level("INFO", logger="sb_xray.shoutrrr")
+
     def _boom(cmd, **kw):
         raise TimeoutError("shoutrrr CLI hung")
 
@@ -125,9 +132,10 @@ def test_send_logs_subprocess_crash(monkeypatch, capsys):
         event="e",
         payload={},
     )
-    out = capsys.readouterr().out
-    assert "send crashed scheme=telegram" in out
-    assert "shoutrrr CLI hung" in out
+    messages = [r.getMessage() for r in caplog.records]
+    joined = "\n".join(messages)
+    assert any("send crashed scheme=telegram" in m for m in messages)
+    assert "shoutrrr CLI hung" in joined
 
 
 class _ServerThread:
@@ -177,7 +185,8 @@ def test_get_non_healthz_returns_404():
         assert resp.status == 404
 
 
-def test_post_json_dispatches_event_and_returns_204(capsys):
+def test_post_json_dispatches_event_and_returns_204(caplog):
+    caplog.set_level("INFO", logger="sb_xray.shoutrrr")
     with _ServerThread() as srv:
         conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=2)
         payload = {"email": "demo", "source": "198.51.100.42"}
@@ -191,9 +200,9 @@ def test_post_json_dispatches_event_and_returns_204(capsys):
         resp.read()
         assert resp.status == 204
 
-    # dry-run path should have logged; capsys picks up print()
-    out = capsys.readouterr().out
-    assert "dry-run event=ban_bt" in out
+    # dry-run path should have logged via sb_xray.shoutrrr logger.
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("dry-run event=ban_bt" in m for m in messages)
 
 
 def test_post_bad_json_returns_400():

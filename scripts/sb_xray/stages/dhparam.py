@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 
-from sb_xray import logging as sblog
+logger = logging.getLogger(__name__)
 
 _DEFAULT_PATH = Path("/etc/nginx/dhparam/dhparam.pem")
 _DEFAULT_BITS = 4096
@@ -26,16 +27,16 @@ def ensure_dhparam(
         fi
     """
     if path.is_file():
-        sblog.log("DEBUG", f"[dhparam] DH 参数已存在，跳过: {path}")
+        logger.debug("DH 参数已存在，跳过: %s", path)
         return False
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    sblog.log("INFO", f"[dhparam] 生成 DH 参数 ({bits} bit)，首轮耗时可能较长...")
+    logger.info("生成 DH 参数 (%d bit)，首轮耗时可能较长...", bits)
     rc = subprocess.run(
         ["openssl", "dhparam", "-dsaparam", "-out", str(path), str(bits)],
         check=False,
     ).returncode
     if rc != 0:
         raise RuntimeError(f"openssl dhparam exited with code {rc}")
-    sblog.log("INFO", "[dhparam] DH 参数生成完成")
+    logger.info("DH 参数生成完成")
     return True

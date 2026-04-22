@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import contextlib
+import logging
 import os
 import subprocess
 import time
@@ -34,7 +35,8 @@ from typing import Final
 import httpx
 
 from sb_xray import http as sbhttp
-from sb_xray import logging as sblog
+
+logger = logging.getLogger(__name__)
 
 GEO_DIR: Final[Path] = Path("/geo")
 # xray 把 .dat 从其二进制所在目录 (``/usr/local/bin/bin``) 读取;
@@ -83,7 +85,7 @@ def _download_one(name: str, url: str, target_dir: Path, timeout: float) -> bool
         os.replace(tmp, final)
         return True
     except (httpx.HTTPError, OSError) as exc:
-        sblog.log("WARN", f"[geo] {name} 下载失败: {exc}")
+        logger.warning("%s 下载失败: %s", name, exc)
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
         return False
@@ -100,7 +102,7 @@ def _refresh_symlinks(target_dir: Path, link_dirs: tuple[Path, ...]) -> None:
                     link.unlink()
                 link.symlink_to(dat)
             except OSError as exc:
-                sblog.log("WARN", f"[geo] 符号链接 {link} 失败: {exc}")
+                logger.warning("符号链接 %s 失败: %s", link, exc)
 
 
 def _restart_xray_if_running(
@@ -125,9 +127,9 @@ def _restart_xray_if_running(
             check=False,
             timeout=10,
         )
-        sblog.log("INFO", "[geo] xray 已重启以加载新规则")
+        logger.info("xray 已重启以加载新规则")
     except (subprocess.TimeoutExpired, OSError) as exc:
-        sblog.log("WARN", f"[geo] 重启 xray 失败: {exc}")
+        logger.warning("重启 xray 失败: %s", exc)
 
 
 def refresh(
@@ -160,16 +162,13 @@ def refresh(
             name: url for name, url in files.items() if not _is_fresh(target_dir / name, max_age)
         }
         if not to_fetch:
-            sblog.log("INFO", "[geo] 全部 .dat 文件 <7 天,跳过下载")
+            logger.info("全部 .dat 文件 <7 天,跳过下载")
             _refresh_symlinks(target_dir, link_dirs)
             return 0
     else:
         to_fetch = dict(files)
 
-    sblog.log(
-        "INFO",
-        f"[geo] 开始下载 {len(to_fetch)}/{len(files)} 个规则库 → {target_dir}",
-    )
+    logger.info("开始下载 %d/%d 个规则库 → %s", len(to_fetch), len(files), target_dir)
     with cf.ThreadPoolExecutor(max_workers=max(1, len(to_fetch))) as pool:
         futures = {
             pool.submit(_download_one, name, url, target_dir, timeout): name
@@ -180,7 +179,7 @@ def refresh(
     _refresh_symlinks(target_dir, link_dirs)
     failed = results.count(False)
     ok = len(results) - failed
-    sblog.log("INFO", f"[geo] 下载完成: 成功 {ok} 失败 {failed}")
+    logger.info("下载完成: 成功 %d 失败 %d", ok, failed)
 
     if not on_startup and failed == 0:
         _restart_xray_if_running()

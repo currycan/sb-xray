@@ -24,6 +24,7 @@ are idempotent and safe to re-run across container restarts):
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -34,11 +35,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sb_xray import display as sbdisplay
-from sb_xray import logging as sblog
 from sb_xray import network as sbnet
 from sb_xray import node_meta as sbnode
 from sb_xray import subscription as sbsub
 from sb_xray.env import EnvManager
+from sb_xray.log_config import setup_logging
+from sb_xray.stage import (
+    PipelineSummary,
+    StageInfo,
+    StageTimer,
+    render_summary_box,
+)
+
+logger = logging.getLogger("sb_xray.entrypoint")
 
 _DEFAULT_ENV_FILE = Path(os.environ.get("ENV_FILE", "/.env/sb-xray"))
 _DEFAULT_STATUS_FILE = Path("/.env/status")
@@ -180,7 +189,7 @@ def _init_dirs(env_file: Path) -> None:
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            sblog.log("DEBUG", f"[init] mkdir {path} skipped: {exc}")
+            logger.debug("mkdir %s skipped: %s", path, exc)
 
     log_dir = Path(os.environ.get("LOGDIR", "/var/log"))
     for child in ("supervisor", "xray", "sing-box", "dufs", "nginx", "x-ui", "s-ui"):
@@ -233,7 +242,7 @@ def _load_env_file(path: Path) -> int:
             timeout=10,
         )
     except (subprocess.SubprocessError, FileNotFoundError) as exc:
-        sblog.log("WARN", f"[env-load] bash source {path} failed: {exc}")
+        logger.warning("env-load: bash source %s failed: %s", path, exc)
         return 0
 
     injected = 0
@@ -307,7 +316,7 @@ def probe_base_env(mgr: EnvManager) -> None:
     """Full port of ``analyze_base_env`` (entrypoint.sh:1118-1148)."""
     from sb_xray import random_gen as sbrand
 
-    sblog.log("DEBUG", "[env] 按三层优先级填充 16 个基础变量")
+    logger.debug("按三层优先级填充 16 个基础变量")
 
     def _strategy() -> str:
         v4, v6 = sbnet.probe_ip_sb()
@@ -334,11 +343,11 @@ def probe_base_env(mgr: EnvManager) -> None:
     for key, gen in specs:
         mgr.ensure_var(key, generator=gen)
 
-    sblog.log(
-        "INFO",
-        f"[env] hy2={os.environ.get('PORT_HYSTERIA2', '?')} "
-        f"tuic={os.environ.get('PORT_TUIC', '?')} "
-        f"anytls={os.environ.get('PORT_ANYTLS', '?')}",
+    logger.info(
+        "base ports: hy2=%s tuic=%s anytls=%s",
+        os.environ.get("PORT_HYSTERIA2", "?"),
+        os.environ.get("PORT_TUIC", "?"),
+        os.environ.get("PORT_ANYTLS", "?"),
     )
 
 
@@ -382,12 +391,12 @@ def issue_bundle_certificate() -> None:
     if not domain or not cdn:
         raise CertStageError("DOMAIN/CDNDOMAIN 未设置，无法签发证书")
     params = f"{domain}:ali|{cdn}:cf"
-    sblog.log("INFO", f"  [cert] ensure_certificate(sb_xray_bundle, {params})")
+    logger.info("ensure_certificate(sb_xray_bundle, %s)", params)
     try:
         status = sbcert.ensure_certificate(name="sb_xray_bundle", params=params)
     except Exception as exc:
         raise CertStageError(f"ensure_certificate 抛异常: {exc}") from exc
-    sblog.log("INFO", f"  [cert] status={status.value}")
+    logger.info("cert status=%s", status.value)
 
     # Post-install verification: acme.sh --install-cert runs with
     # check=False so a silent failure (wrong DNS cred, stale zone, etc.)
@@ -412,16 +421,13 @@ def run_media_probes() -> dict[str, str]:
     """entrypoint.sh ``analyze_ai_routing_env`` media portion."""
     from sb_xray.routing import media as sbmedia
 
-    sblog.log(
-        "DEBUG",
-        "[media] 运行 8 个可达性探针 (Netflix/Disney/YouTube/Social/TikTok/ChatGPT/Claude/Gemini)",
-    )
+    logger.debug("运行 8 个可达性探针 (Netflix/Disney/YouTube/Social/TikTok/ChatGPT/Claude/Gemini)")
     results = sbmedia.check_all()
     for key, value in results.items():
         os.environ[key] = value
-    sblog.log(
-        "INFO",
-        "[media] " + " ".join(f"{k.replace('_OUT', '').lower()}={v}" for k, v in results.items()),
+    logger.info(
+        "media probes: %s",
+        " ".join(f"{k.replace('_OUT', '').lower()}={v}" for k, v in results.items()),
     )
     return results
 
@@ -460,7 +466,7 @@ def run_show_pipeline(env_file: Path) -> int:
                 else:
                     shutil.copy2(item, target)
             except OSError as exc:
-                sblog.log("WARN", f"[show] copy {item} failed: {exc}")
+                logger.warning("show: copy %s failed: %s", item, exc)
 
     sbdisplay.show_info_links(archive_path=subscribe_dir / "show-config")
     return 0
@@ -502,26 +508,15 @@ def run_pipeline(
     )
 
     skips = set(skip_stage)
+    summary = PipelineSummary()
 
-    def _run(name: str, fn: Callable[[], None]) -> None:
-        if name in skips:
-            sblog.log("INFO", f"  [skip] stage '{name}' skipped via --skip-stage")
-            return
-        fn()
-
-    def _step(_n: int, label: str) -> None:
-        # Emit a descriptive phase heading. The counter is kept in the
-        # signature only for source-reading convenience — it never
-        # appears in the log since arbitrary indices ("3/15") mean
-        # nothing to operators.
-        sblog.log("INFO", f"▸ {label}")
-
-    sblog.log("INFO", "▶ SB-Xray 启动初始化 (15 阶段 Python pipeline)")
-
-    _step(1, "初始化目录与文件")
-    _init_dirs(env_file)
-
-    _step(2, "解密远端密钥库 + 加载密钥")
+    # Declarative stage table. Each entry:
+    #   (stage_index, skip_name_or_None, machine_name, 中文_label, callable)
+    # ``skip_name_or_None=None`` marks a non-skippable infrastructure
+    # stage (init, bootstrap). Stages sharing the same ``stage_index``
+    # are sub-phases of the same operator-facing step — their headings
+    # still group visually (e.g. config / providers / trim all 12/17).
+    TOTAL_STAGES = 17
 
     def _secrets() -> None:
         """Bash parity (entrypoint.sh:main_init step 2)::
@@ -539,73 +534,77 @@ def run_pipeline(
         """
         try:
             status = sbsecrets.decrypt_remote_secrets(secret_file=_secret_file())
-            sblog.log("INFO", f"  [secrets] status={status.value}")
+            logger.info("secrets status=%s", status.value)
         except RuntimeError as exc:
-            sblog.log("WARN", f"  [secrets] 解密失败，继续启动: {exc}")
+            logger.warning("secrets 解密失败，继续启动: %s", exc)
         # ``source "${SECRET_FILE}"`` equivalent — idempotent; no-op if
         # the file is missing (decrypt failed or user hasn't set it up).
         loaded = _load_env_file(_secret_file())
         if loaded:
-            sblog.log(
-                "INFO",
-                f"  [secrets] 已加载 {loaded} 个变量到环境 (来自 {_secret_file()})",
-            )
+            logger.info("secrets 已加载 %d 个变量到环境 (来自 %s)", loaded, _secret_file())
 
-    _run("secrets", _secrets)
+    def _bootstrap() -> None:
+        nonlocal mgr
+        mgr = bootstrap(env_file)
+        _load_env_file(_status_file())
+        # Safety net: if ``--skip-stage secrets`` was used, the secrets
+        # stage above never ran. Re-try here so the subsequent cert step
+        # still has a chance (setdefault — won't clobber existing shell env).
+        _load_env_file(_secret_file())
 
-    _step(3, "加载持久化状态 (ENV/STATUS)")
-    mgr = bootstrap(env_file)
-    _load_env_file(_status_file())
-    # Safety net: if ``--skip-stage secrets`` was used, the step-2
-    # source above never ran. Re-try here so the subsequent cert step
-    # still has a chance (setdefault — won't clobber existing shell env).
-    _load_env_file(_secret_file())
+    mgr: EnvManager | None = None  # populated by _bootstrap()
 
-    _step(4, "基础环境变量初始化")
-    _run("probe", lambda: probe_base_env(mgr))
+    stage_table: list[tuple[int, str | None, str, str, Callable[[], None]]] = [
+        (1, None, "init", "初始化目录与文件", lambda: _init_dirs(env_file)),
+        (2, "secrets", "secrets", "解密远端密钥库 + 加载密钥", _secrets),
+        (3, None, "bootstrap", "加载持久化状态 (ENV/STATUS)", _bootstrap),
+        (4, "probe", "probe", "基础环境变量初始化", lambda: probe_base_env(mgr)),  # type: ignore[arg-type]
+        (5, "speed", "speed", "ISP 测速与选路", run_isp_speed_tests),
+        (6, "media", "media", "流媒体/AI 可达性检测", lambda: _cache_media_probes(mgr)),  # type: ignore[arg-type]
+        (7, "keys", "keys", "生成加密密钥对", lambda: sbkeys.ensure_all_keys(mgr)),  # type: ignore[arg-type]
+        (
+            8,
+            "outbounds",
+            "outbounds",
+            "生成客户端/服务端配置片段",
+            sbisp.build_client_and_server_configs,
+        ),
+        (9, "cert", "cert", "TLS 证书申请/续签", issue_bundle_certificate),
+        (10, "dhparam", "dhparam", "生成 DH 参数", sbdh.ensure_dhparam),
+        (11, "geoip", "geoip", "更新 GeoIP/GeoSite 数据库", sbgeo.update_geo_data),
+        (12, "config", "config", "渲染配置模板", sbcfg.create_config),
+        (13, "providers", "providers", "导出 Proxy Providers", sbprov.generate_and_export),
+        (14, "trim", "trim", "精简 ENABLE_* 开关", sbcfg.trim_runtime_configs),
+        (15, "panels", "panels", "初始化 X-UI / S-UI 管理面板", sbpanels.init_panels),
+        (16, "nginx_auth", "nginx_auth", "配置 Nginx Basic Auth", sbauth.setup_basic_auth),
+        (16, "cron", "cron", "安装 cron 任务", sbcron.install_crontab),
+        (17, "show", "show", "打印订阅链接 banner", lambda: _banner_best_effort(env_file)),
+    ]
 
-    _step(5, "ISP 测速与选路")
-    _run("speed", lambda: run_isp_speed_tests())
+    logger.info("SB-Xray 启动初始化 (%d 阶段 Python pipeline)", TOTAL_STAGES)
 
-    _step(6, "流媒体/AI 可达性检测")
-    _run("media", lambda: _cache_media_probes(mgr))
+    for index, skip_name, name, label, fn in stage_table:
+        info = StageInfo(index=index, total=TOTAL_STAGES, name=name, label=label)
+        with StageTimer(info, logger, summary=summary) as t:
+            if skip_name is not None and skip_name in skips:
+                t.skipped("--skip-stage")
+                continue
+            fn()
 
-    _step(7, "生成加密密钥对")
-    _run("keys", lambda: sbkeys.ensure_all_keys(mgr))
+    # Final pipeline summary — one place, every stage accounted for.
+    summary.log_overview(logger)
 
-    _step(8, "生成客户端/服务端配置片段")
-    _run("outbounds", lambda: sbisp.build_client_and_server_configs())
+    # Operator-facing SUMMARY box (stdout — sits next to the subscription
+    # banner, not part of the log stream).
+    render_summary_box(*_SUMMARY_KEYS)
 
-    _step(9, "TLS 证书申请/续签")
-    _run("cert", issue_bundle_certificate)
-
-    _step(10, "生成 DH 参数")
-    _run("dhparam", lambda: sbdh.ensure_dhparam())
-
-    _step(11, "更新 GeoIP/GeoSite 数据库")
-    _run("geoip", lambda: sbgeo.update_geo_data())
-
-    _step(12, "渲染配置模板 + Proxy Providers")
-    _run("config", lambda: sbcfg.create_config())
-    _run("providers", lambda: sbprov.generate_and_export())
-    _run("trim", lambda: sbcfg.trim_runtime_configs())
-
-    _step(13, "初始化 X-UI / S-UI 管理面板")
-    _run("panels", lambda: sbpanels.init_panels())
-
-    _step(14, "配置 Nginx Basic Auth + Cron")
-    _run("nginx_auth", lambda: sbauth.setup_basic_auth())
-    _run("cron", lambda: sbcron.install_crontab())
-
-    _step(15, "打印订阅链接 banner")
-    _run("show", lambda: _banner_best_effort(env_file))
-
-    sblog.log_summary_box(*_SUMMARY_KEYS)
-
-    sblog.log("INFO", "✅ 初始化完成，移交 Supervisord 接管")
+    logger.info("初始化完成，移交 Supervisord 接管")
+    logger.info(
+        "handing over to supervisord; subsequent lines come from supervisord / xray / nginx"
+    )
 
     if dry_run:
-        sblog.log("INFO", "dry-run complete, skipping supervisord exec")
+        logger.info("dry-run complete, skipping supervisord exec")
         return 0
     sbsup.exec_supervisord(extras)
     return 0  # unreachable
@@ -623,19 +622,26 @@ def _cache_media_probes(mgr: EnvManager) -> None:
     os.environ["ISP_OUT"] = isp_out
     _write_status_line("ISP_OUT", isp_out)
 
-    sblog.log_summary_box(
-        "IP_TYPE",
-        "ISP_TAG",
-        "IS_8K_SMOOTH",
-        "ISP_OUT",
-        "CHATGPT_OUT",
-        "NETFLIX_OUT",
-        "DISNEY_OUT",
-        "YOUTUBE_OUT",
-        "GEMINI_OUT",
-        "CLAUDE_OUT",
-        "TIKTOK_OUT",
-        "SOCIAL_MEDIA_OUT",
+    # Structured one-line summary; the operator-facing SYSTEM STRATEGY
+    # SUMMARY box is rendered once at the end of run_pipeline() instead
+    # of duplicated here (fixed the 2-boxes-with-different-fields bug
+    # that used to confuse operators reading the boot log).
+    logger.info(
+        "media routing: IP_TYPE=%s ISP_TAG=%s IS_8K_SMOOTH=%s ISP_OUT=%s "
+        "chatgpt=%s netflix=%s disney=%s youtube=%s gemini=%s claude=%s "
+        "tiktok=%s social=%s",
+        os.environ.get("IP_TYPE", "N/A"),
+        os.environ.get("ISP_TAG", "N/A"),
+        os.environ.get("IS_8K_SMOOTH", "N/A"),
+        os.environ.get("ISP_OUT", "N/A"),
+        os.environ.get("CHATGPT_OUT", "N/A"),
+        os.environ.get("NETFLIX_OUT", "N/A"),
+        os.environ.get("DISNEY_OUT", "N/A"),
+        os.environ.get("YOUTUBE_OUT", "N/A"),
+        os.environ.get("GEMINI_OUT", "N/A"),
+        os.environ.get("CLAUDE_OUT", "N/A"),
+        os.environ.get("TIKTOK_OUT", "N/A"),
+        os.environ.get("SOCIAL_MEDIA_OUT", "N/A"),
     )
     # mgr kept in signature for future extension; unused today
     del mgr
@@ -646,7 +652,7 @@ def _banner_best_effort(env_file: Path) -> None:
     try:
         run_show_pipeline(env_file)
     except Exception as exc:  # pragma: no cover — cosmetic banner only
-        sblog.log("WARN", f"[banner] show pipeline 失败,跳过: {exc}")
+        logger.warning("banner: show pipeline 失败,跳过: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +662,12 @@ def _banner_best_effort(env_file: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+
+    # Initialise Python logging **before** any log call. Every stdlib
+    # logger instance below (including modules imported lazily inside
+    # each subcommand) inherits the single StreamHandler + SbFormatter
+    # configured here.
+    setup_logging()
 
     if args.command == "show":
         return run_show_pipeline(args.env_file)
@@ -676,10 +688,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return shoutrrr.run()
 
-    sblog.log(
-        "INFO",
-        f"sb-xray entrypoint.py starting (env_file={args.env_file})",
-    )
+    logger.info("sb-xray entrypoint.py starting (env_file=%s)", args.env_file)
     return run_pipeline(
         env_file=args.env_file,
         skip_stage=args.skip_stage,

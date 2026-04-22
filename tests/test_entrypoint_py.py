@@ -362,7 +362,7 @@ def test_skip_stage_skips_named_stage(tmp_env_file: Path, monkeypatch: pytest.Mo
 def test_main_sources_status_file_for_summary_box(
     tmp_env_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """run() must source STATUS_FILE so ISP_TAG shows in log_summary_box."""
+    """run() must source STATUS_FILE so ISP_TAG shows in render_summary_box."""
     status_file = tmp_path / "status"
     status_file.write_text(
         "export ISP_TAG='cn2gia'\nexport IS_8K_SMOOTH='false'\n",

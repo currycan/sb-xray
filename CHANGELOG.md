@@ -12,6 +12,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed（变更）
 
+- **Entrypoint 日志彻底 stdlib 化 + StageTimer 计时 + 架构轻量整理**:
+  - **日志基础设施**：新增 `scripts/sb_xray/log_config.py`（stdlib `logging` + `dictConfig` + 自定义 `SbFormatter`，ISO-8601 带时区时间戳 + `%(name)s` 自动模块名）和 `scripts/sb_xray/stage.py`（`StageTimer` 上下文管理器 + `PipelineSummary` + `render_summary_box`）。删除旧 `scripts/sb_xray/logging.py`（手写 stderr writer）。
+  - **环境变量契约**：`SB_LOG_LEVEL`（默认 `INFO`，`DEBUG/INFO/WARNING/ERROR/CRITICAL`，兼容 `WARN` 别名）控制 Python 日志级别；与给 xray/sing-box 用的 `LOG_LEVEL=warning` 刻意分离，避免 xray 的字符串值屏蔽 INFO 阶段进度。`NO_COLOR`（https://no-color.org/）或非 TTY stdout → 自动关闭 ANSI 彩色。
+  - **迁移点**：14 个模块（entrypoint + stages/* + routing/isp + geo + config_builder + speed_test + display + shoutrrr + cert + ...）全部从 `sblog.log(LEVEL, "[模块] msg")` 迁到 `logger = logging.getLogger(__name__)` + `logger.info/warning/error/...`；手写 `[module]` 前缀全部删除（由 formatter 的 `%(name)s` 自动补齐，消除 `[选路]` vs `[ISP]` vs `[路由]` 这类拼写漂移）。`display.py` 的 7 处 `print()`（tls-ping / qr 诊断）全部走 logger；`shoutrrr.py` 的自定义 `_log()` 包装移除。
+  - **StageTimer**：每个 pipeline 阶段用 `▶ / ✓ / ⋯ / ✗` 三符号表示 start / ok / skipped / failed，自动带毫秒级 duration；失败时 `logger.exception` 输出完整 traceback；所有结果累积到 `PipelineSummary`，`run_pipeline()` 末尾一次性输出 `Pipeline summary: N stages total in Xms — ok= skipped= degraded= failed=` 聚合行。
+  - **SUMMARY 方框去重**：原 `entrypoint.py:603` 和 `:626` 两处 `sblog.log_summary_box()` 导致 SYSTEM STRATEGY SUMMARY 方框被打两次、字段不同但样式相同。现保留末尾一次（通过新 `render_summary_box()` 写 stdout，与订阅 banner 同步为一次性运维报告），原阶段 6 的重复方框改为结构化一行 `logger.info("media routing: ...")`。
+  - **订阅 banner 保留 stdout**：`display.render_info_links` 面向终端用户的订阅链接/QR 不属于日志流，仍然写 `sys.stdout`；日志流末尾留一行锚点 `handing over to supervisord; subsequent lines come from supervisord / xray / nginx` 明确格式切换点。
+  - **架构附带整理**（范围 B）：
+    - `speed_test.run_isp_speed_tests()` 137 行 → 拆为 `_resolve_sample_count / _try_cache_hit / _reset_caches_for_fresh_run / _log_routing_inputs / _measure_direct_baseline / _measure_isp_nodes / _persist_routing_decision` 7 个子函数（均 <40 行），主函数保留签名。
+    - `cert.ensure_certificate()` 122 行 → 拆为 `_bundle_paths / _existing_bundle_is_fresh / _issue_with_acme / _purge_nginx_dynamic_dirs / _install_and_cleanup` 5 个子函数。
+  - **Pipeline 阶段编号**：原 15 阶段（`_step` 标签）→ 17 阶段（StageTimer 细粒度 index），每个可 skip 子阶段一个独立 timer；`--skip-stage` 的 16 个 ID 保持不变。
+  - **测试**：`tests/test_logging.py` 重写（13 个用例覆盖 formatter、LOG_LEVEL 过滤、NO_COLOR、非 TTY、idempotent、traceback、StageTimer start/end/skipped/failed、PipelineSummary、render_summary_box）。`tests/test_display.py` / `tests/test_shoutrrr.py` 从 `capsys` 迁到 `caplog`（log 去 stderr 不再进 capsys.out）。共 319 pytest 全绿 + 49 smoke 全绿。
+  - **文档**：`docker-compose.yml` 加 `SB_LOG_LEVEL=INFO` 示例；`docs/04-ops-and-troubleshooting.md §2.2` 新增"Entrypoint 日志" 小节（格式/级别/锚点/排查建议）；`docs/features/0421-new-features-guide.md` 参考表加 `SB_LOG_LEVEL` + `NO_COLOR`。
 - **Shoutrrr forwarder:迁入 `sb_xray` 包 + 吞错 bug 修复 + 产品文档重写**:
   - **架构**:新增 `scripts/sb_xray/shoutrrr.py`,与 `geo.py` / `display.py` 统一形态,`run(port, urls, title_prefix)` 参数化入口,`Handler` 从模块全局改为闭包工厂,杜绝跨测试污染。
   - **入口**:`scripts/entrypoint.py` argparse 新增 `shoutrrr-forward` 子命令;`templates/supervisord/daemon.ini` 的 `[program:shoutrrr-forwarder]` 改为 `command=python3 /scripts/entrypoint.py shoutrrr-forward`。program block 名保持 `shoutrrr-forwarder` 不动,`config_builder.py` 的 `ENABLE_SHOUTRRR` trim 映射和 `test_smoke.sh:M1-5` 的 grep 断言均无需更新。

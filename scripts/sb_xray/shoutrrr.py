@@ -24,6 +24,7 @@ inboundName / inboundLocal / outboundTag / ts。
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import subprocess
@@ -34,10 +35,7 @@ DEFAULT_PORT: Final[int] = 18085
 DEFAULT_TITLE_PREFIX: Final[str] = "[sb-xray]"
 _SHOUTRRR_TIMEOUT_SEC: Final[int] = 10
 
-
-def _log(msg: str) -> None:
-    # 保留 stdout 输出; supervisord 把它重定向到 shoutrrr-forwarder.out.log
-    print(f"[shoutrrr-forwarder] {msg}", flush=True)
+logger = logging.getLogger(__name__)
 
 
 def _parse_urls(raw: str | None) -> list[str]:
@@ -48,7 +46,11 @@ def _parse_urls(raw: str | None) -> list[str]:
 
 def _send(urls: list[str], title_prefix: str, event: str, payload: dict) -> None:
     if not urls:
-        _log(f"dry-run event={event} payload={json.dumps(payload, ensure_ascii=False)}")
+        logger.info(
+            "dry-run event=%s payload=%s",
+            event,
+            json.dumps(payload, ensure_ascii=False),
+        )
         return
     title = f"{title_prefix} {event}"
     body = "\n".join(f"{k}: {v}" for k, v in payload.items())
@@ -65,18 +67,20 @@ def _send(urls: list[str], title_prefix: str, event: str, payload: dict) -> None
                 text=True,
             )
         except Exception as exc:
-            _log(f"send crashed scheme={url_scheme} err={exc}")
+            logger.error("send crashed scheme=%s err=%s", url_scheme, exc)
             continue
         if result.returncode != 0:
             # 静默失败过去是本项目最大的盲区;把 shoutrrr 的 stderr 前 400 字符
             # 直接打进 forwarder 日志,省掉 "204 但没消息" 的排查回合。
             stderr_tail = (result.stderr or result.stdout or "").strip()[:400]
-            _log(
-                f"send failed scheme={url_scheme} exit={result.returncode} "
-                f"stderr={shlex.quote(stderr_tail)}"
+            logger.error(
+                "send failed scheme=%s exit=%d stderr=%s",
+                url_scheme,
+                result.returncode,
+                shlex.quote(stderr_tail),
             )
         else:
-            _log(f"send ok scheme={url_scheme} event={event}")
+            logger.info("send ok scheme=%s event=%s", url_scheme, event)
 
 
 def _make_handler(urls: list[str], title_prefix: str) -> type[BaseHTTPRequestHandler]:
@@ -129,12 +133,20 @@ def run(
     if title_prefix is None:
         title_prefix = os.environ.get("SHOUTRRR_TITLE_PREFIX", DEFAULT_TITLE_PREFIX)
 
-    _log(f"listening on 127.0.0.1:{port} urls={len(urls)}")
+    # Initialise Python logging the same way entrypoint.main() does so
+    # this standalone supervisord-managed process emits the unified
+    # format (supervisord then redirects stderr to its per-program log
+    # file per daemon.ini).
+    from sb_xray.log_config import setup_logging
+
+    setup_logging()
+
+    logger.info("listening on 127.0.0.1:%d urls=%d", port, len(urls))
     server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(urls, title_prefix))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        _log("shutting down")
+        logger.info("shutting down")
     finally:
         server.server_close()
     return 0

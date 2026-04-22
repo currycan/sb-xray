@@ -30,7 +30,7 @@ def test_get_flag_emoji(info: str, expected: str) -> None:
 
 
 def test_tls_ping_diagnose_calls_xray(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured_cmd: list[list[str]] = []
 
@@ -44,21 +44,24 @@ def test_tls_ping_diagnose_calls_xray(
         return FakeCompleted()
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    display.tls_ping_diagnose("example.com:443")
+    with caplog.at_level("INFO", logger="sb_xray.display"):
+        display.tls_ping_diagnose("example.com:443")
     assert captured_cmd == [["xray", "tls", "ping", "example.com:443"]]
-    assert "example.com:443" in capsys.readouterr().out
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("example.com:443" in m for m in messages)
 
 
 def test_tls_ping_no_xray_binary(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_run(cmd: list[str], **kwargs: Any) -> None:
         raise FileNotFoundError("xray not found")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    display.tls_ping_diagnose("example.com:443")
-    out = capsys.readouterr().out
-    assert "xray" in out
+    with caplog.at_level("WARNING", logger="sb_xray.display"):
+        display.tls_ping_diagnose("example.com:443")
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("xray" in m for m in messages)
 
 
 def test_show_qrcode_invokes_qrencode(

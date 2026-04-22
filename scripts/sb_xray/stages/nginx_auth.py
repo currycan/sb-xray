@@ -7,11 +7,12 @@ implementing $apr1$ by hand to stay bit-identical to the Bash flow.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 
-from sb_xray import logging as sblog
+logger = logging.getLogger(__name__)
 
 _DEFAULT_PATH = Path("/etc/nginx/.htpasswd")
 
@@ -40,12 +41,12 @@ def setup_basic_auth(
     user = user if user is not None else os.environ.get("PUBLIC_USER", "")
     password = password if password is not None else os.environ.get("PUBLIC_PASSWORD", "")
     if not user or not password:
-        sblog.log("WARN", "[nginx-auth] PUBLIC_USER/PASSWORD 未设置，跳过 Basic Auth")
+        logger.warning("PUBLIC_USER/PASSWORD 未设置，跳过 Basic Auth")
         return False
 
     encoded = _apr1(password)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{user}:{encoded}\n", encoding="utf-8")
     path.chmod(0o644)
-    sblog.log("INFO", f"[nginx-auth] HTTP Basic Auth 已配置 (用户: {user})")
+    logger.info("HTTP Basic Auth 已配置 (用户: %s)", user)
     return True
