@@ -133,10 +133,15 @@ services:
       - CDNDOMAIN=$cdndomain # 必填: 您的 CDN 保护域名
       - DECODE=$code # 可选: 自定义解码密钥
       - ACMESH_DEBUG=1 # 证书调试日志级别 (0-2)
-      # CA 机构: zerossl(默认推荐) / google
-      - ACMESH_SERVER_NAME=zerossl
-      - ACMESH_EAB_KID=$eab_kid # Google CA EAB keyId
-      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key # Google CA EAB b64MacKey
+      # CA 机构 (均支持 DNS-01 通配符)：
+      #   letsencrypt 无需 EAB，默认推荐
+      #   zerossl     acme.sh 自动申领 EAB；失败多次后会触发 retryafter=86400
+      #   google      需手动 EAB 凭据（Google Cloud Shell 获取，7 天内有效）
+      # 注意：buypass 不支持通配符，勿用
+      - ACMESH_SERVER_NAME=letsencrypt
+      # 仅 Google / 预分配 ZeroSSL EAB 时填；letsencrypt 忽略
+      - ACMESH_EAB_KID=$eab_kid
+      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key
       - DEST_HOST=speed.cloudflare.com # Reality 伪装目标站点
       - LISTENING_PORT=443 # 主监听端口
       - DUFS_PATH_PREFIX=/myfiles # 文件服务 URL 前缀
@@ -282,7 +287,7 @@ sb-xray/
 ├── build.sh                  # 自动构建脚本
 ├── Dockerfile                # 四阶段构建文件
 ├── scripts/
-│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1；argparse run/show/trim；run 一次性编排 16 段启动流水线；trim 按 ENABLE_* 精简 supervisord 配置）
+│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1；argparse run/show/trim；run 一次性编排 15 段启动流水线；trim 按 ENABLE_* 精简 supervisord 配置）
 │   ├── sb_xray/              # Python 包：env/logging/cert/config_builder/speed_test/routing/stages/...
 │   ├── geo_update.sh         # GeoIP/GeoSite 数据更新
 │   ├── check_ip_type.sh      # IP 类型检测
