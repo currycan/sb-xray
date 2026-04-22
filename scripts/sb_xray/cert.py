@@ -116,9 +116,10 @@ def _issue_failure_hint(output: str, *, server: str, first_domain: str) -> str:
         return (
             f"CA '{server}' rate-limited this account (retry-after / rate-limit "
             "hit — often from accumulated pending orders after earlier failed "
-            "attempts). Remediation: wait 24h OR switch to a different CA by "
-            "setting ACMESH_SERVER_NAME=letsencrypt (or google/buypass) in "
-            "docker-compose and restarting."
+            "attempts). Remediation: wait 24h OR switch to a wildcard-capable "
+            "CA by setting ACMESH_SERVER_NAME=letsencrypt (or google, both "
+            "support wildcard via DNS-01). Do NOT switch to buypass — it "
+            "does not sign wildcard certs."
         )
     if "you don't specify" in lower or ("dns_ali.sh" in lower and "error" in lower):
         return (

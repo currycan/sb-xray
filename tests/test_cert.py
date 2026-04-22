@@ -338,11 +338,14 @@ def test_issue_nonzero_exit_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_issue_failure_hint_rate_limit() -> None:
-    """CA rate-limit (retryafter=) → hint mentions ACMESH_SERVER_NAME swap."""
+    """CA rate-limit (retryafter=) → hint mentions wildcard-capable CA swap."""
     acme_out = "[...] The retryafter=86400 value is too large (> 600), will not retry anymore."
     hint = cert._issue_failure_hint(acme_out, server="zerossl", first_domain="a.b")
     assert "rate-limited" in hint
     assert "ACMESH_SERVER_NAME=letsencrypt" in hint
+    # The alternatives we suggest must all support wildcard via DNS-01;
+    # buypass doesn't, so the hint must NOT suggest it.
+    assert "buypass" not in hint.lower() or "do not switch to buypass" in hint.lower()
 
 
 def test_issue_failure_hint_dns_credentials() -> None:
