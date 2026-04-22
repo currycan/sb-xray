@@ -82,11 +82,13 @@ jobs:
             validate_version "${tag#v}"
           }
 
-          # 获取 latest stable tag (排除 rc/beta/alpha，去 v 前缀)
+          # 获取 latest stable release tag (通过 prerelease 布尔过滤，去 v 前缀)
+          # 不用 /tags —— tag 字面量里不一定含 rc/beta/alpha（如 XTLS v26.4.17 是 Pre-release 但 tag 名是数字型），
+          # 字符串过滤会漏掉 Pre-release。/releases 自带的 prerelease 布尔是唯一可靠来源。
           get_stable_tag() {
             local tag
-            tag=$(gh api "repos/$1/tags?per_page=100" \
-              --jq '[.[] | select(.name | test("rc|beta|alpha") | not)] | .[0].name' 2>/dev/null || echo "")
+            tag=$(gh api "repos/$1/releases?per_page=100" \
+              --jq '[.[] | select(.prerelease == false) | .tag_name] | .[0] // empty' 2>/dev/null || echo "")
             validate_version "${tag#v}"
           }
 

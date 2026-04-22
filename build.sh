@@ -98,14 +98,23 @@ check_gh_rate_limit() {
     echo -e "  ${BLUE}GitHub API 余额：${remaining} (需要 ≥${need})${NC}"
 }
 
-# 辅助函数: 获取最新 Stable Tag
+# 辅助函数: 获取最新 Stable Release Tag
+#
+# 用 /releases API 而非 /tags,因为：
+#   * /tags 只有 tag 字面量，无法识别 Pre-release —— 上游如果给 stable
+#     版本也用 semver 数字（如 v26.4.17）作为 tag 名,字符串过滤会漏掉
+#   * /releases 自带 prerelease 布尔元数据,是 GitHub UI 判定 "Pre-release"
+#     徽章的唯一真相源
+#
+# 历史教训：2026-04 期间 Xray 把 v26.4.17 作为 Pre-release,但 tag 名里
+# 没有 rc/beta/alpha,旧版字符串过滤放行,镜像一度 pin 在 Pre-release 上。
 get_latest_stable_tag() {
     local repo=$1
-    local url="https://api.github.com/repos/$repo/tags?per_page=100"
+    local url="https://api.github.com/repos/$repo/releases?per_page=100"
     local response=$(fetch_url "$url")
 
     if [ -n "$response" ]; then
-        echo "$response" | jq -r '[.[] | select(.name | test("rc|beta|alpha") | not)] | .[0].name'
+        echo "$response" | jq -r '[.[] | select(.prerelease == false) | .tag_name] | .[0] // empty'
     else
         echo ""
     fi
