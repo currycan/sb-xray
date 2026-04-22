@@ -65,13 +65,14 @@ class _FakeClient:
 def test_measure_converts_bytes_sec_to_mbps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 10 MiB payload / 1 second elapsed ≈ 10 MiB/s → ~83.89 Mbps
+    # Bash parity: ``awk '{printf "%.2f", s * 8 / 1024 / 1024}'`` — mebibit/s.
+    # 10 MiB payload / 1 second elapsed → exactly 80.00 Mibps.
     content = b"x" * (10 * 1024 * 1024)
     monkeypatch.setattr(st, "_httpx_client", lambda **_: _FakeClient(content))
     times = iter([0.0, 1.0])
     monkeypatch.setattr(st.time, "perf_counter", lambda: next(times))
     mbps = st.measure("https://speed.test/dl", samples=1)
-    assert pytest.approx(mbps, rel=0.02) == 10 * 1024 * 1024 * 8 / 1_000_000
+    assert pytest.approx(mbps, rel=0.01) == 10 * 1024 * 1024 * 8 / 1024 / 1024
 
 
 def test_measure_returns_zero_when_all_fail(
