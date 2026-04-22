@@ -486,6 +486,22 @@ def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
         os.environ["IS_8K_SMOOTH"],
     )
 
+    # Phase 2 observability: structured event so ops can track every
+    # speed-test outcome (boot-time and cron-triggered alike).
+    from sb_xray.events import emit_event
+
+    emit_event(
+        "isp.speed_test.result",
+        {
+            "direct_mbps": round(direct_mbps, 2),
+            "fastest_tag": ctx.fastest_tag or "",
+            "fastest_mbps": round(ctx.fastest_speed, 2),
+            "speeds": {t: round(v, 2) for t, v in ctx.speeds.items()},
+            "isp_tag": decision.isp_tag,
+            "is_8k_smooth": decision.is_8k_smooth,
+        },
+    )
+
 
 def run_isp_speed_tests(
     *,
