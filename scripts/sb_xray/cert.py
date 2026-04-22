@@ -60,16 +60,45 @@ def _cert_is_valid(cert_path: Path) -> bool:
 
 
 def _acme_env() -> dict[str, str]:
-    """Return env with ``LOG_LEVEL`` stripped.
+    """Env for every acme.sh subprocess call.
 
-    Dockerfile sets ``LOG_LEVEL=warning`` for xray/sing-box (string).
-    acme.sh's internal ``LOG_LEVEL`` is numeric (1/2/3) and ends up in
-    ``[ "$LOG_LEVEL" -ge "$LOG_LEVEL_1" ]`` — the string collision triggers
-    ``integer expected`` warnings (L347/381/414 of acme.sh). Dropping the
-    var in the subprocess env lets acme.sh fall back to its numeric default.
+    Two transforms on top of ``os.environ``:
+
+    1. Strip ``LOG_LEVEL``. Dockerfile sets it to the string
+       ``"warning"`` for xray/sing-box, but acme.sh reads it as a
+       numeric (1/2/3) inside ``[ "$LOG_LEVEL" -ge "$LOG_LEVEL_1" ]``;
+       the type mismatch emits ``integer expected`` warnings
+       (acme.sh L347/381/414). Dropping it lets acme.sh fall back to
+       its own numeric default.
+
+    2. Translate uppercase SECRET_FILE convention to the mixed-case
+       names the acme.sh DNS plugins expect:
+
+           ALI_KEY       → Ali_Key
+           ALI_SECRET    → Ali_Secret
+           CF_TOKEN      → CF_Token
+           CF_ZONE_ID    → CF_Zone_ID
+           CF_ACCOUNT_ID → CF_Account_ID
+
+       Bash entrypoint.sh did this manually inside issueCertificate
+       right before the --issue call. Skipping the translation in the
+       Python port caused ``dns_ali`` to log
+       "You don't specify aliyun api key and secret yet."
+       and acme.sh exited 1 — the exact cn2 prod failure.
     """
     env = os.environ.copy()
     env.pop("LOG_LEVEL", None)
+    _ACME_DNS_ALIASES = {
+        "ALI_KEY": "Ali_Key",
+        "ALI_SECRET": "Ali_Secret",
+        "CF_TOKEN": "CF_Token",
+        "CF_ZONE_ID": "CF_Zone_ID",
+        "CF_ACCOUNT_ID": "CF_Account_ID",
+    }
+    for src, dst in _ACME_DNS_ALIASES.items():
+        value = env.get(src)
+        if value and not env.get(dst):
+            env[dst] = value
     return env
 
 

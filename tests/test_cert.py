@@ -336,6 +336,37 @@ def test_issue_nonzero_exit_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         cert.ensure_certificate(name="bundle", params="vpn.example.com:ali", ssl_path=ssl_path)
 
 
+def test_acme_env_translates_dns_credential_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (cn2 prod): acme.sh's dns_ali / dns_cf plugins read
+    mixed-case names (Ali_Key / Ali_Secret / CF_Token / CF_Zone_ID /
+    CF_Account_ID) but the SECRET_FILE convention — and bash
+    entrypoint.sh's own SECRET_FILE — uses upper-case ALI_KEY etc.
+    Bash did the translation manually before --issue; the Python port
+    missed it → dns_ali logged 'You don't specify aliyun api key and
+    secret yet' and acme.sh exited 1."""
+    monkeypatch.setenv("ALI_KEY", "ali-key-123")
+    monkeypatch.setenv("ALI_SECRET", "ali-secret-abc")
+    monkeypatch.setenv("CF_TOKEN", "cf-token")
+    monkeypatch.setenv("CF_ZONE_ID", "zone-id")
+    monkeypatch.setenv("CF_ACCOUNT_ID", "account-id")
+    # Drop any incidental mixed-case entries so the test proves the
+    # translation fired (not inheritance from the shell).
+    for k in ("Ali_Key", "Ali_Secret", "CF_Token", "CF_Zone_ID", "CF_Account_ID"):
+        monkeypatch.delenv(k, raising=False)
+
+    env = cert._acme_env()
+    assert env["Ali_Key"] == "ali-key-123"
+    assert env["Ali_Secret"] == "ali-secret-abc"
+    assert env["CF_Token"] == "cf-token"
+    assert env["CF_Zone_ID"] == "zone-id"
+    assert env["CF_Account_ID"] == "account-id"
+    # Originals preserved (acme.sh reads only the mixed-case form, but
+    # leaving the upper-case variants around has no cost).
+    assert env["ALI_KEY"] == "ali-key-123"
+
+
 def test_install_cert_nonzero_exit_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: acme.sh --install-cert failure (e.g. source .cer
     missing from acme.sh's own store) must abort, not silently return
