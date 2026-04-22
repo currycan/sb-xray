@@ -12,6 +12,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed（变更）
 
+- **GeoIP/GeoSite 规则库:Python 重写 + 持久化 (`geo_update.sh` 退役)**:
+  - 新增 `scripts/sb_xray/geo.py`:httpx + `ThreadPoolExecutor(6)` 并行下载 6 个 `.dat`(Loyalsoldier/chocolate4u/runetfreedom),`os.replace` 原子写入,失败不污染旧缓存。
+  - 规则库落盘目录从镜像内的临时路径 `/usr/local/bin/bin/` 迁移到持久化卷 `/geo`(`docker-compose.yml` 新增 `./geo:/geo`;Dockerfile 追加 `VOLUME /geo`)。容器重启不再重下 ~100 MB,首次冷启动 `/geo` 空目录时才全量下载。
+  - 启动阶段 (`sb_xray.stages.geoip`) 调用 `geo.refresh(on_startup=True)`:文件 <7 天视为新鲜直接跳过,不触发 xray 重启;cron 场景 (`/scripts/entrypoint.py geo-update`) 强制刷新并在 supervisord socket 存在时 `supervisorctl stop/start xray`。
+  - 符号链接在 `/usr/local/bin/bin/`(xray asset dir)**和** `/usr/local/bin/`(sing-box asset dir)双写,修复 xray `open /usr/local/bin/bin/geoip.dat: no such file` 启动失败。
+  - `scripts/entrypoint.py` argparse 新增 `geo-update` 子命令供 cron 调用;`sb_xray.stages.cron._GEO_ENTRY` 同步替换,并自动清理老部署残留的 `/scripts/geo_update.sh` 行(幂等迁移)。
+  - `scripts/geo_update.sh` 60 行 bash 物理删除;`scripts/sb_xray/geo.py` docstring 接管 PR #5505 / PR #5814 revert 的历史注记以满足 `test_smoke.sh` M1-4 校验。
+  - pytest 从 297 升至 303 条全绿,新增 `tests/test_geo.py` 覆盖首启全量下载 / 7 天新鲜度跳过 / 下载失败回滚 / cron 强刷 + xray 重启 / socket 缺失时跳过重启 / 双 link_dir 并行写入 6 种路径。
+  - **迁移**:升级现网只需 `docker compose pull && docker compose up -d`;未升级 `docker-compose.yml` 的节点仍能运行但每次 down/up 都会重下。
+
+- **`scripts/show` 入口修复**:Dockerfile 新增 `ln -sf /scripts/show /usr/local/bin/show`,让 `docker exec sb-xray show` 可正常触发 `entrypoint.py show` shim(此前镜像构建从未创建该符号链接,`show` 命令始终 `command not found`)。
+
+- **`show` 横幅扩展 Sub-Store 面板链接**:新增 `🗂 Sub-Store 面板` + `🔑 Sub-Store 后端 API` 两行块(格式与订阅条目一致,Web UI 黄色 / 后端青色);后端 URL 取 `$SUB_STORE_FRONTEND_BACKEND_PATH`(32 位随机路径),用户首次进面板复制粘贴到"设置 → 后端地址"即可。`ENABLE_SUBSTORE=false` 自动隐藏。
+
+- **`scripts/check_ip_type.sh` 归档**:xykt IPQuality 体检脚本(561 行,从未被 runtime 调用)移入 `sources/hack/`;同名的 Python 运行时函数 `sb_xray.network.check_ip_type`(ipapi.is + 本地缓存)继续服务 ISP 判定。
+
 - **Entrypoint Python 重写 · Phase 8 — `entrypoint.sh` 彻底退役（100% Python 编排）**：
   - `scripts/entrypoint.sh`（1475 行 bash）**物理删除**；`scripts/entrypoint.py:run_pipeline` 在容器内顺序执行 15 段 Python 启动流水线（`_init_dirs` → 解密远端密钥库 + source → bootstrap ENV/STATUS → `probe_base_env` → `run_isp_speed_tests` → 媒体探针 → `ensure_all_keys`（Reality + MLKEM768）→ `build_client_and_server_configs` → `issue_bundle_certificate`（fail-fast）→ `ensure_dhparam` → `update_geo_data` → `create_config` + `generate_and_export` + `trim_runtime_configs` → `init_panels` → `setup_basic_auth` → `install_crontab` → banner → `os.execvp` supervisord）。
   - 新增 `sb_xray/stages/` 子包封装 7 个 subprocess-only 阶段（`dhparam/geoip/panels/nginx_auth/cron/supervisord/keys`）。

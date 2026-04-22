@@ -193,8 +193,9 @@ else
 fi
 
 # M1-4 已作废：PR #5505 的 buildMphCache 被 PR #5814 revert，新方案自动生效
-# 改为验证脚本里包含 revert 注释，防止后续 contributor 再次尝试落地
-if grep -q 'PR #5814' "${REPO_ROOT}/scripts/geo_update.sh"; then
+# 改为验证 Python 下载器里包含 revert 注释，防止后续 contributor 再次尝试落地
+if grep -q 'PR #5814' "${REPO_ROOT}/scripts/sb_xray/geo.py" 2>/dev/null \
+    || grep -q 'PR #5814' "${REPO_ROOT}/docs/10-implementation-notes.md" 2>/dev/null; then
     ok "M1-4: buildMphCache 规划已正确回退（PR #5505 被 PR #5814 revert）"
 else
     bad "M1-4: 未见 revert 说明注释"

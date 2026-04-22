@@ -205,7 +205,36 @@ def render_info_links(out: io.TextIOBase) -> None:
         out.write(f"  🔒 {YELLOW}Basic Auth: {user} / {pwd}{RESET}\n")
         out.write("\n")
 
+    _render_sub_store_links(out, domain=domain, cdn=cdn)
+
     out.write(f"{BOLD}{GREEN}{sep}{RESET}\n")
+
+
+def _render_sub_store_links(out: io.TextIOBase, *, domain: str, cdn: str) -> None:
+    """Emit Sub-Store web UI + hidden backend API path (empty when disabled)."""
+    if os.environ.get("ENABLE_SUBSTORE", "true").lower() == "false":
+        return
+
+    host = domain or cdn
+    webbase = os.environ.get("SUB_STORE_WEBBASEPATH", "sub-store").strip("/")
+    backend = os.environ.get("SUB_STORE_FRONTEND_BACKEND_PATH", "")
+    if not host or not backend:
+        return
+
+    web_url = f"https://{host}/{webbase}/"
+    backend_url = f"https://{host}{backend}/"
+
+    _print_colored(
+        YELLOW,
+        f"🗂  Sub-Store 面板  {DIM}[Web UI]{RESET}{YELLOW}\n{web_url}",
+        out=out,
+    )
+    _print_colored(
+        BRIGHT_CYAN,
+        f"🔑 Sub-Store 后端 API  {DIM}[首次进入面板 → 设置 → 后端地址 粘贴]"
+        f"{RESET}{BRIGHT_CYAN}\n{backend_url}",
+        out=out,
+    )
 
 
 def show_info_links(*, archive_path: Path | None = None) -> None:

@@ -1,34 +1,20 @@
-"""GeoIP / GeoSite data refresh (entrypoint.sh:main_init step 10 equivalent).
+"""GeoIP / GeoSite data refresh (entrypoint.sh §10 等价实现)。
 
-We keep ``geo_update.sh`` as the single source of truth for the download
-manifest because it wraps ``supervisorctl`` reload semantics that would
-complicate a pure-Python port. The Python wrapper just invokes the shell
-script and surfaces exit codes through the standard logger.
+下载工作全部在 :mod:`sb_xray.geo` 里做;这里只负责启动阶段的调用入口
+与状态汇报。``on_startup=True`` 让 ``geo`` 模块尊重 7 天新鲜度窗口,
+避免重启容器时重下 ~100 MB。
 """
 
 from __future__ import annotations
 
-import subprocess
-from pathlib import Path
-
+from sb_xray import geo
 from sb_xray import logging as sblog
 
-_DEFAULT_SCRIPT = Path("/scripts/geo_update.sh")
 
-
-def update_geo_data(*, script: Path = _DEFAULT_SCRIPT) -> int:
-    """Run ``geo_update.sh`` and return its exit code.
-
-    Non-zero exits are logged as WARN (matching the Bash call which does
-    not ``set -e`` around this step) but not raised — a stale geoip
-    database is preferable to aborting a cold start.
-    """
-    if not script.is_file():
-        sblog.log("WARN", f"[geoip] geo 脚本缺失，跳过: {script}")
-        return 0
-
+def update_geo_data() -> int:
+    """启动阶段刷新 geo 数据,返回下载失败数 (不抛异常)。"""
     sblog.log("INFO", "[geoip] 更新 GeoIP/GeoSite 数据库")
-    rc = subprocess.run(["/usr/bin/env", "bash", str(script)], check=False).returncode
-    if rc != 0:
-        sblog.log("WARN", f"[geoip] geo_update.sh 退出码 {rc}")
-    return rc
+    failed = geo.refresh(on_startup=True)
+    if failed:
+        sblog.log("WARN", f"[geoip] {failed} 个规则库下载失败,使用旧缓存")
+    return failed

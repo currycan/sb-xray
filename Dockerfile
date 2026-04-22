@@ -333,6 +333,10 @@ COPY --from=builder --chmod=755 /usr/local/bin/ /usr/local/bin/
 COPY --from=sub-store-builder --chmod=755 /usr/local/bin/ /usr/local/bin/
 COPY --from=sub-store-builder /sub-store/ /sub-store/
 COPY --chmod=755 scripts /scripts
+RUN ln -sf /scripts/show /usr/local/bin/show
+# /geo 持久化目录 (docker-compose 绑定为 ./geo:/geo)。
+# 首次启动由 sb_xray.geo.refresh 下载规则库,避免容器重启重下 ~100 MB。
+RUN mkdir -p /geo
 COPY templates/ /templates/
 COPY sources /sources
 # NOTE: vimrc from private repo; optional, remove if not available
@@ -423,7 +427,7 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=15s --retries=3 \
 
 EXPOSE 80 443
 
-VOLUME ${DUFS_SERVE_PATH} ${WORKDIR} ${SUB_STORE_DATA_BASE_PATH} ${LOGDIR} /etc/nginx/conf.d /etc/nginx/stream.d /etc/nginx/dhparam
+VOLUME ${DUFS_SERVE_PATH} ${WORKDIR} ${SUB_STORE_DATA_BASE_PATH} ${LOGDIR} /etc/nginx/conf.d /etc/nginx/stream.d /etc/nginx/dhparam /geo
 
 STOPSIGNAL SIGTERM
 

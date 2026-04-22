@@ -60,6 +60,8 @@ services:
       - ./nginx-dhparam:/etc/nginx/dhparam
       - ./data:/data
       - ./logs:/var/log
+      # GeoIP/GeoSite 规则库缓存,避免每次容器重启重下 ~100 MB
+      - ./geo:/geo
       # - /lib/modules:/lib/modules:ro
     restart: always
     tty: true

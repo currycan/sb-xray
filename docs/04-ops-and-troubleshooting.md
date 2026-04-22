@@ -319,30 +319,44 @@ SAN[1]: example.com       (主域名)
 
 ## 5. GeoIP/GeoSite 数据更新
 
-`scripts/geo_update.sh` 负责更新 Xray 和 Sing-box 使用的地理信息数据库。
+`scripts/sb_xray/geo.py` 负责下载 Xray 和 Sing-box 使用的规则库,并通过 `entrypoint.py geo-update` 子命令暴露给 cron。规则库落在持久化卷 `./geo:/geo`,容器重启不会重新下载。
 
 ### 5.1 自动更新
 
-系统通过 Supervisor 定时任务自动执行更新。
+- **启动阶段**: entrypoint 第 9 段 (`stages/geoip.py`) 调用 `geo.refresh(on_startup=True)`。文件 <7 天视为新鲜,直接跳过下载;仅维护 `/usr/local/bin/*.dat` 符号链接。
+- **每日任务**: cron 每天 03:00 (容器时区) 执行 `/scripts/entrypoint.py geo-update`,强制刷新并通过 `supervisorctl` 重启 xray 让新规则生效。
+- **日志**: cron 输出重定向到 `/var/log/geo_update.log`;启动阶段输出走 entrypoint 的 stderr。
 
 ### 5.2 手动更新
 
 ```bash
-# 手动触发更新
-docker exec sb-xray /scripts/geo_update.sh
+# 手动触发更新 (与 cron 等价:强制刷新 + 重启 xray)
+docker exec sb-xray /scripts/entrypoint.py geo-update
 
-# 查看当前 GeoIP 数据版本
-docker exec sb-xray ls -la /usr/local/bin/bin/
+# 查看缓存的规则库
+docker exec sb-xray ls -lh /geo/
+docker exec sb-xray ls -l /usr/local/bin/ | grep dat   # 符号链接 → /geo/*.dat
 ```
 
-### 5.3 数据源
+### 5.3 清空并重新下载
+
+```bash
+# 宿主机删除缓存,重启容器触发全量下载
+rm -rf ./geo/*.dat
+docker compose restart sb-xray
+```
+
+### 5.4 持久化卷要求
+
+`docker-compose.yml` 需挂载 `./geo:/geo`。早期版本(无此卷)仍可运行,但每次 `docker compose down/up` 都会丢失缓存并重新下载 6 个 ~10-30 MB 的文件。升级现网节点只需在 compose 里追加一行然后 `docker compose up -d` 即可。
+
+### 5.5 数据源
 
 | 文件 | 用途 | 来源 |
 |:---|:---|:---|
-| `geoip.dat` | IP 地理归属库 (Xray) | Loyalsoldier/v2ray-rules-dat |
-| `geosite.dat` | 域名分类库 (Xray) | Loyalsoldier/v2ray-rules-dat |
-| `geoip.db` | IP 地理归属库 (Sing-box) | SagerNet/sing-geoip |
-| `geosite.db` | 域名分类库 (Sing-box) | SagerNet/sing-geosite |
+| `geoip.dat` / `geosite.dat` | IP/域名分类库 (Xray, Sing-box) | Loyalsoldier/v2ray-rules-dat |
+| `geoip_IR.dat` / `geosite_IR.dat` | 伊朗区域规则 | chocolate4u/Iran-v2ray-rules |
+| `geoip_RU.dat` / `geosite_RU.dat` | 俄罗斯区域规则 | runetfreedom/russia-v2ray-rules-dat |
 
 ---
 

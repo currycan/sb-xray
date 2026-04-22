@@ -12,7 +12,7 @@ are idempotent and safe to re-run across container restarts):
   6. ``build_client_and_server_configs`` — outbound JSON (step 4).
   7. ``issue_bundle_certificate`` — acme.sh (step 8).
   8. ``ensure_dhparam`` — openssl (step 9).
-  9. ``update_geo_data`` — geo_update.sh (step 10).
+  9. ``update_geo_data`` — ``sb_xray.geo.refresh`` (step 10; persisted under ``/geo``).
  10. ``create_config`` + ``generate_and_export`` — templates (step 11).
  11. ``trim_runtime_configs`` — ENABLE_* switches (step 11b).
  12. ``init_panels`` — X-UI / S-UI (step 12).
@@ -125,6 +125,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     sub.add_parser(
         "trim",
         help="Apply ENABLE_* trim switches to the already-rendered daemon.ini.",
+    )
+
+    sub.add_parser(
+        "geo-update",
+        help="Download GeoIP/GeoSite rule-sets (cron entry; forces refresh + xray reload).",
     )
 
     args, extras = parser.parse_known_args(argv)
@@ -655,6 +660,11 @@ def main(argv: list[str] | None = None) -> int:
 
         sbcfg.trim_runtime_configs()
         return 0
+
+    if args.command == "geo-update":
+        from sb_xray import geo
+
+        return geo.refresh(on_startup=False)
 
     sblog.log(
         "INFO",

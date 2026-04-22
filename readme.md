@@ -287,10 +287,8 @@ sb-xray/
 ├── build.sh                  # 自动构建脚本
 ├── Dockerfile                # 四阶段构建文件
 ├── scripts/
-│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1；argparse run/show/trim；run 一次性编排 15 段启动流水线；trim 按 ENABLE_* 精简 supervisord 配置）
-│   ├── sb_xray/              # Python 包：env/logging/cert/config_builder/speed_test/routing/stages/...
-│   ├── geo_update.sh         # GeoIP/GeoSite 数据更新
-│   ├── check_ip_type.sh      # IP 类型检测
+│   ├── entrypoint.py         # 容器启动守护进程（Python PID 1；argparse run/show/trim/geo-update；run 一次性编排 15 段启动流水线；trim 按 ENABLE_* 精简 supervisord 配置；geo-update 供 cron 调用）
+│   ├── sb_xray/              # Python 包：env/logging/cert/config_builder/speed_test/routing/geo/stages/...
 │   └── show                  # Python `entrypoint.py show` 子命令 shim
 ├── templates/
 │   ├── xray/                 # Xray 入站/出站/路由 JSON 模板
