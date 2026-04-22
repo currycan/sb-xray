@@ -219,6 +219,41 @@ docker compose restart
 | `SOCIAL_MEDIA_OUT` | 社交媒体出口策略 tag |
 | `TIKTOK_OUT` | TikTok 出口策略 tag |
 | `ISP_OUT` | ISP 首选策略 tag |
+| `ISP_LAST_RETEST_TS` | 上次周期重测 Unix 时间戳（用于冷启动缓存 TTL 判定） |
+| `ISP_LAST_RETEST_DELTA_PCT` | 上次重测触发 reload 的最大速率变化百分比 |
+| `ISP_LAST_RETEST_TOP_TAG` | 上次重测后选中的最快 tag |
+
+### 2.6 `isp-auto` 优化控制变量（可选）
+
+默认值设计为**零行为变化**，即不设置任何一个都等价于旧版行为；逐项开启即可验证并回滚。
+
+| 变量 | 默认 | Phase | 作用 |
+|:---|:---|:---|:---|
+| `ISP_PROBE_URL` | `https://speed.cloudflare.com/__down?bytes=1048576` | 1 | urltest / observatory 探测 URL；默认携带带宽信号,可切 `https://www.gstatic.com/generate_204` 回退 |
+| `ISP_PROBE_INTERVAL` | `1m` | 1 | 探测周期；cn2 等小内存节点建议 `5m` |
+| `ISP_PROBE_TOLERANCE_MS` | `300` | 1 | sing-box `urltest` 切换最低 RTT 差阈值（毫秒） |
+| `ISP_EVENTS_ENABLED` | `true` | 2 | 结构化事件 `event=... payload=...` 是否写 stdout + POST 到 shoutrrr |
+| `ISP_RETEST_INTERVAL_HOURS` | `6` | 3 | 周期性带宽重测 cron 间隔；`0` 禁用 |
+| `ISP_RETEST_DELTA_PCT` | `15` | 3 | 重测后触发 daemon restart 的最小速率变化百分比；`999` 实质禁用重启 |
+| `ISP_RETEST_ENABLED` | `true` | 3 | 即使 cron 已安装,也可以通过此开关让子命令 no-op |
+| `ISP_PER_SERVICE_SB` | `false` | 4 | 开启后 sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 生成独立 `isp-auto-<service>` urltest balancer,各自用该服务的真实域名探测;xray 因 observatory 单例不受影响 |
+| `ISP_FALLBACK_STRATEGY` | `direct` | 5 | `direct`(等价旧版) / `block`(fail-closed,CN/HK/RU 建议) / `warp`(受限地区 + `WARP_ENABLED=true` 时串 `[warp, direct]`) |
+| `WARP_ENABLED` | `false` | 5 | 声明容器内存在 `warp` 出站 tag;仅在 `ISP_FALLBACK_STRATEGY=warp` 时有效 |
+| `ISP_SPEED_CACHE_TTL_MIN` | `60` | 5 | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
+| `ISP_SPEED_CACHE_ASYNC` | `true` | 5 | 缓存命中时是否后台线程异步刷新速度;`false` 仅用于调试 |
+
+> **典型组合**
+> - **cn2 OOM 敏感节点**: `ISP_PROBE_INTERVAL=5m`, `ISP_PER_SERVICE_SB=false`, `ISP_RETEST_INTERVAL_HOURS=12`
+> - **CN / HK / RU 受限地区 fail-closed**: `ISP_FALLBACK_STRATEGY=block`
+> - **受限地区 + WARP 兜底**: `ISP_FALLBACK_STRATEGY=warp`, `WARP_ENABLED=true`（需模板里有 `warp` outbound）
+> - **追求极致解锁命中率**: `ISP_PER_SERVICE_SB=true` + 保持 `ISP_PROBE_URL` 默认
+
+**Entrypoint 事件流**（`SHOUTRRR_URLS` 未设置时仅 stdout）:
+- `isp.speed_test.result` — 每次速度测试完成
+- `isp.speed_test.cache_hit` — 冷启动缓存命中
+- `isp.retest.completed` — 周期重测触发了 daemon restart
+- `isp.retest.noop` — 周期重测结果无变化
+- `isp.retest.error` / `isp.speed_test.error` — 失败路径
 
 ---
 
