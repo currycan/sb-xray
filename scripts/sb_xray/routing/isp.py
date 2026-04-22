@@ -14,6 +14,56 @@ logger = logging.getLogger(__name__)
 
 _SMOOTH_THRESHOLD_MBPS: Final[float] = 100.0
 
+# Probe configuration. Cloudflare's 1 MiB `__down` endpoint is the new
+# default: it is globally CDN-fronted, returns HTTP 200, and streams a
+# small payload so `urltest`/`observatory` RTT measurements carry a
+# bandwidth signal — throttled ISPs naturally rank lower instead of
+# being invisible (as they were with the 0-byte `generate_204`).
+_DEFAULT_PROBE_URL: Final[str] = "https://speed.cloudflare.com/__down?bytes=1048576"
+_DEFAULT_PROBE_INTERVAL: Final[str] = "1m"
+_DEFAULT_PROBE_TOLERANCE_MS: Final[int] = 300
+
+
+@dataclass(frozen=True)
+class ProbeConfig:
+    url: str
+    interval: str
+    tolerance_ms: int
+
+
+def _resolve_probe_config(
+    *,
+    url: str | None = None,
+    interval: str | None = None,
+    tolerance_ms: int | None = None,
+) -> ProbeConfig:
+    """Resolve probe settings from explicit kwargs → env → defaults.
+
+    Explicit kwargs win (unit tests); otherwise we read ``ISP_PROBE_URL``,
+    ``ISP_PROBE_INTERVAL`` and ``ISP_PROBE_TOLERANCE_MS``. Empty string
+    env values are treated as "unset" so operators can't accidentally
+    wipe the default by setting e.g. ``ISP_PROBE_URL=`` in docker-compose.
+    """
+    resolved_url = url or os.environ.get("ISP_PROBE_URL") or _DEFAULT_PROBE_URL
+    resolved_interval = interval or os.environ.get("ISP_PROBE_INTERVAL") or _DEFAULT_PROBE_INTERVAL
+    if tolerance_ms is None:
+        raw = os.environ.get("ISP_PROBE_TOLERANCE_MS", "").strip()
+        try:
+            tolerance_ms = int(raw) if raw else _DEFAULT_PROBE_TOLERANCE_MS
+        except ValueError:
+            logger.warning(
+                "invalid ISP_PROBE_TOLERANCE_MS=%r — falling back to %d",
+                raw,
+                _DEFAULT_PROBE_TOLERANCE_MS,
+            )
+            tolerance_ms = _DEFAULT_PROBE_TOLERANCE_MS
+    return ProbeConfig(
+        url=resolved_url,
+        interval=resolved_interval,
+        tolerance_ms=tolerance_ms,
+    )
+
+
 # ``geosite:*`` entries + env-var names that carry the override outbound.
 # The last tuple (multi-domain) mirrors the original Bash JSON literal.
 _SERVICE_SPEC: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = (
@@ -100,7 +150,11 @@ def _sort_tags_desc(speeds: dict[str, float]) -> list[str]:
     return [t for t, _ in sorted(speeds.items(), key=lambda kv: kv[1], reverse=True)]
 
 
-def build_sb_urltest(speeds: dict[str, float]) -> str:
+def build_sb_urltest(
+    speeds: dict[str, float],
+    *,
+    probe: ProbeConfig | None = None,
+) -> str:
     """Sing-box urltest outbound JSON fragment (empty when no ISP nodes).
 
     The return value is spliced verbatim into ``templates/sing-box/sb.json``
@@ -121,15 +175,16 @@ def build_sb_urltest(speeds: dict[str, float]) -> str:
     """
     if not speeds:
         return ""
+    cfg = probe or _resolve_probe_config()
     outbounds = [*_sort_tags_desc(speeds), "direct"]
     payload = json.dumps(
         {
             "type": "urltest",
             "tag": "isp-auto",
             "outbounds": outbounds,
-            "url": "https://www.gstatic.com/generate_204",
-            "interval": "1m",
-            "tolerance": 300,
+            "url": cfg.url,
+            "interval": cfg.interval,
+            "tolerance": cfg.tolerance_ms,
             "interrupt_exist_connections": True,
         },
         ensure_ascii=False,
@@ -137,17 +192,22 @@ def build_sb_urltest(speeds: dict[str, float]) -> str:
     return f"{payload},"
 
 
-def build_xray_balancer(speeds: dict[str, float]) -> tuple[str, str]:
+def build_xray_balancer(
+    speeds: dict[str, float],
+    *,
+    probe: ProbeConfig | None = None,
+) -> tuple[str, str]:
     """Xray observatory + balancer JSON fragments (each trailing comma)."""
     if not speeds:
         return "", ""
+    cfg = probe or _resolve_probe_config()
     selector = _sort_tags_desc(speeds)
     observatory = json.dumps(
         {
             "observatory": {
                 "subjectSelector": selector,
-                "probeUrl": "https://www.gstatic.com/generate_204",
-                "probeInterval": "1m",
+                "probeUrl": cfg.url,
+                "probeInterval": cfg.interval,
                 "enableConcurrency": True,
             }
         },
@@ -350,8 +410,17 @@ def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -
 
     custom_out = "".join(xray_parts)
     sb_custom_out = "".join(sb_parts)
-    urltest = build_sb_urltest(speeds) if has_isp_nodes else ""
-    observatory, balancer = build_xray_balancer(speeds) if has_isp_nodes else ("", "")
+    probe = _resolve_probe_config()
+    urltest = build_sb_urltest(speeds, probe=probe) if has_isp_nodes else ""
+    observatory, balancer = build_xray_balancer(speeds, probe=probe) if has_isp_nodes else ("", "")
+    if has_isp_nodes and speeds:
+        logger.info(
+            "balancer configured: probe=%s interval=%s tolerance=%dms nodes=%d",
+            probe.url,
+            probe.interval,
+            probe.tolerance_ms,
+            len(speeds),
+        )
     service_rules = build_xray_service_rules(
         outbounds={
             "CHATGPT_OUT": os.environ.get("CHATGPT_OUT", ""),

@@ -64,7 +64,31 @@ def test_sb_urltest_sorted_desc_by_speed() -> None:
         "proxy-slow",
         "direct",
     ]
-    assert data["url"] == "https://www.gstatic.com/generate_204"
+    # Default probe URL is Cloudflare 1 MiB (Phase 1 of isp-auto optimisation).
+    assert data["url"] == "https://speed.cloudflare.com/__down?bytes=1048576"
+    assert data["interval"] == "1m"
+    assert data["tolerance"] == 300
+
+
+def test_sb_urltest_honours_env_probe_url(monkeypatch) -> None:
+    monkeypatch.setenv("ISP_PROBE_URL", "https://example.test/probe")
+    monkeypatch.setenv("ISP_PROBE_INTERVAL", "30s")
+    monkeypatch.setenv("ISP_PROBE_TOLERANCE_MS", "450")
+    out = isp.build_sb_urltest({"proxy-hk": 120.0})
+    data = json.loads(out.rstrip(","))
+    assert data["url"] == "https://example.test/probe"
+    assert data["interval"] == "30s"
+    assert data["tolerance"] == 450
+
+
+def test_sb_urltest_explicit_probe_overrides_env(monkeypatch) -> None:
+    monkeypatch.setenv("ISP_PROBE_URL", "https://env.test/probe")
+    cfg = isp.ProbeConfig(url="https://kwarg.test/probe", interval="5m", tolerance_ms=900)
+    out = isp.build_sb_urltest({"proxy-hk": 120.0}, probe=cfg)
+    data = json.loads(out.rstrip(","))
+    assert data["url"] == "https://kwarg.test/probe"
+    assert data["interval"] == "5m"
+    assert data["tolerance"] == 900
 
 
 def test_sb_urltest_has_trailing_comma_for_template_splice() -> None:
@@ -104,6 +128,19 @@ def test_xray_balancer_selector_sorted_desc() -> None:
     assert '"isp-auto"' in bal
     assert '"leastPing"' in bal
     assert '"fallbackTag": "direct"' in bal
+    # Default probe URL lives in the observatory fragment.
+    assert "speed.cloudflare.com/__down" in obs
+
+
+def test_xray_balancer_honours_env_probe_url(monkeypatch) -> None:
+    monkeypatch.setenv("ISP_PROBE_URL", "https://example.test/probe")
+    monkeypatch.setenv("ISP_PROBE_INTERVAL", "2m")
+    obs, _ = isp.build_xray_balancer({"proxy-cn2": 60.0})
+    # Wrap as an object so we can parse the observatory payload back.
+    obs_obj = json.loads("{" + obs.rstrip(",") + "}")
+    observatory = obs_obj["observatory"]
+    assert observatory["probeUrl"] == "https://example.test/probe"
+    assert observatory["probeInterval"] == "2m"
 
 
 def test_xray_balancer_fragments_roundtrip_as_json() -> None:
