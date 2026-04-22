@@ -16,6 +16,30 @@ class _FakeCompleted:
         self.stdout = stdout
 
 
+def test_default_ssl_path_reads_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: default ``ssl_path=Path('/ssl')`` was wrong — templates
+    render ``${SSL_PATH}`` (``/pki`` by Dockerfile) so nginx / xray /
+    sing-box look for certs under ``/pki/sb_xray_bundle.crt`` while the
+    old Python default wrote them to ``/ssl/`` → infinite nginx/xray
+    restart loop observed on cn2 prod."""
+    ssl_path = tmp_path / "pki"
+    ssl_path.mkdir()
+    for suffix in (".crt", ".key", "-ca.crt"):
+        (ssl_path / f"bundle{suffix}").write_text("placeholder", encoding="utf-8")
+
+    monkeypatch.setenv("SSL_PATH", str(ssl_path))
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompleted:
+        if cmd[0] == "openssl":
+            return _FakeCompleted(returncode=0)
+        pytest.fail(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    # NOT passing ssl_path → reads $SSL_PATH
+    result = cert.ensure_certificate(name="bundle", params="vpn.example.com:ali")
+    assert result is cert.CertStatus.SKIPPED
+
+
 def test_skip_renew_when_cert_valid_gt_7d(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ssl_path = tmp_path / "ssl"
     ssl_path.mkdir()

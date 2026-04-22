@@ -129,15 +129,22 @@ def ensure_certificate(
     *,
     name: str,
     params: str,
-    ssl_path: Path = Path("/ssl"),
+    ssl_path: Path | None = None,
 ) -> CertStatus:
     """Ensure a valid ACME certificate for ``name`` exists under ``ssl_path``.
+
+    ``ssl_path`` defaults to ``$SSL_PATH`` (Dockerfile sets it to
+    ``/pki`` — same path the nginx / xray / sing-box JSON templates
+    render for ``certificate_path`` / ``ssl_certificate`` etc). Falls
+    back to ``/pki`` when the env var is unset, matching Dockerfile.
 
     Behavior mirrors entrypoint.sh ``issueCertificate``:
       - Skip if an existing cert is valid for more than 7 days.
       - Otherwise register (if needed), issue, and install the cert
         via acme.sh, writing ``{name}.crt`` / ``.key`` / ``-ca.crt``.
     """
+    if ssl_path is None:
+        ssl_path = Path(os.environ.get("SSL_PATH", "/pki"))
     entries = _parse_params(params)
     if not entries:
         raise ValueError(f"invalid params (no domains found): {params!r}")
