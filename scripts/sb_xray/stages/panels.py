@@ -40,7 +40,7 @@ def init_xui() -> bool:
     port = os.environ.get("XUI_LOCAL_PORT", "")
     base_path = os.environ.get("XUI_WEBBASEPATH", "")
     if not all([user, password, port, base_path]):
-        sblog.log("WARN", "[步骤 12] X-UI 所需变量未就绪，跳过 setting")
+        sblog.log("WARN", "[panels] X-UI 所需变量未就绪，跳过 setting")
         return False
 
     _run(
@@ -60,7 +60,7 @@ def init_xui() -> bool:
     # fail2ban lives inside the X-UI container and guards its login form.
     rc = _run(["fail2ban-client", "-x", "start"])
     if rc != 0:
-        sblog.log("WARN", "[步骤 12] Fail2ban 启动失败")
+        sblog.log("WARN", "[panels] Fail2ban 启动失败")
     return True
 
 
@@ -81,7 +81,7 @@ def init_sui() -> bool:
     user = os.environ.get("PUBLIC_USER", "")
     password = os.environ.get("PUBLIC_PASSWORD", "")
     if not all([port, sub_port, base_path, sub_path, user, password]):
-        sblog.log("WARN", "[步骤 12] S-UI 所需变量未就绪，跳过 setting")
+        sblog.log("WARN", "[panels] S-UI 所需变量未就绪，跳过 setting")
         return False
 
     _run(
@@ -122,7 +122,7 @@ def init_panels() -> None:
     if not xui_on and not sui_on:
         sblog.log(
             "INFO",
-            "[步骤 12] ENABLE_XUI=ENABLE_SUI=false，两个面板均已禁用，跳过初始化",
+            "ENABLE_XUI=ENABLE_SUI=false，两个面板均已禁用，跳过初始化",
         )
         return
 
@@ -131,6 +131,6 @@ def init_panels() -> None:
         parts.append("X-UI")
     if sui_on:
         parts.append("S-UI")
-    sblog.log("INFO", f"[步骤 12] 初始化 {' / '.join(parts)}")
+    sblog.log("INFO", f"[panels] 初始化 {' / '.join(parts)}")
     init_xui()
     init_sui()

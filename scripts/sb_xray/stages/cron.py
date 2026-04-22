@@ -23,4 +23,4 @@ def install_crontab(
     cleaned = "\n".join(lines).rstrip() + "\n"
     cron_file.write_text(cleaned, encoding="utf-8")
     cron_file.chmod(0o600)
-    sblog.log("INFO", "[步骤 14] Cron 定时任务已安装 (geo_update daily 03:00)")
+    sblog.log("INFO", "[cron] Cron 定时任务已安装 (geo_update daily 03:00)")

@@ -147,9 +147,24 @@ def build_xray_balancer(speeds: dict[str, float]) -> tuple[str, str]:
         ensure_ascii=False,
     )
     # Strip the outer `{}` so the caller can splice into xr.json directly
-    observatory_inner = observatory.strip("{}").strip()
-    balancer_inner = balancer.strip("{}").strip()
+    # ``.strip('{}')`` previously ate the *inner* closing brace too
+    # (e.g. ``...true}}`` → ``...true``), producing invalid JSON once
+    # the fragment was spliced back. Peel exactly one outer pair.
+    observatory_inner = _unwrap_outer_braces(observatory)
+    balancer_inner = _unwrap_outer_braces(balancer)
     return f"{observatory_inner},", f"{balancer_inner},"
+
+
+def _unwrap_outer_braces(text: str) -> str:
+    """Return ``text`` with one leading ``{`` + one trailing ``}`` peeled.
+
+    Raises ``ValueError`` on malformed input — callers hand us
+    ``json.dumps`` output so this should never fire in practice.
+    """
+    stripped = text.strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        raise ValueError(f"expected JSON object wrapper, got {stripped!r}")
+    return stripped[1:-1].strip()
 
 
 def build_xray_service_rules(*, outbounds: dict[str, str]) -> str:

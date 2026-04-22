@@ -26,16 +26,16 @@ def ensure_dhparam(
         fi
     """
     if path.is_file():
-        sblog.log("DEBUG", f"[步骤 9]  DH 参数已存在，跳过: {path}")
+        sblog.log("DEBUG", f"[dhparam] DH 参数已存在，跳过: {path}")
         return False
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    sblog.log("INFO", f"[步骤 9]  生成 DH 参数 ({bits} bit)，首轮耗时可能较长...")
+    sblog.log("INFO", f"[dhparam] 生成 DH 参数 ({bits} bit)，首轮耗时可能较长...")
     rc = subprocess.run(
         ["openssl", "dhparam", "-dsaparam", "-out", str(path), str(bits)],
         check=False,
     ).returncode
     if rc != 0:
         raise RuntimeError(f"openssl dhparam exited with code {rc}")
-    sblog.log("INFO", "[步骤 9]  DH 参数生成完成")
+    sblog.log("INFO", "[dhparam] DH 参数生成完成")
     return True

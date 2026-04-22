@@ -85,6 +85,26 @@ def test_xray_balancer_selector_sorted_desc() -> None:
     assert '"fallbackTag": "direct"' in bal
 
 
+def test_xray_balancer_fragments_roundtrip_as_json() -> None:
+    """Regression: ``.strip('{}')`` in the old port ate the inner closing
+    brace of the observatory object, producing invalid JSON when the
+    fragment was spliced into ``xr.json``."""
+    import json as _json
+
+    obs, bal = isp.build_xray_balancer({"proxy-cn2": 60.0, "proxy-aws": 80.0})
+    # Fragments always end with a comma (intended for templated splice).
+    assert obs.endswith(",")
+    assert bal.endswith(",")
+    # Wrap back into an object and verify each fragment is syntactically
+    # valid JSON on its own.
+    wrapped_obs = "{" + obs.rstrip(",") + "}"
+    wrapped_bal = "{" + bal.rstrip(",") + "}"
+    obs_obj = _json.loads(wrapped_obs)
+    bal_obj = _json.loads(wrapped_bal)
+    assert "observatory" in obs_obj
+    assert "balancers" in bal_obj
+
+
 # ---- apply_isp_routing_logic: decision branches ----------------------------
 
 

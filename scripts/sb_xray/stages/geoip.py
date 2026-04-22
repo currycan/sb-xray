@@ -24,11 +24,11 @@ def update_geo_data(*, script: Path = _DEFAULT_SCRIPT) -> int:
     database is preferable to aborting a cold start.
     """
     if not script.is_file():
-        sblog.log("WARN", f"[步骤 10] geo 脚本缺失，跳过: {script}")
+        sblog.log("WARN", f"[geoip] geo 脚本缺失，跳过: {script}")
         return 0
 
-    sblog.log("INFO", "[步骤 10] 更新 GeoIP/GeoSite 数据库")
+    sblog.log("INFO", "[geoip] 更新 GeoIP/GeoSite 数据库")
     rc = subprocess.run(["/usr/bin/env", "bash", str(script)], check=False).returncode
     if rc != 0:
-        sblog.log("WARN", f"[步骤 10] geo_update.sh 退出码 {rc}")
+        sblog.log("WARN", f"[geoip] geo_update.sh 退出码 {rc}")
     return rc

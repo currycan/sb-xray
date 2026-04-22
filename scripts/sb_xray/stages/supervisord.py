@@ -40,5 +40,5 @@ def build_supervisord_argv(
 def exec_supervisord(extras: Sequence[str] | None = None) -> None:
     """``os.execvp`` into supervisord (never returns on success)."""
     argv = build_supervisord_argv(extras)
-    sblog.log("INFO", f"[步骤 15] 移交 Supervisord 接管: {' '.join(argv)}")
+    sblog.log("INFO", f"[supervisord] 移交 Supervisord 接管: {' '.join(argv)}")
     os.execvp(argv[0], argv)

@@ -379,8 +379,12 @@ def run_pipeline(
             return
         fn()
 
-    def _step(n: int, label: str) -> None:
-        sblog.log("INFO", f"[{n:>2}/15] {label}")
+    def _step(_n: int, label: str) -> None:
+        # Emit a descriptive phase heading. The counter is kept in the
+        # signature only for source-reading convenience — it never
+        # appears in the log since arbitrary indices ("3/15") mean
+        # nothing to operators.
+        sblog.log("INFO", f"▸ {label}")
 
     sblog.log("INFO", "▶ SB-Xray 启动初始化 (15 阶段 Python pipeline)")
 
