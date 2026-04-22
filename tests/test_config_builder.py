@@ -32,11 +32,29 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_envsubst_keeps_unset_as_empty(env: Path) -> None:
-    assert cb._envsubst("$FOO-$BAR") == "-"
+def test_envsubst_preserves_unset_references(env: Path) -> None:
+    """Regression: nginx.conf references nginx runtime vars like
+    ``$http_x_forwarded_for`` / ``$client_ip`` that are NOT shell env
+    vars — GNU envsubst leaves them untouched. Replacing with empty
+    string collapses ``map $src $dst {...}`` into ``map   {...}``
+    which nginx rejects with 'invalid number of arguments in map
+    directive' (the exact failure observed on cn2 prod)."""
+    # Unset → keep literal form
+    assert cb._envsubst("$FOO-$BAR") == "$FOO-$BAR"
+    assert cb._envsubst("${FOO}:${BAZ}") == "${FOO}:${BAZ}"
+    # Known → substitute
     os.environ["FOO"] = "hi"
-    assert cb._envsubst("$FOO-$BAR") == "hi-"
-    assert cb._envsubst("${FOO}:${BAZ}") == "hi:"
+    assert cb._envsubst("$FOO-$BAR") == "hi-$BAR"
+    assert cb._envsubst("${FOO}:${BAZ}") == "hi:${BAZ}"
+
+
+def test_envsubst_preserves_nginx_runtime_vars(env: Path) -> None:
+    """Concrete regression mirroring templates/nginx/nginx.conf L19:
+    ``map $http_x_forwarded_for $client_ip { "" $remote_addr; }``.
+    None of those ``$`` refs are shell vars — all must survive
+    unchanged."""
+    tpl = 'map $http_x_forwarded_for $client_ip { "" $remote_addr; }'
+    assert cb._envsubst(tpl) == tpl
 
 
 def test_render_flat_writes_expanded_text(env: Path, tmp_path: Path) -> None:

@@ -65,17 +65,24 @@ _FEATURE_FLAG_TEMPLATES: dict[str, str] = {
 
 
 def _envsubst(raw: str) -> str:
-    """Bash ``envsubst`` equivalent: expand ``$VAR`` / ``${VAR}``; leave
-    unknown references as the empty string.
+    """GNU ``envsubst`` equivalent: expand ``$VAR`` / ``${VAR}``.
 
-    ``string.Template.safe_substitute`` keeps unknown vars as ``$VAR``
-    literal — that's NOT envsubst behaviour (which treats unset as empty).
-    Hand-rolled regex substitution below matches ``envsubst`` exactly.
+    Matches the actual behaviour of ``envsubst`` (coreutils / gettext):
+    references whose name is **in the environment** get substituted;
+    references to names that are **not set** keep their literal ``$VAR``
+    / ``${VAR}`` form. (Earlier revisions returned empty-string for
+    unknown names — but that breaks every nginx ``$http_*`` / ``$arg_*``
+    runtime variable in templates/nginx/*.conf, collapsing
+    ``map $http_x_forwarded_for $client_ip {...}`` into
+    ``map   {...}`` which nginx refuses with
+    ``invalid number of arguments in "map" directive``.)
     """
 
     def repl(m: re.Match[str]) -> str:
         name = m.group(1) or m.group(2)
-        return os.environ.get(name, "")
+        if name in os.environ:
+            return os.environ[name]
+        return m.group(0)
 
     return _VAR_RE.sub(repl, raw)
 

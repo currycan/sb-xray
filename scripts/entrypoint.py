@@ -241,7 +241,15 @@ def _load_env_file(path: Path) -> int:
         # Drop bash-internal vars we never want to bleed in.
         if key in _BASH_INTERNAL_VARS or key.startswith("BASH_"):
             continue
-        if key in os.environ:
+        # Parent-shell priority: honour the value ONLY when it's non-empty.
+        # Dockerfile declares ``ENV ACMESH_REGISTER_EMAIL=""`` (empty
+        # placeholder) so that operators can override via compose, but the
+        # real cert credentials live in SECRET_FILE and must win over the
+        # empty placeholder. Bash ``set -a; source SECRET_FILE`` overwrites
+        # unconditionally; the equivalent here is to treat an empty string
+        # in ``os.environ`` the same as "not set". A non-empty parent
+        # value still wins (docker-compose explicit override).
+        if os.environ.get(key):
             continue
         os.environ[key] = value
         injected += 1

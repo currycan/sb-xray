@@ -189,14 +189,45 @@ def test_load_env_file_preserves_parent_shell_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Values set in the parent process (``docker-compose environment:``)
-    must win over whatever SECRET_FILE says — setdefault semantics."""
+    must win over whatever SECRET_FILE says when the parent value is
+    non-empty."""
     secret_file = tmp_path / "secret"
     secret_file.write_text("MY_VAR=from_file\n", encoding="utf-8")
     monkeypatch.setenv("MY_VAR", "from_shell")
 
-    injected = ep._load_env_file(secret_file)
-    assert injected == 0
+    # Exact injected count depends on test runner env (other empty vars
+    # may be legitimately injected). The contract we care about is the
+    # priority rule: non-empty parent value must survive.
+    ep._load_env_file(secret_file)
     assert os.environ["MY_VAR"] == "from_shell"
+
+
+def test_load_env_file_overrides_empty_dockerfile_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: Dockerfile declares ``ENV ACMESH_REGISTER_EMAIL=""`` as
+    an empty placeholder; SECRET_FILE carries the real value. Bash
+    ``source`` would overwrite the empty placeholder. Python must too,
+    otherwise ``cert.ensure_certificate`` sees empty strings as
+    'missing' (``os.environ.get(k)`` is falsy for ``""``) and the ACME
+    stage fails — exactly the bug hit on cn2 prod after 4 fix attempts.
+    """
+    secret_file = tmp_path / "secret"
+    secret_file.write_text(
+        "export ACMESH_REGISTER_EMAIL=real@example.com\nexport ALI_KEY=real-ali-key\n",
+        encoding="utf-8",
+    )
+    # Simulate Dockerfile ENV ""
+    monkeypatch.setenv("ACMESH_REGISTER_EMAIL", "")
+    monkeypatch.setenv("ALI_KEY", "")
+
+    # Don't assert exact injected count — test runner env may contain
+    # other empty vars that legitimately get overridden too. What matters
+    # is that the two Dockerfile-empty placeholders got filled with the
+    # real SECRET_FILE values.
+    ep._load_env_file(secret_file)
+    assert os.environ["ACMESH_REGISTER_EMAIL"] == "real@example.com"
+    assert os.environ["ALI_KEY"] == "real-ali-key"
 
 
 def test_load_env_file_missing_file_is_noop(tmp_path: Path) -> None:
