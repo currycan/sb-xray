@@ -44,7 +44,16 @@ flowchart TD
     HC -- "全部故障" --> Direct["自动回退 direct"]:::pass
 ```
 
-> **关键变化**：旧版将所有服务路由静态指向单个 ISP tag（如 `proxy-la-isp`），ISP 挂了流量直接黑洞。新版所有服务路由指向 `isp-auto`，由 Sing-box `urltest` / Xray `balancer` 在运行时自动选优并回退 `direct`。
+> **路由决策**：所有服务路由指向 `isp-auto`，由 sing-box `urltest` / xray `balancer` 在运行时自动选优；ISP 全部不可达时按 `ISP_FALLBACK_STRATEGY` 回退（默认 `direct`，可选 `block` 实现 fail-closed）。
+>
+> **可选增强**（默认关闭或等价默认行为，按需打开）:
+> - `ISP_PROBE_URL` — probe URL 默认 Cloudflare 1 MiB，携带带宽信号
+> - `ISP_PER_SERVICE_SB=true` — sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 各配独立 balancer
+> - `ISP_FALLBACK_STRATEGY=block` — 受限地区 fail-closed
+> - `ISP_RETEST_INTERVAL_HOURS` — 默认 6h 周期重测,组成变化才重启 daemon
+> - `ISP_SPEED_CACHE_TTL_MIN` — 冷启动 TTL 缓存(默认 60 min) + 后台异步刷新
+>
+> 完整运行时闭环架构图见 [docs/01-architecture-and-traffic.md §6.4](./01-architecture-and-traffic.md#64-完整运行时闭环); env 变量与典型组合见 [docs/04-ops-and-troubleshooting.md §2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
 
 ### 1.3 多 ISP 环境注入实操
 
@@ -124,10 +133,10 @@ flowchart LR
         L --> N["Policy-Priority 命中 super:+30\n最高优先级，无视延迟差距"]
     end
 
-    style I fill:#fdcb6e,stroke:#e17055,color:black
-    style J fill:#00b894,stroke:#00b894,color:white
-    style M fill:#74b9ff,color:white
-    style N fill:#a29bfe,color:white
+    style I fill:#fdcb6e,stroke:#e0a33e,color:#333
+    style J fill:#00b894,stroke:#009577,color:#fff
+    style M fill:#0984e3,stroke:#0566b3,color:#fff
+    style N fill:#a29bfe,stroke:#6c5ce7,color:#fff
 ```
 
 #### 启动日志结构示例
@@ -184,7 +193,7 @@ flowchart LR
 >
 > `_is_restricted_region` 仅作日志修饰，不单独控制分支走向；IP 类型（`IP_TYPE`）与地区限制同级参与条件评估。
 >
-> **运行时保障**：即使启动时选中的 ISP 在运行期间故障，Sing-box `urltest` / Xray `observatory` 会在下次探测（1 分钟间隔）后自动切换到存活节点或回退 `direct`，避免流量黑洞。
+> **运行时保障**：即使启动时选中的 ISP 在运行期间故障，Sing-box `urltest` / Xray `observatory` 会在下次探测（`ISP_PROBE_INTERVAL`，默认 1 分钟）后自动切换到存活节点或回退（`ISP_FALLBACK_STRATEGY`，默认 `direct`；`block` 实现 fail-closed），避免流量黑洞。每 `ISP_RETEST_INTERVAL_HOURS`（默认 6h）会周期性重跑带宽测试、仅当组成/排序变化时重渲染配置并重启内核。
 
 #### 8K 判定阈值
 
@@ -211,7 +220,7 @@ flowchart LR
 - **Policy-Priority（定级）**：只负责给范围内的候选者进行「多维打分」。例如，同等条件下，优质节点加分，Reality 协议加分。
 
 ```mermaid
-graph LR
+flowchart LR
     A["全网几百个节点"] --> B("Filter: 筛选阶段")
     B -->|"保留所需节点"| C{"Policy-Priority: 评分阶段"}
     C -->|"分析节点名称"| D["地区偏好权重"]
@@ -220,9 +229,9 @@ graph LR
     D & E & F --> G(("总得分最高者"))
     G --> H["节点上任服务"]
 
-    style B fill:#e1f5fe,stroke:#03a9f4,stroke-width:2px
-    style C fill:#fff3e0,stroke:#ff9800,stroke-width:2px
-    style G fill:#e8f5e9,stroke:#4caf50,stroke-width:3px
+    style B fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    style C fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    style G fill:#00b894,stroke:#009577,stroke-width:3px,color:#fff
 ```
 
 ### 2.2 节点命名架构与特征提取
@@ -395,7 +404,7 @@ proxy-groups:
 ### 3.1 清洗流转架构
 
 ```mermaid
-graph TD
+flowchart TD
     A["输入: 原始混杂的 Proxy 节点列表"] --> F0
 
     subgraph Pipeline
@@ -411,8 +420,8 @@ graph TD
 
     R --> Z["输出: 标准化的 Proxy 节点列表"]
 
-    style A fill:#f9f,stroke:#333,stroke-width:2px
-    style Z fill:#6f9,stroke:#333,stroke-width:2px
+    style A fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    style Z fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
 ```
 
 ### 3.2 核心清洗动作

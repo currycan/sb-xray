@@ -50,19 +50,6 @@ get_latest_release() {
     fi
 }
 
-# 辅助函数: 获取最新 Tag
-get_latest_tag() {
-    local repo=$1
-    local url="https://api.github.com/repos/$repo/tags"
-    local response=$(fetch_url "$url")
-
-    if [ -n "$response" ]; then
-        echo "$response" | jq -r '.[0].name'
-    else
-        echo ""
-    fi
-}
-
 # 辅助函数: 获取 GitHub Release JSON（按 repo@tag 文件缓存）
 # 相同 release 的多个 asset 只触发一次 API 调用，避免速率限额
 # 使用文件缓存而非关联数组，保持 bash 3.2 兼容（macOS /bin/bash）
@@ -201,7 +188,7 @@ DUFS_TAG=$(get_latest_stable_tag "sigoden/dufs")
 CLOUDFLARED_VERSION=$(get_latest_stable_tag "cloudflare/cloudflared")
 XUI_TAG=$(get_latest_stable_tag "MHSanaei/3x-ui")
 SING_BOX_TAG=$(get_latest_stable_tag "SagerNet/sing-box")
-XRAY_TAG=$(get_latest_tag "XTLS/Xray-core")
+XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
 fi
 
 # 处理版本号并构建 Docker 参数
@@ -269,7 +256,7 @@ check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"    
 check_version "Cloudflared"      "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSION"        "2026.3.0"
 check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"                "2.9.0"
 check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"           "1.13.9"
-check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"               "26.4.17"
+check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"               "26.3.27"
 
 # 当从 GitHub 获取版本后，自动更新脚本中的默认版本配置
 if [ "$USE_DEFAULT_VERSIONS" != "true" ]; then

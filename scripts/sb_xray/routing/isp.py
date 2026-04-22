@@ -14,6 +14,56 @@ logger = logging.getLogger(__name__)
 
 _SMOOTH_THRESHOLD_MBPS: Final[float] = 100.0
 
+# Probe configuration. Cloudflare's 1 MiB `__down` endpoint is the new
+# default: it is globally CDN-fronted, returns HTTP 200, and streams a
+# small payload so `urltest`/`observatory` RTT measurements carry a
+# bandwidth signal — throttled ISPs naturally rank lower instead of
+# being invisible (as they were with the 0-byte `generate_204`).
+_DEFAULT_PROBE_URL: Final[str] = "https://speed.cloudflare.com/__down?bytes=1048576"
+_DEFAULT_PROBE_INTERVAL: Final[str] = "1m"
+_DEFAULT_PROBE_TOLERANCE_MS: Final[int] = 300
+
+
+@dataclass(frozen=True)
+class ProbeConfig:
+    url: str
+    interval: str
+    tolerance_ms: int
+
+
+def _resolve_probe_config(
+    *,
+    url: str | None = None,
+    interval: str | None = None,
+    tolerance_ms: int | None = None,
+) -> ProbeConfig:
+    """Resolve probe settings from explicit kwargs → env → defaults.
+
+    Explicit kwargs win (unit tests); otherwise we read ``ISP_PROBE_URL``,
+    ``ISP_PROBE_INTERVAL`` and ``ISP_PROBE_TOLERANCE_MS``. Empty string
+    env values are treated as "unset" so operators can't accidentally
+    wipe the default by setting e.g. ``ISP_PROBE_URL=`` in docker-compose.
+    """
+    resolved_url = url or os.environ.get("ISP_PROBE_URL") or _DEFAULT_PROBE_URL
+    resolved_interval = interval or os.environ.get("ISP_PROBE_INTERVAL") or _DEFAULT_PROBE_INTERVAL
+    if tolerance_ms is None:
+        raw = os.environ.get("ISP_PROBE_TOLERANCE_MS", "").strip()
+        try:
+            tolerance_ms = int(raw) if raw else _DEFAULT_PROBE_TOLERANCE_MS
+        except ValueError:
+            logger.warning(
+                "invalid ISP_PROBE_TOLERANCE_MS=%r — falling back to %d",
+                raw,
+                _DEFAULT_PROBE_TOLERANCE_MS,
+            )
+            tolerance_ms = _DEFAULT_PROBE_TOLERANCE_MS
+    return ProbeConfig(
+        url=resolved_url,
+        interval=resolved_interval,
+        tolerance_ms=tolerance_ms,
+    )
+
+
 # ``geosite:*`` entries + env-var names that carry the override outbound.
 # The last tuple (multi-domain) mirrors the original Bash JSON literal.
 _SERVICE_SPEC: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = (
@@ -100,7 +150,111 @@ def _sort_tags_desc(speeds: dict[str, float]) -> list[str]:
     return [t for t, _ in sorted(speeds.items(), key=lambda kv: kv[1], reverse=True)]
 
 
-def build_sb_urltest(speeds: dict[str, float]) -> str:
+_VALID_FALLBACK_STRATEGIES: Final[frozenset[str]] = frozenset({"direct", "block"})
+
+
+def _resolve_fallback_tags(
+    *,
+    strategy: str | None = None,
+) -> list[str]:
+    """Policy-driven fallback for both sing-box urltest and xray balancer.
+
+    Returns the ordered tag list that follows the ISP selector (sing-box
+    urltest concatenates them; xray takes ``list[0]`` as ``fallbackTag``).
+    Byte-compatible with Phase 1–4 when ``ISP_FALLBACK_STRATEGY`` is
+    ``direct`` (the default) — always returns ``["direct"]``.
+
+    ``block`` is the fail-closed alternative for operators who refuse a
+    silent ``direct`` fallback in restricted regions; the sing-box / xray
+    ``block`` outbound is always defined in the templates.
+    """
+    if strategy is None:
+        strategy = os.environ.get("ISP_FALLBACK_STRATEGY", "direct").strip().lower()
+    if strategy not in _VALID_FALLBACK_STRATEGIES:
+        logger.warning(
+            "unknown ISP_FALLBACK_STRATEGY=%r — falling back to 'direct'",
+            strategy,
+        )
+        strategy = "direct"
+    if strategy == "block":
+        return ["block"]
+    return ["direct"]
+
+
+def _build_sb_urltest_fragment(
+    *,
+    tag: str,
+    speeds: dict[str, float],
+    url: str,
+    interval: str,
+    tolerance_ms: int,
+    fallback_tags: list[str] | None = None,
+) -> str:
+    """Internal: one urltest JSON object (used by legacy + per-service builders)."""
+    tail = fallback_tags or _resolve_fallback_tags()
+    outbounds = [*_sort_tags_desc(speeds), *tail]
+    return json.dumps(
+        {
+            "type": "urltest",
+            "tag": tag,
+            "outbounds": outbounds,
+            "url": url,
+            "interval": interval,
+            "tolerance": tolerance_ms,
+            "interrupt_exist_connections": True,
+        },
+        ensure_ascii=False,
+    )
+
+
+def build_sb_urltest_set(
+    speeds: dict[str, float],
+    *,
+    probe: ProbeConfig | None = None,
+) -> str:
+    """Phase 4: legacy ``isp-auto`` urltest plus one per-service balancer.
+
+    Each ``ServiceSpec`` in :data:`~sb_xray.routing.service_spec.SERVICE_SPECS`
+    yields a dedicated ``urltest`` outbound tagged ``isp-auto-<slug>`` that
+    probes the service's real domain (Netflix, OpenAI, etc.). The legacy
+    ``isp-auto`` tag is retained so xray (single-observatory) and
+    back-compat literal assertions keep working.
+
+    Empty speeds → ``""`` (parity with :func:`build_sb_urltest`).
+    Trailing comma is always present for template splice.
+    """
+    if not speeds:
+        return ""
+    from sb_xray.routing.service_spec import SERVICE_SPECS
+
+    cfg = probe or _resolve_probe_config()
+    fragments: list[str] = [
+        _build_sb_urltest_fragment(
+            tag="isp-auto",
+            speeds=speeds,
+            url=cfg.url,
+            interval=cfg.interval,
+            tolerance_ms=cfg.tolerance_ms,
+        )
+    ]
+    for spec in SERVICE_SPECS:
+        fragments.append(
+            _build_sb_urltest_fragment(
+                tag=spec.sb_tag,
+                speeds=speeds,
+                url=spec.probe_url,
+                interval=cfg.interval,
+                tolerance_ms=cfg.tolerance_ms,
+            )
+        )
+    return ",".join(fragments) + ","
+
+
+def build_sb_urltest(
+    speeds: dict[str, float],
+    *,
+    probe: ProbeConfig | None = None,
+) -> str:
     """Sing-box urltest outbound JSON fragment (empty when no ISP nodes).
 
     The return value is spliced verbatim into ``templates/sing-box/sb.json``
@@ -121,45 +275,48 @@ def build_sb_urltest(speeds: dict[str, float]) -> str:
     """
     if not speeds:
         return ""
-    outbounds = [*_sort_tags_desc(speeds), "direct"]
-    payload = json.dumps(
-        {
-            "type": "urltest",
-            "tag": "isp-auto",
-            "outbounds": outbounds,
-            "url": "https://www.gstatic.com/generate_204",
-            "interval": "1m",
-            "tolerance": 300,
-            "interrupt_exist_connections": True,
-        },
-        ensure_ascii=False,
+    cfg = probe or _resolve_probe_config()
+    payload = _build_sb_urltest_fragment(
+        tag="isp-auto",
+        speeds=speeds,
+        url=cfg.url,
+        interval=cfg.interval,
+        tolerance_ms=cfg.tolerance_ms,
     )
     return f"{payload},"
 
 
-def build_xray_balancer(speeds: dict[str, float]) -> tuple[str, str]:
+def build_xray_balancer(
+    speeds: dict[str, float],
+    *,
+    probe: ProbeConfig | None = None,
+) -> tuple[str, str]:
     """Xray observatory + balancer JSON fragments (each trailing comma)."""
     if not speeds:
         return "", ""
+    cfg = probe or _resolve_probe_config()
     selector = _sort_tags_desc(speeds)
     observatory = json.dumps(
         {
             "observatory": {
                 "subjectSelector": selector,
-                "probeUrl": "https://www.gstatic.com/generate_204",
-                "probeInterval": "1m",
+                "probeUrl": cfg.url,
+                "probeInterval": cfg.interval,
                 "enableConcurrency": True,
             }
         },
         ensure_ascii=False,
     )
+    fallback_tail = _resolve_fallback_tags()
     balancer = json.dumps(
         {
             "balancers": [
                 {
                     "tag": "isp-auto",
                     "selector": selector,
-                    "fallbackTag": "direct",
+                    # Xray's balancer only supports a single fallbackTag; pick
+                    # the first tag from the resolved chain (warp > direct).
+                    "fallbackTag": fallback_tail[0],
                     "strategy": {"type": "leastPing"},
                 }
             ]
@@ -350,8 +507,28 @@ def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -
 
     custom_out = "".join(xray_parts)
     sb_custom_out = "".join(sb_parts)
-    urltest = build_sb_urltest(speeds) if has_isp_nodes else ""
-    observatory, balancer = build_xray_balancer(speeds) if has_isp_nodes else ("", "")
+    probe = _resolve_probe_config()
+    from sb_xray.routing.service_spec import per_service_enabled
+
+    per_service = per_service_enabled()
+    if has_isp_nodes:
+        urltest = (
+            build_sb_urltest_set(speeds, probe=probe)
+            if per_service
+            else build_sb_urltest(speeds, probe=probe)
+        )
+    else:
+        urltest = ""
+    observatory, balancer = build_xray_balancer(speeds, probe=probe) if has_isp_nodes else ("", "")
+    if has_isp_nodes and speeds:
+        logger.info(
+            "balancer configured: probe=%s interval=%s tolerance=%dms nodes=%d per_service_sb=%s",
+            probe.url,
+            probe.interval,
+            probe.tolerance_ms,
+            len(speeds),
+            per_service,
+        )
     service_rules = build_xray_service_rules(
         outbounds={
             "CHATGPT_OUT": os.environ.get("CHATGPT_OUT", ""),

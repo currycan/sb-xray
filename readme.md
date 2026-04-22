@@ -42,37 +42,40 @@
 为了直观展现系统的数据吞吐能力与安全屏障设计，我们绘制了以下宏观架构图：
 
 ```mermaid
-graph TD
-    classDef client fill:#f96,stroke:#333,stroke-width:2px,color:white
-    classDef gateway fill:#61dafb,stroke:#333,stroke-width:2px,color:black
-    classDef core fill:#b19cd9,stroke:#333,stroke-width:2px,color:white
-    classDef cdn fill:#f1c40f,stroke:#333,stroke-width:2px,color:black
-    classDef dest fill:#2ecc71,stroke:#333,stroke-width:2px,color:white
+flowchart TD
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef gateway  fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef sing     fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#333
+    classDef external fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
+    classDef outbound fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:3px,color:#fff
 
-    User((客户端设备)):::client
-    Cloudflare((外部 CDN 中转网络)):::cdn
+    User(["客户端设备"]):::entry
+    Cloudflare(["外部 CDN 中转网络"]):::external
 
-    User -->|"TLS 加密握手 端口 443"| Nginx["Nginx 流控边界防御网关"]:::gateway
-    User -->|"Hysteria2 UDP 6443 (2026-04 迁入 Xray)"| XrayHy2(("Xray Hy2 核心")):::core
-    User -->|"TUIC/AnyTLS UDP/TCP 高位端口"| Singbox("Sing-box 竞速内核")
+    User -->|"TLS 加密握手 · 端口 443"| Nginx["Nginx 流控边界防御网关"]:::gateway
+    User -->|"Hysteria2 UDP 6443"| XrayHy2(("Xray Hy2 核心")):::xray
+    User -->|"TUIC / AnyTLS 高位端口"| Singbox(("Sing-box 竞速内核")):::sing
     User --> Cloudflare
-    Cloudflare -->|"CDN 回源流量 端口 443"| Nginx
+    Cloudflare -->|"CDN 回源流量 · 端口 443"| Nginx
 
-    Nginx -->|"识别为伪装 SNI TCP 透传"| XrayReality("Xray Reality 隐蔽通道")
-    Nginx -->|"识别为真实 SNI 解密并作 HTTP 路由"| PanelRouter{"Nginx 业务应用分发路由"}:::gateway
+    Nginx -->|"伪装 SNI · TCP 透传"| XrayReality(("Xray Reality 隐蔽通道")):::xray
+    Nginx -->|"真实 SNI · 解密并路由"| PanelRouter{"Nginx 业务应用分发路由"}:::decision
 
-    PanelRouter -->|"/xhttp, /vmess"| XrayCDN("Xray CDN 备用通道"):::core
-    PanelRouter -->|"/xui, /sui, /sb-xray"| Panels["Web 可视化面板与订阅系统"]
+    PanelRouter -->|"/xhttp · /vmess"| XrayCDN(("Xray CDN 备用通道")):::xray
+    PanelRouter -->|"/xui · /sui · /sb-xray"| Panels["Web 可视化面板与订阅系统"]:::external
 
-    XrayReality --> RoutingEngine{"智能路由与策略分流引擎"}:::core
+    XrayReality --> RoutingEngine{"智能路由与策略分流引擎"}:::decision
     XrayCDN --> RoutingEngine
     XrayHy2 --> RoutingEngine
-    Singbox --> RoutingEngine:::core
+    Singbox --> RoutingEngine
 
-    RoutingEngine -->|"命中流媒体/AI 规则"| ISP["ISP 住宅节点 SOCKS5 链式代理"]:::dest
-    RoutingEngine -->|"普通海外流量"| Direct["本机直连访问 Freedom"]:::dest
+    RoutingEngine -->|"命中流媒体 / AI 规则"| ISP["ISP 住宅节点<br/>SOCKS5 链式代理"]:::outbound
+    RoutingEngine -->|"普通海外流量"| Direct["本机直连 (Freedom)"]:::outbound
 
-    ISP --> WebOut((全球互联网))
+    ISP --> WebOut(["全球互联网"]):::terminal
     Direct --> WebOut
 ```
 

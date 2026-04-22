@@ -116,8 +116,18 @@ def is_restricted_region() -> bool:
 
 
 def get_fallback_proxy() -> str:
-    """`isp-auto` when ISP nodes exist, `direct` otherwise."""
-    return "isp-auto" if os.environ.get("HAS_ISP_NODES") else "direct"
+    """`isp-auto` when ISP nodes exist, otherwise the configured fallback tag.
+
+    Defers to :func:`sb_xray.routing.isp._resolve_fallback_tags` for the
+    no-ISP case so media probes and balancer renders never drift on
+    ``ISP_FALLBACK_STRATEGY`` interpretation.
+    """
+    if os.environ.get("HAS_ISP_NODES"):
+        return "isp-auto"
+    # Import lazily — routing.isp already imports this module.
+    from sb_xray.routing.isp import _resolve_fallback_tags
+
+    return _resolve_fallback_tags()[0]
 
 
 def get_isp_preferred_strategy() -> str:

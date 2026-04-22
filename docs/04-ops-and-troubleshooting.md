@@ -219,6 +219,48 @@ docker compose restart
 | `SOCIAL_MEDIA_OUT` | 社交媒体出口策略 tag |
 | `TIKTOK_OUT` | TikTok 出口策略 tag |
 | `ISP_OUT` | ISP 首选策略 tag |
+| `ISP_LAST_RETEST_TS` | 上次周期重测 Unix 时间戳（用于冷启动缓存 TTL 判定） |
+| `ISP_LAST_RETEST_DELTA_PCT` | 上次重测触发 reload 的最大速率变化百分比 |
+| `ISP_LAST_RETEST_TOP_TAG` | 上次重测后选中的最快 tag |
+
+### 2.6 `isp-auto` 优化控制变量（可选）
+
+所有变量都有保守默认值,**不设置任何一个**也能正常工作；需要调优时再逐项开启,随时可通过取消覆盖单变量回滚。
+
+| 变量 | 默认 | 作用 |
+|:---|:---|:---|
+| `ISP_PROBE_URL` | `https://speed.cloudflare.com/__down?bytes=1048576` | urltest / observatory 探测 URL；默认携带带宽信号,可切 `https://www.gstatic.com/generate_204` 仅测 RTT |
+| `ISP_PROBE_INTERVAL` | `1m` | 探测周期；小内存节点建议 `5m` |
+| `ISP_PROBE_TOLERANCE_MS` | `300` | sing-box `urltest` 切换最低 RTT 差阈值（毫秒） |
+| `ISP_EVENTS_ENABLED` | `true` | 结构化事件 `event=... payload=...` 是否写 stdout + POST 到 shoutrrr |
+| `ISP_RETEST_INTERVAL_HOURS` | `6` | 周期性带宽重测 cron 间隔；`0` 禁用 |
+| `ISP_RETEST_DELTA_PCT` | `15` | 重测后触发 daemon restart 的最小速率变化百分比；`999` 实质禁用重启 |
+| `ISP_RETEST_ENABLED` | `true` | 即使 cron 已安装,也可以通过此开关让子命令 no-op |
+| `ISP_PER_SERVICE_SB` | `false` | 开启后 sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 生成独立 `isp-auto-<service>` urltest balancer,各自用该服务的真实域名探测;xray 因 observatory 单例不受影响 |
+| `ISP_FALLBACK_STRATEGY` | `direct` | `direct`(静默直连) / `block`(fail-closed,CN / HK / RU 建议) |
+| `ISP_SPEED_CACHE_TTL_MIN` | `60` | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
+| `ISP_SPEED_CACHE_ASYNC` | `true` | 缓存命中时是否后台线程异步刷新速度;`false` 仅用于调试 |
+
+> **典型组合**
+> - **小内存节点（OOM 敏感）**: `ISP_PROBE_INTERVAL=5m`, `ISP_PER_SERVICE_SB=false`, `ISP_RETEST_INTERVAL_HOURS=12`
+> - **CN / HK / RU 受限地区 fail-closed**: `ISP_FALLBACK_STRATEGY=block`
+> - **追求极致解锁命中率**: `ISP_PER_SERVICE_SB=true` + 保持 `ISP_PROBE_URL` 默认
+
+**升级后验证周期性重测已注册**（从旧镜像升级过来的部署,首次启动会注入 `isp-retest` cron entry）:
+
+```bash
+docker exec sb-xray crontab -l | grep isp-retest
+# 期望: 0 */6 * * * /scripts/entrypoint.py isp-retest >> /var/log/isp_retest.log 2>&1
+```
+
+若无输出,说明 pipeline stage 16 未跑到(容器未完成 boot) — 等待或查 `docker logs sb-xray | grep 'Cron 定时任务'`。禁用后确认: `ISP_RETEST_INTERVAL_HOURS=0` 重启,该 entry 应消失。
+
+**Entrypoint 事件流**（`SHOUTRRR_URLS` 未设置时仅 stdout）:
+- `isp.speed_test.result` — 每次速度测试完成
+- `isp.speed_test.cache_hit` — 冷启动缓存命中
+- `isp.retest.completed` — 周期重测触发了 daemon restart
+- `isp.retest.noop` — 周期重测结果无变化
+- `isp.retest.error` / `isp.speed_test.error` — 失败路径
 
 ---
 
@@ -229,7 +271,7 @@ docker compose restart
 ### 3.1 安全体系总览
 
 ```mermaid
-graph TD
+flowchart TD
     A["访问请求"] --> B{"携带 Token?"}
     B -- "是" --> C{"Token 正确?"}
     C -- "是" --> D["允许访问"]
@@ -609,7 +651,7 @@ docker compose restart
 
 **现象**：容器已正常运行一段时间后，ChatGPT/Netflix 等突然无法访问
 
-**新版行为**：系统内置运行时健康检测（Sing-box `urltest` / Xray `observatory`），每 1 分钟探测所有 ISP 节点。ISP 故障后：
+**运行时保障**：系统内置健康检测（Sing-box `urltest` / Xray `observatory`），按 `ISP_PROBE_INTERVAL`（默认 1 分钟）探测所有 ISP 节点。ISP 故障后：
 - **Sing-box**：urltest 在下次探测后自动切换到存活节点，全部故障时回退 `direct`
 - **Xray**：observatory 标记不健康节点，balancer 选择存活节点或回退 `direct`（`fallbackTag`）
 
@@ -634,7 +676,7 @@ docker exec sb-xray curl -x socks5h://ISP_IP:PORT -o /dev/null -w '%{http_code}'
 | ISP 凭据过期 | 更新 `/.env/secret` 中对应 `*_ISP_*` 变量后重启 |
 | 回退 direct 也无法访问 | VPS 本身 IP 被目标服务封锁，需更换 ISP 节点 |
 
-> **与旧版对比**：旧版无运行时检测，ISP 故障后流量直接黑洞，需手动重启容器。新版自动检测并回退，最多 1 分钟恢复服务。
+> **关键特性**：健康检测是系统内置能力，ISP 故障后最多一个探测周期（默认 1 分钟）即可完成切换，无需手动干预。
 
 ---
 

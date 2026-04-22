@@ -10,6 +10,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [26.3.27] — 2026-04-22 · Hotfix: 稳定版回滚
+
+### Fixed（修复）
+
+- **版本选择器意外放行 Pre-release 导致 Xray pin 在 v26.4.17 (XTLS 官方 Pre-release)**：`build.sh` 对 Xray 使用无过滤的 `get_latest_tag()`(底层 `/tags?per_page=1`,取首个 tag),未与 sing-box / x-ui / dufs / cloudflared 等组件一致走 `get_latest_stable_tag()`(过滤 `rc|beta|alpha`)。同样的 bug 也存在于 `.github/workflows/daily-build.yml` 的 `get_tag` 调用路径。现 Xray 统一切到 `get_latest_stable_tag` / `get_stable_tag`,fallback 默认值同步为 `26.3.27`。
+- **Xray-core pin 从 v26.4.17 回退到稳定版 v26.3.27**：同步更新 `Dockerfile` / `pyproject.toml` / `sb_xray.__version__` / `versions.json`。本项目全部功能(后量子 MLKEM768、Xray-native Hysteria2、marktag webhook、XHTTP/3、ECH 等)的兼容性调研本就基于 v26.3.27 稳定版,无功能回退。
+
+> 注：本版本号较上一版 `26.4.17` 在 SemVer 数字上倒退,是因 `v26.4.17` 系 XTLS 官方 Pre-release,不符合本项目「所有组件使用稳定版」策略。项目版本号与 Xray 稳定主版本对齐的约定不变。
+
+### Added（新增功能）
+
+- **`isp-auto` 健康选优系统升级（5 阶段闭环）**——把原本仅"启动时测一次"的 ISP 选路,改造为「冷启动缓存 → 速度实测 → 配置渲染 → 内核健康选优 → 周期重测」的完整闭环,所有行为由 12 个 env flag 控制,默认值在 Dockerfile 注册,不改 docker-compose 即可开箱运行。
+  - **探测 URL 带宽信号化**:硬编码的 `gstatic.com/generate_204`(0 字节)替换为 `ISP_PROBE_URL`,默认 `https://speed.cloudflare.com/__down?bytes=1048576`(1 MiB)。被限速但仍能 ping 通的 ISP 节点现在会自然下沉而非继续被选中。新增 `ISP_PROBE_INTERVAL` / `ISP_PROBE_TOLERANCE_MS`。
+  - **结构化事件总线**:新增 `sb_xray.events.emit_event(name, payload)`,向 stdout 输出 `event=... payload={...}` 一行 + 当 `SHOUTRRR_URLS` 设置时 POST 到本地 forwarder。6 类事件:`isp.speed_test.result` / `.cache_hit` / `.error`,`isp.retest.completed` / `.noop` / `.error`。env 开关 `ISP_EVENTS_ENABLED=true`。
+  - **周期性带宽重测**:新增 `/scripts/entrypoint.py isp-retest` 子命令 + `scripts/sb_xray/stages/isp_retest.py` 编排器。cron 每 `ISP_RETEST_INTERVAL_HOURS`(默认 6h)触发,仅当节点组成 / top-1 tag 变化 或任意节点速度变化 > `ISP_RETEST_DELTA_PCT`(默认 15%)时重渲染配置并 `supervisorctl restart xray sing-box`,纯 RTT 波动留给 urltest / leastPing 在线处理。`ISP_RETEST_INTERVAL_HOURS=0` 或 `ISP_RETEST_ENABLED=false` 完全禁用。
+  - **sing-box 按服务分桶 balancer**:`ISP_PER_SERVICE_SB=true`(默认关闭)开启后,在保留 legacy `isp-auto` 的同时额外生成 `isp-auto-netflix` / `isp-auto-openai` / `isp-auto-claude` / `isp-auto-gemini` / `isp-auto-disney` / `isp-auto-youtube` 共 6 个独立 urltest 出站,各自用该服务的真实域名做 probe。通过 `config_builder` 的 env 快照/复位,sb.json 看到分桶 tag,xr.json 保持 legacy `isp-auto`(xray observatory 全局单例结构约束,无法在单实例内做同等分桶)。新增 `scripts/sb_xray/routing/service_spec.py` 作为「服务 → probe URL」的单一事实来源。
+  - **策略驱动 Fallback 链**:`ISP_FALLBACK_STRATEGY` ∈ `{direct(默认), block}`。`block` 为 CN/HK/RU 受限地区提供 fail-closed 语义,拒绝 ISP 全挂时静默走 direct。`network.get_fallback_proxy()` 委托到统一解析器 `_resolve_fallback_tags()`,避免 media 探测与 balancer 渲染漂移。
+  - **冷启动 TTL 缓存**:`ISP_SPEED_CACHE_TTL_MIN`(默认 60 分钟)窗口内启动不跑实测,直接读取上次 STATUS_FILE 中的 `_ISP_SPEEDS_JSON`(冷启动从 ~30s 降到 <1s);同时 daemon 线程异步跑一次实测刷新结果。`ISP_SPEED_CACHE_ASYNC=false` 可关闭异步刷新仅用于调试。
+  - **测试与文档**:新增 60 个 pytest 用例(`test_probe_resolver` / `test_events` / `test_stages_cron` 扩展 / `test_isp_retest` / `test_build_sb_urltest_set` / `test_sb_service_outs_override` / `test_fallback_resolver` / `test_speed_cache_coldboot`);`tests/test_routing_isp.py` 字面量断言泛化为 env-driven 参数化。所有 12 个 env flag 在 `docs/04-ops-and-troubleshooting.md §2.6` 有完整表格和典型组合(低内存节点 / 受限地区 fail-closed / 极致解锁命中率)。
+  - **运行时闭环架构图**:`docs/01-architecture-and-traffic.md §6.4` 新增完整 mermaid 图,串起启动 → 缓存判定 → 实测 → 渲染 → 内核健康选优 → 周期重测 → 事件 6 个子图。
+  - **文档视觉体系重构**:产品文档的 37 张 mermaid 图统一到商业级调色板(`entry / process / decision / data / external / warning / terminal` 七语义色,固定 hex),清除 `#f96 / #61dafb / #b19cd9 / #98fb98 / #ff6b6b / #4ecdc4 / #95e1d3 / #f9f / #6f9` 等 ad-hoc 色;`graph LR/TD/TB` → `flowchart LR/TD/TB`;新增仓库根 `CONTRIBUTING-diagrams.md` 作为维护者风格指引(不纳入 `docs/`)。
+
 ### Changed（变更）
 
 - **Entrypoint 日志彻底 stdlib 化 + StageTimer 计时 + 架构轻量整理**:
@@ -238,5 +260,6 @@ cd /root/sb-xray && docker compose up -d
 
 ---
 
-[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.4.17...HEAD
+[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.3.27...HEAD
+[26.3.27]: https://github.com/currycan/sb-xray/compare/v26.4.17...v26.3.27
 [26.4.17]: https://github.com/currycan/sb-xray/compare/v26.4.14...v26.4.17

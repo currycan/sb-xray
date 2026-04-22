@@ -85,8 +85,8 @@ flowchart TD
 
     Build --> Done(["✅ 构建完成\n:VERSION + :latest\nImage ID 一致"])
 
-    style Start fill:#0984e3,stroke:#fff,color:white
-    style Done fill:#00b894,stroke:#fff,color:white
+    style Start fill:#0984e3,stroke:#0566b3,color:#fff
+    style Done fill:#00b894,stroke:#009577,color:#fff
 ```
 
 ### 2.3 版本获取策略
@@ -96,7 +96,7 @@ flowchart TD
 | 策略 | API 端点 | 适用组件 |
 |:---|:---|:---|
 | **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr, Mihomo, Http-Meta, Sub-Store, S-UI |
-| **Latest Tag** | `/repos/{owner}/{repo}/tags` | Xray (取第一个 tag，含 beta) |
+| **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100` | Xray / sing-box / x-ui / dufs / cloudflared(取首个排除 `rc/beta/alpha` 的 tag,稳定版优先) |
 | **Latest Stable Tag** | `/repos/{owner}/{repo}/tags` + 过滤 | Dufs, Cloudflared, 3x-ui, Sing-box (排除 rc/beta/alpha) |
 
 ---
@@ -106,7 +106,7 @@ flowchart TD
 整个构建过程分为四个精心设计的阶段（Multi-Stage Build），最大程度地减小最终镜像体积。
 
 ```mermaid
-graph TD
+flowchart TD
     classDef stage1 fill:#74b9ff,stroke:#0984e3,stroke-width:2px,color:white
     classDef stage2 fill:#fab1a0,stroke:#e17055,stroke-width:2px,color:white
     classDef stage3 fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:white
@@ -184,7 +184,7 @@ supervisor dumb-init fail2ban acme.sh
 
 | 配置项 | 值 | 说明 |
 |:---|:---|:---|
-| `ENTRYPOINT` | `dumb-init -- python3 /scripts/entrypoint.py run` | dumb-init 作为 PID 1，Python `entrypoint.py` 提供 `run` / `show` / `trim` 三个子命令；`run` 用纯 Python 一次性跑完 15 段初始化流水线（探测 → 选路 → 证书 → 模板渲染 → 面板初始化 → cron → `os.execvp` supervisord），自 Phase 8 起无任何 bash 回落 |
+| `ENTRYPOINT` | `dumb-init -- python3 /scripts/entrypoint.py run` | dumb-init 作为 PID 1，Python `entrypoint.py` 提供 `run` / `show` / `trim` 三个子命令；`run` 用纯 Python 一次性跑完 15 段初始化流水线（探测 → 选路 → 证书 → 模板渲染 → 面板初始化 → cron → `os.execvp` supervisord） |
 | `CMD` | `supervisord` | Supervisor 管理所有子进程 |
 | `HEALTHCHECK` | `supervisorctl status xray` | 每 30 秒检查 Xray 存活 |
 | `EXPOSE` | `80 443` | 默认暴露端口 |
@@ -391,10 +391,10 @@ flowchart TD
 
     GhCli -- 否 --> Push2["git push origin tag"] --> Manual(["⚠️ 请手动创建 Release"])
 
-    style Abort fill:#ff6b6b,color:white
-    style Done fill:#95e1d3
-    style Done2 fill:#4ecdc4,color:white
-    style Manual fill:#ffeaa7
+    style Abort fill:#d63031,stroke:#b71c1c,color:#fff
+    style Done fill:#55efc4,stroke:#00b894,color:#333
+    style Done2 fill:#00b894,stroke:#009577,color:#fff
+    style Manual fill:#fdcb6e,stroke:#e0a33e,color:#333
 ```
 
 ### 7.4 详细流程说明
@@ -418,16 +418,16 @@ flowchart TD
 ### 7.6 与 build.sh 的关系
 
 ```mermaid
-graph LR
+flowchart LR
     API(("GitHub API<br/>Xray 版本")) --> Build
     API --> Release
 
     Build["build.sh"] -- ":VERSION + :latest\n同一 Image ID" --> Registry["Docker Hub"]
     Release["release.sh<br/>发布 Git Release"] -- "Git Tag: v26.2.6" --> GitHub["GitHub Releases"]
 
-    style Build fill:#00b894,color:white
-    style Release fill:#a29bfe,color:white
-    style API fill:#ffeaa7
+    style Build fill:#00b894,stroke:#009577,color:#fff
+    style Release fill:#a29bfe,stroke:#6c5ce7,color:#fff
+    style API fill:#fdcb6e,stroke:#e0a33e,color:#333
 ```
 
 推荐执行顺序：`./build.sh` → `./release.sh`。两个脚本共享同一版本源，确保 Docker 镜像版本与 Git Release 版本始终一致。

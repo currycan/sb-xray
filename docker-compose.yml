@@ -51,9 +51,15 @@ services:
       # shoutrrr 事件总线（完整说明见 docs/07-event-bus-shoutrrr.md）
       # 留空 = dry-run，仅写日志不外推；多通道追加 ";discord://..." 或 ";slack://..."（详见文档 §6）
       # ⚠ BOT_TOKEN 中的 ":" 必须 URL-encode 为 "%3A"；chat.id 私有为负数(-100...), 公开频道用 "name"(不带 @)
-      - SHOUTRRR_URLS= # e.g. telegram://123456789%3AABCdef...xyz@telegram?chats=-1001234567890
+      - SHOUTRRR_URLS=${shoutrrr_urls} # e.g. telegram://123456789%3AABCdef...xyz@telegram?chats=-1001234567890
       - SHOUTRRR_TITLE_PREFIX=[sb-xray:$domain] # 标题前缀；$domain 与顶部 DOMAIN=$domain 同源，由宿主 shell 或 .env 导出节点域名
       - SHOUTRRR_FORWARDER_PORT=18085 # 监听端口（仅 127.0.0.1 绑定）
+      # ── isp-auto 优化开关（所有默认值已在 Dockerfile ENV 注册，此处仅在需要**覆盖**时取消注释）
+      # 完整说明见 docs/04-ops-and-troubleshooting.md §2.6
+      # - ISP_PROBE_INTERVAL=5m           # 小内存节点建议降频
+      # - ISP_PER_SERVICE_SB=true         # 开启 sing-box 按服务分桶（Netflix/OpenAI/Claude/Gemini/Disney/YouTube 独立 balancer）
+      # - ISP_FALLBACK_STRATEGY=block     # CN/HK/RU 拒绝静默走 direct
+      # - ISP_RETEST_INTERVAL_HOURS=0     # 完全禁用周期性重测
     ports:
       - "443:443/tcp"
       - "443:443/udp" # use UDP for usage of HTTP/3

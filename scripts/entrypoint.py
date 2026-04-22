@@ -146,6 +146,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Run the shoutrrr event-bus HTTP receiver (long-running; supervisord-managed).",
     )
 
+    sub.add_parser(
+        "isp-retest",
+        help="Re-run ISP speed test and hot-reload balancer if composition changed (cron entry).",
+    )
+
     args, extras = parser.parse_known_args(argv)
     args.extras = extras
 
@@ -687,6 +692,11 @@ def main(argv: list[str] | None = None) -> int:
         from sb_xray import shoutrrr
 
         return shoutrrr.run()
+
+    if args.command == "isp-retest":
+        from sb_xray.stages import isp_retest
+
+        return isp_retest.run()
 
     logger.info("sb-xray entrypoint.py starting (env_file=%s)", args.env_file)
     return run_pipeline(

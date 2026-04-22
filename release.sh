@@ -18,23 +18,23 @@ fetch_url() {
     fi
 }
 
-# 辅助函数: 获取最新 Tag
-get_latest_tag() {
+# 辅助函数: 获取最新稳定版 Tag（与 build.sh get_latest_stable_tag 对齐，过滤 rc/beta/alpha）
+get_latest_stable_tag() {
     local repo=$1
-    local url="https://api.github.com/repos/$repo/tags"
+    local url="https://api.github.com/repos/$repo/tags?per_page=100"
     local response=$(fetch_url "$url")
 
     if [ -n "$response" ]; then
-        echo "$response" | jq -r '.[0].name'
+        echo "$response" | jq -r '[.[] | select(.name | test("rc|beta|alpha") | not)] | .[0].name'
     else
         echo ""
     fi
 }
 
-echo -e "${BLUE}正在获取最新 Xray 版本，以保持版本一致性...${NC}"
+echo -e "${BLUE}正在获取最新 Xray 稳定版,以保持版本一致性...${NC}"
 
-# 获取 Xray 最新版本 (与 build.sh 逻辑一致)
-XRAY_TAG=$(get_latest_tag "XTLS/Xray-core")
+# 获取 Xray 最新稳定版本 (与 build.sh 逻辑一致)
+XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
 
 if [ -z "$XRAY_TAG" ] || [ "$XRAY_TAG" == "null" ]; then
     echo -e "${RED}无法获取 Xray 版本，取消发布。${NC}"

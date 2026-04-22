@@ -217,7 +217,7 @@ RUN set -ex; \
   mv /tmp/sing-box /usr/local/bin/
 
 # --- Xray ---
-ARG XRAY_VERSION="26.4.17"
+ARG XRAY_VERSION="26.3.27"
 # 完整性：从上游发布的 ${BINARY_FILE}.dgst 文件中提取 SHA2-256 字段校验
 RUN set -ex; \
   case "${TARGETARCH}" in \
@@ -304,7 +304,7 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 ENV ENABLE_REVERSE="false"
 ENV REVERSE_DOMAINS=""
 
-# M4 新入站 feature flag（Xray v26.4.17）
+# 新入站 feature flag（Xray v26.3.27）
 #   Hy2 / XHTTP-H3 已永久启用（无开关，见 templates/xray/04_hy2_inbounds.json 与 02_xhttp_h3_inbounds.json）
 #   ENABLE_XICMP     ：ICMP echo 承载代理的紧急通道（仅极端封锁场景；需要 cap_add=NET_RAW）
 #   ENABLE_XDNS      ：DNS 查询载荷承载代理的紧急通道（仅极端封锁场景；需要用户控制的 NS 域名 XDNS_DOMAIN）
@@ -326,6 +326,26 @@ ENV ENABLE_SUBSTORE="true"
 ENV ENABLE_XUI="true"
 ENV ENABLE_SUI="true"
 ENV ENABLE_SHOUTRRR="true"
+
+# isp-auto 健康选优控制项。默认值开箱即用，运维可在 docker-compose.yml
+# environment 覆写。完整表格与典型组合参见 docs/04-ops-and-troubleshooting.md §2.6。
+# 探测参数
+ENV ISP_PROBE_URL="https://speed.cloudflare.com/__down?bytes=1048576"
+ENV ISP_PROBE_INTERVAL="1m"
+ENV ISP_PROBE_TOLERANCE_MS="300"
+# 结构化事件日志（stdout + 可选 shoutrrr 推送）
+ENV ISP_EVENTS_ENABLED="true"
+# 周期性带宽重测 cron（0 禁用）
+ENV ISP_RETEST_INTERVAL_HOURS="6"
+ENV ISP_RETEST_DELTA_PCT="15"
+ENV ISP_RETEST_ENABLED="true"
+# sing-box 按服务分桶（默认关闭；开启后探测流量与服务数成正比）
+ENV ISP_PER_SERVICE_SB="false"
+# Fallback 策略：direct / block（fail-closed）
+ENV ISP_FALLBACK_STRATEGY="direct"
+# 冷启动 TTL 缓存
+ENV ISP_SPEED_CACHE_TTL_MIN="60"
+ENV ISP_SPEED_CACHE_ASYNC="true"
 
 WORKDIR ${WORKDIR}
 
@@ -431,7 +451,7 @@ VOLUME ${DUFS_SERVE_PATH} ${WORKDIR} ${SUB_STORE_DATA_BASE_PATH} ${LOGDIR} /etc/
 
 STOPSIGNAL SIGTERM
 
-# Python entrypoint (100% orchestration — entrypoint.sh retired in Phase 8).
+# Python entrypoint (100% orchestration — no bash fallback).
 # `run` runs every boot stage in Python and execs supervisord as PID 1.
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]
 CMD  [ "supervisord" ]
