@@ -10,10 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [26.3.27] — 2026-04-22 · Hotfix: 稳定版回滚
+
 ### Fixed（修复）
 
 - **版本选择器意外放行 Pre-release 导致 Xray pin 在 v26.4.17 (XTLS 官方 Pre-release)**：`build.sh` 对 Xray 使用无过滤的 `get_latest_tag()`(底层 `/tags?per_page=1`,取首个 tag),未与 sing-box / x-ui / dufs / cloudflared 等组件一致走 `get_latest_stable_tag()`(过滤 `rc|beta|alpha`)。同样的 bug 也存在于 `.github/workflows/daily-build.yml` 的 `get_tag` 调用路径。现 Xray 统一切到 `get_latest_stable_tag` / `get_stable_tag`,fallback 默认值同步为 `26.3.27`。
 - **Xray-core pin 从 v26.4.17 回退到稳定版 v26.3.27**：同步更新 `Dockerfile` / `pyproject.toml` / `sb_xray.__version__` / `versions.json`。本项目全部功能(后量子 MLKEM768、Xray-native Hysteria2、marktag webhook、XHTTP/3、ECH 等)的兼容性调研本就基于 v26.3.27 稳定版,无功能回退。
+
+> 注：本版本号较上一版 `26.4.17` 在 SemVer 数字上倒退,是因 `v26.4.17` 系 XTLS 官方 Pre-release,不符合本项目「所有组件使用稳定版」策略。项目版本号与 Xray 稳定主版本对齐的约定不变。
 
 ### Added（新增功能）
 
@@ -256,5 +260,6 @@ cd /root/sb-xray && docker compose up -d
 
 ---
 
-[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.4.17...HEAD
+[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.3.27...HEAD
+[26.3.27]: https://github.com/currycan/sb-xray/compare/v26.4.17...v26.3.27
 [26.4.17]: https://github.com/currycan/sb-xray/compare/v26.4.14...v26.4.17
