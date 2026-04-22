@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""sb-xray container entrypoint (Python rewrite).
+"""sb-xray container entrypoint (100% Python orchestration).
 
-This is the thin shell introduced in Phase 1. It:
-  1. Bootstraps ``EnvManager`` and loads anything already persisted in
-     ``${ENV_FILE}`` (default /.env/sb-xray).
-  2. Logs a summary of the most-important ENV variables via
-     :func:`sb_xray.logging.log_summary_box`.
-  3. Delegates to ``scripts/entrypoint.sh`` for every stage that hasn't
-     been migrated yet, inheriting the current ``os.environ``.
+Replaces the legacy ``entrypoint.sh`` end-to-end. Pipeline (all stages
+are idempotent and safe to re-run across container restarts):
 
-As subsequent phases migrate stages into the ``sb_xray`` package, the
-``subprocess`` fallback below will shrink until it is removed in
-Phase 5 (which also flips ``ENTRYPOINT`` in the Dockerfile).
+  1. ``_init_dirs`` + load persisted state (ENV_FILE / STATUS_FILE / SECRET_FILE).
+  2. ``decrypt_remote_secrets`` (entrypoint.sh §14).
+  3. ``probe_base_env`` — UUID/port/geo probes (entrypoint.sh §15 step 1).
+  4. ``run_isp_speed_tests`` — ISP 选路 (step 2).
+  5. ``run_media_probes`` + ensure Reality / MLKEM key pairs (step 3).
+  6. ``build_client_and_server_configs`` — outbound JSON (step 4).
+  7. ``issue_bundle_certificate`` — acme.sh (step 8).
+  8. ``ensure_dhparam`` — openssl (step 9).
+  9. ``update_geo_data`` — geo_update.sh (step 10).
+ 10. ``create_config`` + ``generate_and_export`` — templates (step 11).
+ 11. ``trim_runtime_configs`` — ENABLE_* switches (step 11b).
+ 12. ``init_panels`` — X-UI / S-UI (step 12).
+ 13. ``setup_basic_auth`` — nginx htpasswd (step 13).
+ 14. ``install_crontab`` — geo daily (step 14).
+ 15. Banner + ``exec_supervisord`` (tail).
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -34,7 +40,18 @@ from sb_xray import subscription as sbsub
 from sb_xray.env import EnvManager
 
 _DEFAULT_ENV_FILE = Path(os.environ.get("ENV_FILE", "/.env/sb-xray"))
-_LEGACY_ENTRYPOINT = Path(__file__).resolve().parent / "entrypoint.sh"
+_DEFAULT_STATUS_FILE = Path("/.env/status")
+_DEFAULT_SECRET_FILE = Path("/.env/secret")
+
+
+def _status_file() -> Path:
+    return Path(os.environ.get("STATUS_FILE", str(_DEFAULT_STATUS_FILE)))
+
+
+def _secret_file() -> Path:
+    return Path(os.environ.get("SECRET_FILE", str(_DEFAULT_SECRET_FILE)))
+
+
 _CLIENT_TEMPLATE_DIR = Path("/templates/client_template")
 _SOURCES_DIR = Path("/sources")
 
@@ -47,6 +64,26 @@ _SUMMARY_KEYS = (
     "ENABLE_REVERSE",
     "WORKDIR",
     "ENV_FILE",
+)
+
+# Every stage identifier that ``--skip-stage`` understands.
+_STAGE_IDS: tuple[str, ...] = (
+    "secrets",
+    "probe",
+    "speed",
+    "media",
+    "keys",
+    "outbounds",
+    "cert",
+    "dhparam",
+    "geoip",
+    "config",
+    "providers",
+    "trim",
+    "panels",
+    "nginx_auth",
+    "cron",
+    "show",
 )
 
 
@@ -64,58 +101,92 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
     sub = parser.add_subparsers(dest="command")
 
-    # ``run`` — the default (container ENTRYPOINT) behavior
     run_p = sub.add_parser("run", help="Boot container (default).")
-    run_p.add_argument("--dry-run", action="store_true")
-    run_p.add_argument("--skip-stage", action="append", default=[], metavar="STAGE")
     run_p.add_argument(
-        "--python-stage",
+        "--dry-run",
+        action="store_true",
+        help="Run the pipeline but don't exec supervisord at the end.",
+    )
+    run_p.add_argument(
+        "--skip-stage",
         action="append",
         default=[],
-        choices=["probe", "cert", "providers", "config", "media"],
+        choices=list(_STAGE_IDS),
         metavar="STAGE",
+        help="Skip a stage by id (repeatable).",
     )
 
-    # ``show`` — replaces show-config.sh
     sub.add_parser(
         "show",
         help="Print subscription-link banner + optional TLS diagnostics.",
     )
 
-    # ``trim`` — post-process daemon.ini with ENABLE_* program switches;
-    # safe to call after either Bash `createConfig` or Python `create_config`.
     sub.add_parser(
         "trim",
         help="Apply ENABLE_* trim switches to the already-rendered daemon.ini.",
     )
 
-    # ``parse_known_args`` (vs ``parse_args``) captures everything the
-    # Docker CMD appends (e.g. ``supervisord``) as ``extras``; we
-    # forward those to the legacy Bash entrypoint as its ``$@`` so it
-    # can still do ``[ "${1#-}" = 'supervisord' ]`` + ``exec "$@"``.
     args, extras = parser.parse_known_args(argv)
     args.extras = extras
 
-    # Backward-compat: no subcommand → default to run
     if args.command is None:
         args.command = "run"
         args.dry_run = getattr(args, "dry_run", False)
         args.skip_stage = getattr(args, "skip_stage", [])
-        args.python_stage = getattr(args, "python_stage", [])
     return args
 
 
-def bootstrap(env_file: Path) -> EnvManager:
-    """Load persisted env file into os.environ (shell-env already wins).
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    Also publishes the resolved ``ENV_FILE`` path into ``os.environ`` so
-    ``log_summary_box`` can show it (Bash ``source ${ENV_FILE}`` gets this
-    for free via shell semantics).
+
+def _init_dirs(env_file: Path) -> None:
+    """entrypoint.sh:_init_dirs equivalent.
+
+    Creates every directory the stages below expect. Silently tolerates
+    ``OSError`` / ``PermissionError`` on the log + panel trees so the
+    unit tests (no `/var/log`, no `/opt`) never abort boot.
     """
-    mgr = EnvManager(env_file)
-    os.environ.setdefault("ENV_FILE", str(env_file))
-    text = env_file.read_text(encoding="utf-8")
-    for raw in text.splitlines():
+    status_file = Path(os.environ.get("STATUS_FILE", str(env_file.parent / "status")))
+
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.touch(exist_ok=True)
+    status_file.touch(exist_ok=True)
+
+    env_text = env_file.read_text(encoding="utf-8")
+    cleaned_lines = [
+        line
+        for line in env_text.splitlines()
+        if not line.startswith(("export ISP_TAG=", "export IS_8K_SMOOTH="))
+    ]
+    cleaned = "\n".join(cleaned_lines)
+    if cleaned != env_text.rstrip("\n"):
+        env_file.write_text(cleaned + ("\n" if cleaned else ""), encoding="utf-8")
+
+    def _safe_mkdir(path: Path) -> None:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            sblog.log("DEBUG", f"[init] mkdir {path} skipped: {exc}")
+
+    log_dir = Path(os.environ.get("LOGDIR", "/var/log"))
+    for child in ("supervisor", "xray", "sing-box", "dufs", "nginx", "x-ui", "s-ui"):
+        _safe_mkdir(log_dir / child)
+
+    _safe_mkdir(Path(os.environ.get("SUI_DB_FOLDER", "/opt/s-ui")))
+    _safe_mkdir(Path(os.environ.get("SUB_STORE_DATA_BASE_PATH", "/opt/substore")))
+
+
+def _load_env_file(path: Path) -> None:
+    """Parse ``export KEY='VALUE'`` lines into ``os.environ`` (``setdefault``).
+
+    Missing files are ignored. Shell-set vars always win (first writer).
+    """
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line.startswith("export "):
             continue
@@ -123,26 +194,20 @@ def bootstrap(env_file: Path) -> EnvManager:
         key, _, value_raw = assign.partition("=")
         value = value_raw.strip().strip("'")
         os.environ.setdefault(key, value)
+
+
+def bootstrap(env_file: Path) -> EnvManager:
+    """Create ``EnvManager`` and seed ``os.environ`` from ``env_file``."""
+    mgr = EnvManager(env_file)
+    os.environ.setdefault("ENV_FILE", str(env_file))
+    os.environ.setdefault("STATUS_FILE", str(_status_file()))
+    os.environ.setdefault("SECRET_FILE", str(_secret_file()))
+    _load_env_file(env_file)
     return mgr
 
 
 def probe_base_env(mgr: EnvManager) -> None:
-    """Full port of ``analyze_base_env`` (entrypoint.sh:1118-1148).
-
-    Ensures every base-env variable the downstream stages rely on. Each
-    call uses ``EnvManager.ensure_var`` so the three-tier precedence holds:
-    shell env wins → ``${ENV_FILE}`` value wins → generator fallback.
-
-    Variables in declaration order (matches Bash):
-      - Random ports  : ``XUI_LOCAL_PORT`` / ``DUFS_PORT``
-      - Random creds  : ``PASSWORD`` (16 chars) / ``XRAY_UUID`` /
-                        ``XRAY_REVERSE_UUID`` / ``SB_UUID``
-      - Reality IDs   : ``XRAY_REALITY_SHORTID`` (16h) / ``_2`` (8h) / ``_3`` (12h)
-      - URL paths     : ``XRAY_URL_PATH`` (32) / ``SUBSCRIBE_TOKEN`` (32) /
-                        ``SUB_STORE_FRONTEND_BACKEND_PATH`` (leading ``/``)
-      - Network probe : ``STRATEGY`` / ``GEOIP_INFO`` / ``IP_TYPE`` /
-                        ``IS_BRUTAL``
-    """
+    """Full port of ``analyze_base_env`` (entrypoint.sh:1118-1148)."""
     from sb_xray import random_gen as sbrand
 
     sblog.log("INFO", "[阶段 1] 初始化基础环境变量...")
@@ -151,7 +216,6 @@ def probe_base_env(mgr: EnvManager) -> None:
         v4, v6 = sbnet.probe_ip_sb()
         return sbnet.detect_ip_strategy(v4_ok=v4, v6_ok=v6)
 
-    # Variables paired with their generator. Ordering mirrors bash.
     specs: tuple[tuple[str, Callable[[], str]], ...] = (
         ("XUI_LOCAL_PORT", lambda: sbrand.generate("port")),
         ("DUFS_PORT", lambda: sbrand.generate("port")),
@@ -181,41 +245,8 @@ def probe_base_env(mgr: EnvManager) -> None:
     )
 
 
-def run_legacy(skip_stage: list[str], extras: list[str] | None = None) -> int:
-    """Delegate un-migrated stages to the existing Bash entrypoint.
-
-    ``extras`` are forwarded as trailing ``$@`` so the Bash script can
-    still run its final ``exec "$@"`` to launch supervisord (the legacy
-    entrypoint aborts with "$1: unbound variable" when ``set -u`` is
-    active and no args are passed).
-    """
-    if not _LEGACY_ENTRYPOINT.exists():
-        sblog.log("ERROR", f"legacy entrypoint missing: {_LEGACY_ENTRYPOINT}")
-        return 127
-    env = os.environ.copy()
-    if skip_stage:
-        env["SB_XRAY_SKIP_STAGES"] = ",".join(skip_stage)
-    forwarded = extras if extras else ["supervisord"]
-    sblog.log(
-        "INFO",
-        f"delegating to legacy entrypoint.sh (argv={forwarded})",
-    )
-    result = subprocess.run(
-        ["/usr/bin/env", "bash", str(_LEGACY_ENTRYPOINT), *forwarded],
-        env=env,
-        check=False,
-    )
-    return result.returncode
-
-
 def _envsubst_render(src: Path, dst: Path) -> None:
-    """Bash-``envsubst`` compatible ``${VAR}``/``$VAR`` expansion.
-
-    ``string.Template.safe_substitute`` leaves unknown placeholders intact,
-    matching ``envsubst``'s behaviour of emitting the literal ``${FOO}``
-    when ``FOO`` is unset. We pre-normalize ``os.environ`` to ``str`` values
-    to keep ``safe_substitute`` happy under strict typing.
-    """
+    """Bash-``envsubst`` compatible ``${VAR}`` / ``$VAR`` expansion."""
     from string import Template
 
     raw = src.read_text(encoding="utf-8")
@@ -223,29 +254,48 @@ def _envsubst_render(src: Path, dst: Path) -> None:
     dst.write_text(rendered, encoding="utf-8")
 
 
-def run_show_pipeline(env_file: Path) -> int:
-    """End-to-end ``show`` subcommand pipeline (show-config.sh `main`).
+def issue_bundle_certificate() -> None:
+    """entrypoint.sh:1381 ``issueCertificate sb_xray_bundle …`` wrapper."""
+    from sb_xray import cert as sbcert
 
-    Order mirrors the Bash ``main`` function exactly:
-      1. Bootstrap env + derive node metadata
-      2. ``mkdir -p ${WORKDIR}/subscribe``
-      3. ``generate_links`` → write base64 subscription files
-      4. envsubst-render every client template into ``${WORKDIR}/subscribe``
-      5. ``cp -a /sources/* ${WORKDIR}/subscribe`` (best-effort)
-      6. ``show_info_links`` → banner + ANSI-stripped ``show-config`` archive
-    """
+    domain = os.environ.get("DOMAIN", "")
+    cdn = os.environ.get("CDNDOMAIN", "")
+    if not domain or not cdn:
+        sblog.log("WARN", "[cert] DOMAIN/CDNDOMAIN 未就绪,跳过证书签发")
+        return
+    params = f"{domain}:ali|{cdn}:cf"
+    sblog.log("INFO", f"[步骤 8]  ensure_certificate(sb_xray_bundle, {params})")
+    try:
+        status = sbcert.ensure_certificate(name="sb_xray_bundle", params=params)
+        sblog.log("INFO", f"[步骤 8]  status={status.value}")
+    except Exception as exc:  # pragma: no cover — don't block boot on cert IO
+        sblog.log("ERROR", f"[步骤 8]  证书阶段失败,继续启动: {exc}")
+
+
+def run_media_probes() -> dict[str, str]:
+    """entrypoint.sh ``analyze_ai_routing_env`` media portion."""
+    from sb_xray.routing import media as sbmedia
+
+    sblog.log("INFO", "[阶段 3] 流媒体/AI 可达性检测")
+    results = sbmedia.check_all()
+    for key, value in results.items():
+        os.environ[key] = value
+    sblog.log("INFO", "[阶段 3] " + " ".join(f"{k}={v}" for k, v in results.items()))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
+def run_show_pipeline(env_file: Path) -> int:
+    """End-to-end ``show`` subcommand pipeline (show-config.sh ``main``)."""
     import shutil
 
     bootstrap(env_file)
-    # show-config.sh:14-16 also sources STATUS_FILE (ISP_TAG/IS_8K_SMOOTH) +
-    # SECRET_FILE (远端密钥), without which node_meta can't produce the
-    # ✈ super / ✈ good tags. Best-effort: ignore if files absent.
-    for extra in (
-        Path(os.environ.get("STATUS_FILE", "/.env/status")),
-        Path(os.environ.get("SECRET_FILE", "/.env/secret")),
-    ):
-        if extra.is_file():
-            bootstrap(extra)
+    _load_env_file(_status_file())
+    _load_env_file(_secret_file())
     sbnode.derive_and_export()
 
     workdir = Path(os.environ.get("WORKDIR", "/tmp/sb-xray"))
@@ -267,54 +317,174 @@ def run_show_pipeline(env_file: Path) -> int:
                     shutil.copytree(item, target, dirs_exist_ok=True)
                 else:
                     shutil.copy2(item, target)
-            except OSError as exc:  # best-effort: Bash uses `|| true`
+            except OSError as exc:
                 sblog.log("WARN", f"[show] copy {item} failed: {exc}")
 
     sbdisplay.show_info_links(archive_path=subscribe_dir / "show-config")
     return 0
 
 
-def issue_bundle_certificate() -> None:
-    """entrypoint.sh:1381 `issueCertificate sb_xray_bundle ...` 的 Python 接线。
-
-    只在 DOMAIN + CDNDOMAIN 都齐全时才调 ``cert.ensure_certificate``；缺任何
-    一个就静默跳过,继续走 Bash 主流程的其它步骤(bash issueCertificate 自己
-    会再 skip 掉 7d 有效期内的证书)。
-    """
-    from sb_xray import cert as sbcert
-
-    domain = os.environ.get("DOMAIN", "")
-    cdn = os.environ.get("CDNDOMAIN", "")
-    if not domain or not cdn:
-        sblog.log("WARN", "[cert] DOMAIN/CDNDOMAIN 未就绪,跳过 Python 侧证书签发")
-        return
-    params = f"{domain}:ali|{cdn}:cf"
-    sblog.log("INFO", f"[cert] ensure_certificate(sb_xray_bundle, {params})")
-    try:
-        status = sbcert.ensure_certificate(name="sb_xray_bundle", params=params)
-        sblog.log("INFO", f"[cert] status={status.value}")
-    except Exception as exc:  # pragma: no cover - 运行时异常不阻塞主流程
-        sblog.log("ERROR", f"[cert] 失败,回落到 Bash issueCertificate: {exc}")
-
-
-def run_media_probes() -> dict[str, str]:
-    """entrypoint.sh ``analyze_ai_routing_env`` 媒体探测部分的 Python 接线。
-
-    跑 8 个 Netflix/Disney/YouTube/Social/TikTok/ChatGPT/Claude/Gemini 探针,
-    结果写入 ``os.environ`` (下游 build_xray_service_rules 消费);不持久化
-    到 ENV_FILE——bash entrypoint.sh 会把它们写入 STATUS_FILE。
-    """
-    from sb_xray.routing import media as sbmedia
-
-    sblog.log("INFO", "[media] 运行 8 个可达性探针")
-    results = sbmedia.check_all()
-    for key, value in results.items():
-        os.environ[key] = value
-    sblog.log(
-        "INFO",
-        "[media] " + " ".join(f"{k}={v}" for k, v in results.items()),
+def run_pipeline(
+    *,
+    env_file: Path,
+    skip_stage: list[str],
+    dry_run: bool,
+    extras: list[str] | None,
+) -> int:
+    """Full boot pipeline. Exec's supervisord on success unless ``dry_run``."""
+    from sb_xray import config_builder as sbcfg
+    from sb_xray import secrets as sbsecrets
+    from sb_xray.routing import isp as sbisp
+    from sb_xray.routing import providers as sbprov
+    from sb_xray.speed_test import run_isp_speed_tests
+    from sb_xray.stages import (
+        cron as sbcron,
     )
-    return results
+    from sb_xray.stages import (
+        dhparam as sbdh,
+    )
+    from sb_xray.stages import (
+        geoip as sbgeo,
+    )
+    from sb_xray.stages import (
+        keys as sbkeys,
+    )
+    from sb_xray.stages import (
+        nginx_auth as sbauth,
+    )
+    from sb_xray.stages import (
+        panels as sbpanels,
+    )
+    from sb_xray.stages import (
+        supervisord as sbsup,
+    )
+
+    skips = set(skip_stage)
+
+    def _run(name: str, fn: Callable[[], None]) -> None:
+        if name in skips:
+            sblog.log("INFO", f"[skip] stage '{name}' skipped via --skip-stage")
+            return
+        fn()
+
+    sblog.log("INFO", "────────────────────────────────────────────────")
+    sblog.log("INFO", "  SB-Xray 启动初始化 (Startup Pipeline)")
+    sblog.log("INFO", "────────────────────────────────────────────────")
+
+    sblog.log("INFO", "[步骤 1]  初始化目录与文件")
+    _init_dirs(env_file)
+
+    sblog.log("INFO", "[步骤 2]  解密远端密钥库")
+
+    def _secrets() -> None:
+        try:
+            status = sbsecrets.decrypt_remote_secrets(secret_file=_secret_file())
+            sblog.log("INFO", f"[步骤 2]  secrets status={status.value}")
+        except RuntimeError as exc:
+            sblog.log("WARN", f"[步骤 2]  远端密钥解密失败,继续启动: {exc}")
+
+    _run("secrets", _secrets)
+
+    sblog.log("INFO", "[步骤 3]  加载持久化状态 (ENV/STATUS/SECRET)")
+    mgr = bootstrap(env_file)
+    _load_env_file(_status_file())
+    _load_env_file(_secret_file())
+
+    sblog.log("INFO", "[步骤 4]  基础环境变量初始化")
+    _run("probe", lambda: probe_base_env(mgr))
+
+    sblog.log("INFO", "[步骤 5]  ISP 测速与选路")
+    _run("speed", lambda: run_isp_speed_tests())
+
+    sblog.log("INFO", "[步骤 6]  流媒体/AI 可达性检测 + 密钥对")
+    _run("media", lambda: _cache_media_probes(mgr))
+    _run("keys", lambda: sbkeys.ensure_all_keys(mgr))
+
+    sblog.log("INFO", "[步骤 7]  生成客户端/服务端配置片段")
+    _run("outbounds", lambda: sbisp.build_client_and_server_configs())
+
+    sblog.log("INFO", "[步骤 8]  TLS 证书申请/续签")
+    _run("cert", issue_bundle_certificate)
+
+    sblog.log("INFO", "[步骤 9]  生成 DH 参数")
+    _run("dhparam", lambda: sbdh.ensure_dhparam())
+
+    sblog.log("INFO", "[步骤 10] 更新 GeoIP/GeoSite 数据库")
+    _run("geoip", lambda: sbgeo.update_geo_data())
+
+    sblog.log("INFO", "[步骤 11] 渲染配置模板")
+    _run("config", lambda: sbcfg.create_config())
+    _run("providers", lambda: sbprov.generate_and_export())
+
+    sblog.log("INFO", "[步骤 11b] 精简 supervisord 配置")
+    _run("trim", lambda: sbcfg.trim_runtime_configs())
+
+    sblog.log("INFO", "[步骤 12] 初始化 X-UI / S-UI 管理面板")
+    _run("panels", lambda: sbpanels.init_panels())
+
+    sblog.log("INFO", "[步骤 13] 配置 Nginx Basic Auth")
+    _run("nginx_auth", lambda: sbauth.setup_basic_auth())
+
+    sblog.log("INFO", "[步骤 14] 配置 Cron 定时任务")
+    _run("cron", lambda: sbcron.install_crontab())
+
+    sblog.log("INFO", "── 配置总览 ──")
+    _run("show", lambda: _banner_best_effort(env_file))
+
+    sblog.log_summary_box(*_SUMMARY_KEYS)
+
+    sblog.log("INFO", "────────────────────────────────────────────────")
+    sblog.log("INFO", "  ✅ 初始化完成，移交 Supervisord 接管")
+    sblog.log("INFO", "────────────────────────────────────────────────")
+
+    if dry_run:
+        sblog.log("INFO", "dry-run complete, skipping supervisord exec")
+        return 0
+    sbsup.exec_supervisord(extras)
+    return 0  # unreachable
+
+
+def _cache_media_probes(mgr: EnvManager) -> None:
+    """Persist media probe results to STATUS_FILE (bash parity)."""
+    from sb_xray.speed_test import _write_status_line  # reuse upsert helper
+
+    results = run_media_probes()
+    for key, value in results.items():
+        _write_status_line(key, value)
+    # ``ISP_OUT`` mirrors ``get_isp_preferred_strategy`` in bash
+    isp_out = "isp-auto" if os.environ.get("HAS_ISP_NODES") else "direct"
+    os.environ["ISP_OUT"] = isp_out
+    _write_status_line("ISP_OUT", isp_out)
+
+    sblog.log_summary_box(
+        "IP_TYPE",
+        "ISP_TAG",
+        "IS_8K_SMOOTH",
+        "ISP_OUT",
+        "CHATGPT_OUT",
+        "NETFLIX_OUT",
+        "DISNEY_OUT",
+        "YOUTUBE_OUT",
+        "GEMINI_OUT",
+        "CLAUDE_OUT",
+        "TIKTOK_OUT",
+        "SOCIAL_MEDIA_OUT",
+    )
+    # mgr kept in signature for future extension; unused today
+    del mgr
+
+
+def _banner_best_effort(env_file: Path) -> None:
+    """Run the ``show`` pipeline but never fail the boot if it raises."""
+    try:
+        run_show_pipeline(env_file)
+    except Exception as exc:  # pragma: no cover — cosmetic banner only
+        sblog.log("WARN", f"[banner] show pipeline 失败,跳过: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -333,35 +503,12 @@ def main(argv: list[str] | None = None) -> int:
         "INFO",
         f"sb-xray entrypoint.py starting (env_file={args.env_file})",
     )
-    mgr = bootstrap(args.env_file)
-    # Mirror entrypoint.sh:main_init 1351-1352 — source STATUS_FILE (ISP_TAG,
-    # IS_8K_SMOOTH, media probe results) + SECRET_FILE (remote secrets) so
-    # log_summary_box and downstream stages see the same state that Bash does.
-    for extra in (
-        Path(os.environ.get("STATUS_FILE", "/.env/status")),
-        Path(os.environ.get("SECRET_FILE", "/.env/secret")),
-    ):
-        if extra.is_file():
-            bootstrap(extra)
-    if "probe" in args.python_stage:
-        probe_base_env(mgr)
-    if "cert" in args.python_stage:
-        issue_bundle_certificate()
-    if "media" in args.python_stage:
-        run_media_probes()
-    if "providers" in args.python_stage:
-        from sb_xray.routing import providers as sbprov
-
-        sbprov.generate_and_export()
-    if "config" in args.python_stage:
-        from sb_xray import config_builder as sbcfg
-
-        sbcfg.create_config()
-    sblog.log_summary_box(*_SUMMARY_KEYS)
-    if args.dry_run:
-        sblog.log("INFO", "dry-run complete, skipping legacy shell")
-        return 0
-    return run_legacy(args.skip_stage, args.extras)
+    return run_pipeline(
+        env_file=args.env_file,
+        skip_stage=args.skip_stage,
+        dry_run=args.dry_run,
+        extras=args.extras,
+    )
 
 
 if __name__ == "__main__":

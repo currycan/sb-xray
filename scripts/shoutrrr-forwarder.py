@@ -43,7 +43,7 @@ def send(event: str, payload: dict) -> None:
         cmd = ["shoutrrr", "send", "--url", url, "--title", title, "--message", body]
         try:
             subprocess.run(cmd, check=False, timeout=10, capture_output=True)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log(f"send failed url={shlex.quote(url)} err={exc}")
 
 
@@ -51,12 +51,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # silence default access log
         return
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length) if length else b"{}"
             payload = json.loads(raw.decode("utf-8") or "{}")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.send_response(400)
             self.end_headers()
             self.wfile.write(f"bad json: {exc}".encode())
@@ -66,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         if self.path == "/healthz":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")

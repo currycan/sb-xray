@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from typing import Final
 
+from sb_xray import logging as sblog
 from sb_xray.network import is_restricted_region
 
 _SMOOTH_THRESHOLD_MBPS: Final[float] = 100.0
@@ -223,3 +224,126 @@ def apply_isp_routing_logic(ctx: RoutingContext) -> IspDecision:
     ref_speed = ctx.proxy_max_speed if isp_tag != "direct" else ctx.direct_speed
     is_smooth = ref_speed > _SMOOTH_THRESHOLD_MBPS
     return IspDecision(isp_tag=isp_tag, is_8k_smooth=is_smooth)
+
+
+# ---- Stage 4: build_client_and_server_configs -------------------------------
+
+
+def _prefix_to_tag(prefix: str) -> str:
+    slug = prefix.lower().replace("_", "-").replace(" ", "-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"proxy-{slug.strip('-')}"
+
+
+def _discover_isp_nodes_with_tags() -> dict[str, tuple[str, str, str, str, str]]:
+    """Return ``{tag: (prefix, ip, port, user, password)}`` from env."""
+    nodes: dict[str, tuple[str, str, str, str, str]] = {}
+    for key, value in os.environ.items():
+        if not key.endswith("_ISP_IP") or not value:
+            continue
+        prefix = key[: -len("_IP")]
+        port = os.environ.get(f"{prefix}_PORT", "")
+        if not port:
+            continue
+        user = os.environ.get(f"{prefix}_USER", "")
+        password = os.environ.get(f"{prefix}_SECRET", "")
+        nodes[_prefix_to_tag(prefix)] = (prefix, value, port, user, password)
+    return nodes
+
+
+def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -> dict[str, str]:
+    """Port of ``build_client_and_server_configs`` (entrypoint.sh:1264).
+
+    Produces the six env vars the JSON templates consume:
+      - ``CUSTOM_OUTBOUNDS`` / ``SB_CUSTOM_OUTBOUNDS``
+      - ``SB_ISP_URLTEST`` (sing-box)
+      - ``XRAY_OBSERVATORY_SECTION`` / ``XRAY_BALANCERS_SECTION`` (xray)
+      - ``XRAY_SERVICE_RULES`` (dynamic media routing rules)
+
+    Also sets ``ISP_IP`` / ``ISP_PORT`` / ``ISP_USER`` / ``ISP_SECRET`` to
+    the currently fastest node's connection info (legacy consumers).
+    """
+    from sb_xray import speed_test as sbspeed
+
+    if speeds is None:
+        speeds = sbspeed.load_isp_speeds()
+
+    sblog.log("INFO", "[阶段 4] 生成客户端/服务端配置片段...")
+
+    for v in (
+        "CUSTOM_OUTBOUNDS",
+        "SB_CUSTOM_OUTBOUNDS",
+        "SB_ISP_URLTEST",
+        "XRAY_OBSERVATORY_SECTION",
+        "XRAY_BALANCERS_SECTION",
+        "XRAY_SERVICE_RULES",
+    ):
+        os.environ[v] = ""
+
+    nodes_by_tag = _discover_isp_nodes_with_tags()
+    has_isp_nodes = bool(os.environ.get("HAS_ISP_NODES"))
+    fastest_tag = os.environ.get("FASTEST_PROXY_TAG", "")
+
+    xray_parts: list[str] = []
+    sb_parts: list[str] = []
+
+    if has_isp_nodes and speeds:
+        sorted_tags = [t for t, _ in sorted(speeds.items(), key=lambda kv: kv[1], reverse=True)]
+        for tag in sorted_tags:
+            node = nodes_by_tag.get(tag)
+            if node is None:
+                continue
+            prefix, ip, port, user, password = node
+
+            if tag == fastest_tag:
+                os.environ["ISP_IP"] = ip
+                os.environ["ISP_PORT"] = port
+                os.environ["ISP_USER"] = user
+                os.environ["ISP_SECRET"] = password
+
+            xray_json, sb_json = process_single_isp(
+                prefix=prefix,
+                ip=ip,
+                port=int(port),
+                user=user,
+                password=password,
+                tag=tag,
+            )
+            xray_parts.append(xray_json + ",\n")
+            sb_parts.append(sb_json + ",\n")
+            sblog.log(
+                "INFO",
+                f"[ISP] 注入出站: {tag} ({speeds.get(tag, 0):.2f} Mbps)",
+            )
+
+    custom_out = "".join(xray_parts)
+    sb_custom_out = "".join(sb_parts)
+    urltest = build_sb_urltest(speeds) if has_isp_nodes else ""
+    observatory, balancer = build_xray_balancer(speeds) if has_isp_nodes else ("", "")
+    service_rules = build_xray_service_rules(
+        outbounds={
+            "CHATGPT_OUT": os.environ.get("CHATGPT_OUT", ""),
+            "NETFLIX_OUT": os.environ.get("NETFLIX_OUT", ""),
+            "DISNEY_OUT": os.environ.get("DISNEY_OUT", ""),
+            "CLAUDE_OUT": os.environ.get("CLAUDE_OUT", ""),
+            "GEMINI_OUT": os.environ.get("GEMINI_OUT", ""),
+            "YOUTUBE_OUT": os.environ.get("YOUTUBE_OUT", ""),
+            "SOCIAL_MEDIA_OUT": os.environ.get("SOCIAL_MEDIA_OUT", ""),
+            "TIKTOK_OUT": os.environ.get("TIKTOK_OUT", ""),
+            "ISP_OUT": os.environ.get("ISP_OUT", ""),
+        }
+    )
+
+    result = {
+        "CUSTOM_OUTBOUNDS": custom_out,
+        "SB_CUSTOM_OUTBOUNDS": sb_custom_out,
+        "SB_ISP_URLTEST": urltest,
+        "XRAY_OBSERVATORY_SECTION": observatory,
+        "XRAY_BALANCERS_SECTION": balancer,
+        "XRAY_SERVICE_RULES": service_rules,
+    }
+    for k, v in result.items():
+        os.environ[k] = v
+    sblog.log("INFO", "[阶段 4] 完成")
+    return result
