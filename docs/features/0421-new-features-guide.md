@@ -23,41 +23,10 @@
 
 ## 1. 事件总线（webhook → shoutrrr）
 
-**做什么**：把 Xray 路由命中 `ban_bt` / `ban_geoip_cn` / `ban_ads` / `private-ip` 四条规则时的事件（含 protocol / source / destination / email / inboundTag / outboundTag / ts 元数据）通过 HTTP POST 推送到容器内 sidecar `shoutrrr-forwarder.py`，再由 `shoutrrr` CLI 转发到 Telegram / Discord / Slack / Gotify / 等 20+ 通道。
+Xray ban 规则命中 → webhook POST → `shoutrrr` CLI → Telegram / Discord / Slack / Gotify。
+适合想实时知道节点被 BT / 广告流量骚扰、客户端触发私网 IP 防护、或国内回源审计的运维用户。
 
-**何时用**：想实时知道节点被 BT / 广告流量骚扰、有客户端触发私网 IP 防护、或需要对国内回源做审计告警。相比 `tail access.log | grep` 方式，元数据更完整且零延迟。
-
-**怎么开**：在 `docker-compose.yml` 的 `environment:` 段添加 `shoutrrr` URL（[完整 URL 语法见 shoutrrr docs](https://containrrr.dev/shoutrrr/v0.8/services/overview/)）：
-
-```yaml
-    environment:
-      # Telegram bot
-      - SHOUTRRR_URLS=telegram://BOT_TOKEN@telegram?chats=@YOUR_CHANNEL
-      # 也支持多通道并发（逗号分隔）
-      # - SHOUTRRR_URLS=telegram://...,discord://TOKEN@WEBHOOK_ID
-      - SHOUTRRR_TITLE_PREFIX=[sb-xray-bracknerd]
-```
-
-`SHOUTRRR_URLS=""`（默认）时 forwarder 进入 dry-run 模式，事件只写入 `/var/log/supervisor/shoutrrr-forwarder.out.log`，不发外部通知。
-
-**如何验证**：
-
-```bash
-# 1. forwarder 健康探针
-docker exec sb-xray curl -s http://127.0.0.1:18085/healthz
-# 期望：{"ok":true}
-
-# 2. 用 xray 的 webhook 测试工具触发一次（或直接访问 bt 站点）
-docker exec sb-xray curl -X POST http://127.0.0.1:18085/shoutrrr/ban_bt \
-  -H 'Content-Type: application/json' \
-  -d '{"ruleTag":"ban_bt","source":"198.51.100.1","destination":"1.1.1.1"}'
-# 期望日志里看到 "forwarded to N channels"
-```
-
-**故障排查**：
-- Telegram 没收到：检查 `docker logs sb-xray` 的 `shoutrrr-forwarder.err.log`；最常见错误是 BOT_TOKEN 格式错或 bot 没加入频道
-- 事件完全没产生：测 `SHOUTRRR_URLS` 没配置时是否也写日志；写了说明链路通，只是外部通道未启用
-- 减噪：`webhook.deduplication` 默认 5 分钟去重（`xr.json` 里配），同一源的连续事件只推一次
+**→ 完整产品文档（含架构图、序列图、Telegram 5 分钟快速开始、故障排查速查表）：[`07-event-bus-shoutrrr.md`](../07-event-bus-shoutrrr.md)**
 
 ---
 
@@ -262,7 +231,7 @@ docker exec sb-xray sh -c 'ls /sb-xray/xray/ | grep xicmp && cat /proc/self/stat
 # 期望：05_xicmp_emergency_inbounds.json 存在；CapEff 含 cap_net_raw
 
 # 客户端测试（需要有 XICMP client 工具或自建 xray client）
-ping bracknerd.ansandy.com  # 确认 ICMP 可达
+ping vpn.example.com  # 确认 ICMP 可达
 # 然后用 xray client 通过 XICMP outbound 访问任一 HTTPS 站
 ```
 
@@ -338,10 +307,12 @@ dig @ns1.example.com TXT probe.ns1.example.com
 | `PORT_ANYTLS` | `4433` | AnyTLS TCP（sing-box） | - |
 | `XDNS_DOMAIN` | `""` | XDNS 权威 NS 域名 | - |
 | `REVERSE_DOMAINS` | `""` | 逗号分隔域名列表，命中走 reverse 隧道 | - |
-| `SHOUTRRR_URLS` | `""` | shoutrrr 推送 URL（dry-run 留空） | `scripts/shoutrrr-forwarder.py` |
+| `SHOUTRRR_URLS` | `""` | shoutrrr 推送 URL（dry-run 留空） | `scripts/sb_xray/shoutrrr.py` |
 | `SHOUTRRR_FORWARDER_PORT` | `18085` | forwarder HTTP 端口 | - |
 | `SHOUTRRR_TITLE_PREFIX` | `[sb-xray]` | 推送标题前缀 | - |
 | `LOG_LEVEL` | `warning` | xray + sing-box 日志级别（debug/info/warning/error） | - |
+| `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）；与 `LOG_LEVEL` 分离避免冲突 | - |
+| `NO_COLOR` | *(空)* | 非空 → 禁用 entrypoint 日志 ANSI 彩色；容器 stdout 非 TTY 时自动禁用 | - |
 
 ---
 

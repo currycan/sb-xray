@@ -20,13 +20,14 @@ regress shell compatibility.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import re
 import shutil
 from pathlib import Path
 
-from sb_xray import logging as sblog
+logger = logging.getLogger(__name__)
 
 # Matches ``${VAR}`` or ``$VAR`` (POSIX identifier: ``[A-Za-z_][A-Za-z0-9_]*``).
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -65,17 +66,24 @@ _FEATURE_FLAG_TEMPLATES: dict[str, str] = {
 
 
 def _envsubst(raw: str) -> str:
-    """Bash ``envsubst`` equivalent: expand ``$VAR`` / ``${VAR}``; leave
-    unknown references as the empty string.
+    """GNU ``envsubst`` equivalent: expand ``$VAR`` / ``${VAR}``.
 
-    ``string.Template.safe_substitute`` keeps unknown vars as ``$VAR``
-    literal — that's NOT envsubst behaviour (which treats unset as empty).
-    Hand-rolled regex substitution below matches ``envsubst`` exactly.
+    Matches the actual behaviour of ``envsubst`` (coreutils / gettext):
+    references whose name is **in the environment** get substituted;
+    references to names that are **not set** keep their literal ``$VAR``
+    / ``${VAR}`` form. (Earlier revisions returned empty-string for
+    unknown names — but that breaks every nginx ``$http_*`` / ``$arg_*``
+    runtime variable in templates/nginx/*.conf, collapsing
+    ``map $http_x_forwarded_for $client_ip {...}`` into
+    ``map   {...}`` which nginx refuses with
+    ``invalid number of arguments in "map" directive``.)
     """
 
     def repl(m: re.Match[str]) -> str:
         name = m.group(1) or m.group(2)
-        return os.environ.get(name, "")
+        if name in os.environ:
+            return os.environ[name]
+        return m.group(0)
 
     return _VAR_RE.sub(repl, raw)
 
@@ -119,7 +127,7 @@ def _filter_supervisord_programs(dest: Path) -> None:
     for block in blocks:
         header = re.match(r"\[program:([^\]]+)\]", block)
         if header and header.group(1) in disabled:
-            sblog.log("INFO", f"[配置][精简] 丢弃 supervisord 段: {header.group(1)}")
+            logger.info("精简: 丢弃 supervisord 段: %s", header.group(1))
             continue
         kept.append(block)
     dest.write_text("".join(kept), encoding="utf-8")
@@ -138,7 +146,7 @@ def _cleanup_orphan_json(service_dir: Path, template_dir: Path) -> None:
         return
     for f in service_dir.glob("*.json"):
         if not (template_dir / f.name).is_file():
-            sblog.log("INFO", f"[配置] 清理孤儿 JSON: {f}")
+            logger.info("清理孤儿 JSON: %s", f)
             f.unlink()
 
 
@@ -158,7 +166,7 @@ def _render_xray_templates(workdir: Path) -> None:
         if _is_feature_disabled(tpl.name):
             if dest.is_file():
                 dest.unlink()
-            sblog.log("INFO", f"[配置][M4] 跳过禁用模板: {tpl.name}")
+            logger.info("M4: 跳过禁用模板: %s", tpl.name)
             continue
         _render_json(tpl, dest)
 
@@ -205,14 +213,14 @@ def _apply_reverse_proxy(workdir: Path) -> None:
         return
     uuid = os.environ.get("XRAY_REVERSE_UUID", "")
     if not uuid:
-        sblog.log("WARN", "[配置][Reverse] ENABLE_REVERSE=true 但 XRAY_REVERSE_UUID 未设置,跳过")
+        logger.warning("Reverse: ENABLE_REVERSE=true 但 XRAY_REVERSE_UUID 未设置,跳过")
         return
 
     domains = _parse_reverse_domains(os.environ.get("REVERSE_DOMAINS", ""))
-    sblog.log(
-        "INFO",
-        f"[配置][Reverse] 注入 reverse client (UUID=...{uuid[-8:]}) "
-        f"+ routing (domains={','.join(domains) or '<none>'})",
+    logger.info(
+        "Reverse: 注入 reverse client (UUID=...%s) + routing (domains=%s)",
+        uuid[-8:],
+        ",".join(domains) or "<none>",
     )
 
     reality = workdir / "xray" / "01_reality_inbounds.json"
@@ -242,7 +250,7 @@ def create_config(*, workdir: Path | None = None) -> None:
     if workdir is None:
         workdir = Path(os.environ.get("WORKDIR", "/tmp/sb-xray"))
 
-    sblog.log("INFO", "[配置] 渲染所有模板...")
+    logger.info("渲染所有模板...")
     os.environ["RANDOM_NUM"] = str(random.randint(0, 9))
 
     for src, dest in _FLAT_RENDERS:
@@ -263,4 +271,4 @@ def create_config(*, workdir: Path | None = None) -> None:
 
     _apply_reverse_proxy(workdir)
 
-    sblog.log("INFO", "[配置] 所有模板渲染完成")
+    logger.info("所有模板渲染完成")

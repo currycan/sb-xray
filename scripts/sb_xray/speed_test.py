@@ -9,14 +9,19 @@ surface the fastest one — preserving the Bash ``proxy_max_speed`` /
 
 from __future__ import annotations
 
+import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Final
 
 import httpx
 
 from sb_xray import http as sbhttp
+
+logger = logging.getLogger(__name__)
 
 # Thresholds from the Bash ``show_report`` ladder (Mbps)
 _THRESH_8K_HDR: Final[float] = 100.0
@@ -29,17 +34,31 @@ _MIN_VALID_BPS: Final[float] = 1024.0  # < 1 KiB/s → connection failed
 
 def _httpx_client(
     *, timeout: float, proxy: str | None = None, proxy_auth: str | None = None
-) -> httpx.Client:
-    """Factory isolated so tests can monkeypatch it with a fake client."""
+) -> httpx.Client | None:
+    """Factory isolated so tests can monkeypatch it with a fake client.
+
+    Returns ``None`` when a SOCKS proxy is requested but the optional
+    ``socksio`` transport dependency is missing — ``measure()`` then
+    gracefully reports 0 Mbps instead of crashing the whole boot
+    pipeline (bash parity: a failed proxy test just yielded 0).
+    """
     if proxy and proxy_auth and "@" not in proxy:
         scheme, _, rest = proxy.partition("://")
         proxy = f"{scheme}://{proxy_auth}@{rest}"
-    return httpx.Client(
-        timeout=timeout,
-        follow_redirects=True,
-        headers={"User-Agent": sbhttp.DEFAULT_UA},
-        proxy=proxy,
-    )
+    try:
+        return httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": sbhttp.DEFAULT_UA},
+            proxy=proxy,
+        )
+    except ImportError as exc:
+        logger.warning(
+            "httpx 代理依赖缺失 (%s); 跳过该节点（视为 0 Mbps）。"
+            " 生产镜像请确认 socksio 已 pip install。",
+            exc,
+        )
+        return None
 
 
 def _sample_once(client: httpx.Client, url: str) -> float:
@@ -57,6 +76,42 @@ def _sample_once(client: httpx.Client, url: str) -> float:
         return 0.0
 
 
+def _truncated_mean_with_stability(
+    samples_bps: list[float],
+) -> tuple[float, float, str]:
+    """Port of entrypoint.sh §9 truncated-mean + stddev + stability label.
+
+    Returns ``(trimmed_mean_mbps, stddev_mbps, label)`` where ``label`` is
+    one of ``[稳定]`` (CV<0.2), ``[轻微波动]`` (CV<0.5), ``[波动较大]``.
+    Empty input yields ``(0.0, 0.0, "[稳定]")`` to stay side-effect free.
+    """
+    n = len(samples_bps)
+    if n == 0:
+        return 0.0, 0.0, "[稳定]"
+
+    ordered = sorted(samples_bps)
+    # Bash: n>=3 drops min+max; otherwise keeps everything.
+    trimmed = ordered[1:-1] if n >= 3 else ordered
+
+    def _to_mbps(bps: float) -> float:
+        return bps * 8 / 1024 / 1024
+
+    trimmed_mean_mbps = sum(_to_mbps(v) for v in trimmed) / len(trimmed)
+    all_mbps = [_to_mbps(v) for v in samples_bps]
+    full_mean = sum(all_mbps) / n
+    variance = sum((v - full_mean) ** 2 for v in all_mbps) / n
+    stddev = variance**0.5
+
+    cv = stddev / trimmed_mean_mbps if trimmed_mean_mbps > 0 else 0.0
+    if cv < 0.2:
+        label = "[稳定]"
+    elif cv < 0.5:
+        label = "[轻微波动]"
+    else:
+        label = "[波动较大]"
+    return round(trimmed_mean_mbps, 2), round(stddev, 2), label
+
+
 def measure(
     url: str,
     *,
@@ -64,22 +119,67 @@ def measure(
     proxy: str | None = None,
     proxy_auth: str | None = None,
     timeout: float = 5.0,
+    name: str | None = None,
 ) -> float:
-    """Sample ``url`` ``samples`` times; return mean throughput in Mbps.
+    """Sample ``url`` ``samples`` times; return truncated-mean throughput in Mbps.
 
-    Samples below 1 KiB/s are discarded. If every sample fails, returns
-    ``0.0`` (matching the Bash contract).
+    Semantics match entrypoint.sh::speed_test:
+      - samples < 1 KiB/s are discarded as failed connections;
+      - with ≥3 valid samples, drop min + max before averaging (truncated mean);
+      - compute population stddev across ALL valid samples to surface the
+        raw variability (not the trimmed one);
+      - log a ``[稳定]/[轻微波动]/[波动较大]`` label based on CV vs. thresholds
+        (<0.2 / <0.5 / else).
+
+    ``name`` is surfaced in the summary log line when supplied.
     """
-    with _httpx_client(timeout=timeout, proxy=proxy, proxy_auth=proxy_auth) as client:
+    label_name = name or "节点"
+    logger.info(
+        "开始: %s%s | 测速源: %s | 采样: %d次",
+        label_name,
+        f" | 代理: {proxy}" if proxy else "",
+        url,
+        samples,
+    )
+
+    client = _httpx_client(timeout=timeout, proxy=proxy, proxy_auth=proxy_auth)
+    if client is None:
+        # Missing proxy transport dep (e.g. socksio for socks5h://). Log
+        # above; return 0 so the caller treats the node as unreachable
+        # instead of propagating the ImportError.
+        return 0.0
+    with client:
         valid: list[float] = []
-        for _ in range(samples):
+        for idx in range(1, samples + 1):
             bps = _sample_once(client, url)
+            kbps = bps / 1024
+            mbps_raw = bps * 8 / 1024 / 1024
+            logger.info(
+                "%s | 第 %d/%d 轮: %.0f KB/s → %.2f Mbps",
+                label_name,
+                idx,
+                samples,
+                kbps,
+                mbps_raw,
+            )
             if bps > _MIN_VALID_BPS:
                 valid.append(bps)
+
     if not valid:
+        logger.warning("%s: 全部 %d 次采样失败，返回 0", label_name, samples)
         return 0.0
-    avg_bps = sum(valid) / len(valid)
-    return avg_bps * 8 / 1_000_000
+
+    trimmed_mean, stddev, label = _truncated_mean_with_stability(valid)
+    logger.info(
+        "%s: %d/%d 有效样本，截断均值 %.2f Mbps，标准差 %.2f Mbps %s",
+        label_name,
+        len(valid),
+        samples,
+        trimmed_mean,
+        stddev,
+        label,
+    )
+    return trimmed_mean
 
 
 def rate(mbps: float) -> str:
@@ -121,12 +221,14 @@ def show_report(mbps: float, *, name: str = "直连") -> None:
 class IspSpeedContext:
     """Tracks per-tag speeds and surfaces the fastest one.
 
-    ``tolerance`` prevents micro-oscillations from replacing the current
-    leader: a new candidate must beat the current best by more than
-    ``tolerance``× (default 1.15, matching the Bash ``_test_isp_node``).
+    ``tolerance`` is a multiplicative margin a new candidate must clear
+    before replacing the current leader. The Bash implementation
+    (``_test_isp_node``) uses a plain ``awk '>'`` comparison — i.e. any
+    strictly larger value wins — so the default is ``1.0`` for parity.
+    Raise it only when you want to dampen oscillations on near-ties.
     """
 
-    tolerance: float = 1.15
+    tolerance: float = 1.0
     speeds: dict[str, float] = field(default_factory=dict)
     fastest_tag: str | None = None
     fastest_speed: float = 0.0
@@ -140,3 +242,295 @@ class IspSpeedContext:
         if mbps > self.fastest_speed * self.tolerance:
             self.fastest_tag = tag
             self.fastest_speed = mbps
+
+
+# ============================================================================
+# Stage 2 — entrypoint.sh ``run_speed_tests_if_needed`` orchestration
+# ============================================================================
+
+_SPEED_TEST_URL: Final[str] = "https://speed.cloudflare.com/__down?bytes=25000000"
+_SPEED_SAMPLES_DEFAULT: Final[int] = 2
+_KEEP_ON_CACHE_HIT_MBPS: Final[float] = 999.0
+
+
+def _isp_tag_for(prefix: str) -> str:
+    """Bash ``tr '[:upper:]_ ' '[:lower:]-'`` + ``proxy-`` prefix."""
+    slug = prefix.lower().replace("_", "-").replace(" ", "-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"proxy-{slug.strip('-')}"
+
+
+def _discover_isp_nodes() -> list[tuple[str, str, str, str, str]]:
+    """Return ``[(prefix, ip, port, user, password), ...]`` from env vars.
+
+    Mirrors ``env | grep "_ISP_IP=" | cut -d= -f1`` + sibling lookups
+    (``${prefix}_PORT`` / ``${prefix}_USER`` / ``${prefix}_SECRET``).
+    Entries missing IP or PORT are skipped.
+    """
+    nodes: list[tuple[str, str, str, str, str]] = []
+    for key, value in os.environ.items():
+        if not key.endswith("_ISP_IP") or not value:
+            continue
+        prefix = key[: -len("_IP")]
+        port = os.environ.get(f"{prefix}_PORT", "").strip().strip("'\"")
+        if not port:
+            continue
+        user = os.environ.get(f"{prefix}_USER", "").strip().strip("'\"")
+        password = os.environ.get(f"{prefix}_SECRET", "").strip().strip("'\"")
+        nodes.append((prefix, value.strip().strip("'\""), port, user, password))
+    return nodes
+
+
+def _status_file() -> Path:
+    return Path(os.environ.get("STATUS_FILE", "/.env/status"))
+
+
+def _write_status_line(key: str, value: str) -> None:
+    """Upsert ``export KEY='VALUE'`` in ``STATUS_FILE`` (mirrors sed -i+echo).
+
+    Silently warns + returns on ``OSError`` so a read-only status dir
+    never aborts boot (bash equivalent uses ``|| true`` on every sed).
+    """
+    path = _status_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("status: cannot create %s: %s", path.parent, exc)
+        return
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    import re as _re
+
+    pattern = _re.compile(rf"^export {_re.escape(key)}=.*\n?", _re.MULTILINE)
+    cleaned = pattern.sub("", existing).rstrip("\n")
+    if cleaned:
+        cleaned += "\n"
+    cleaned += f"export {key}='{value}'\n"
+    try:
+        path.write_text(cleaned, encoding="utf-8")
+    except OSError as exc:
+        logger.warning("status: cannot write %s: %s", path, exc)
+
+
+def _purge_service_caches() -> None:
+    """entrypoint.sh:1183 — drop stale ``*_OUT`` caches from STATUS_FILE.
+
+    Called when ``ISP_TAG`` is being recomputed so downstream media probes
+    re-run against the fresh routing decision.
+    """
+    path = _status_file()
+    if not path.is_file():
+        return
+    import re as _re
+
+    removed_keys = (
+        "ISP_OUT",
+        "CHATGPT_OUT",
+        "NETFLIX_OUT",
+        "DISNEY_OUT",
+        "YOUTUBE_OUT",
+        "GEMINI_OUT",
+        "CLAUDE_OUT",
+        "SOCIAL_MEDIA_OUT",
+        "TIKTOK_OUT",
+    )
+    text = path.read_text(encoding="utf-8")
+    for key in removed_keys:
+        text = _re.sub(rf"^export {_re.escape(key)}=.*\n?", "", text, flags=_re.MULTILINE)
+        os.environ.pop(key, None)
+    path.write_text(text, encoding="utf-8")
+
+
+def _proxy_url(ip: str, port: str) -> str:
+    return f"socks5h://{ip}:{port}"
+
+
+_STALE_ENV_KEYS: Final[tuple[str, ...]] = (
+    "ISP_TAG",
+    "TOP_ISP_TAG",
+    "proxy_max_speed",
+    "FASTEST_PROXY_TAG",
+    "IS_8K_SMOOTH",
+    "DIRECT_SPEED",
+    "HAS_ISP_NODES",
+    "_ISP_SPEEDS_JSON",
+)
+
+
+def _resolve_sample_count(samples: int | None) -> int:
+    """Pick the sample count from CLI arg, env, or default."""
+    if samples is not None:
+        return samples
+    return int(os.environ.get("SPEED_SAMPLES", _SPEED_SAMPLES_DEFAULT))
+
+
+def _try_cache_hit(cached_tag: str) -> bool:
+    """Handle the ``ISP_TAG`` cache. Returns True iff fully handled.
+
+    Validates the cached tag against the current ``*_ISP_IP`` env —
+    when the operator drops an ISP from SECRET_FILE without clearing
+    STATUS_FILE, xray would otherwise start with
+    ``outbound tag proxy-X not found``. A stale cache falls through
+    and the caller runs a fresh measurement.
+    """
+    nodes = _discover_isp_nodes()
+    available_tags = {_isp_tag_for(prefix) for prefix, *_ in nodes}
+    if cached_tag == "direct" or cached_tag in available_tags:
+        logger.info("命中缓存 ISP_TAG=%s，跳过测速", cached_tag)
+        if nodes:
+            os.environ["HAS_ISP_NODES"] = "true"
+            speeds = {tag: 0.0 for tag in available_tags}
+            if cached_tag in speeds:
+                speeds[cached_tag] = _KEEP_ON_CACHE_HIT_MBPS
+            os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(speeds)
+        return True
+    logger.warning(
+        "缓存 ISP_TAG=%s 在当前 *_ISP_IP 环境里已不存在 (现有 %s)，清缓存后重新测速",
+        cached_tag,
+        sorted(available_tags) or "无",
+    )
+    return False
+
+
+def _reset_caches_for_fresh_run() -> None:
+    """Wipe STATUS_FILE ``*_OUT`` + pop the in-process env keys."""
+    _purge_service_caches()
+    for key in _STALE_ENV_KEYS:
+        os.environ.pop(key, None)
+
+
+def _log_routing_inputs() -> None:
+    region = os.environ.get("GEOIP_INFO", "").split("|", 1)[0] or "未知"
+    logger.info(
+        "IP_TYPE=%s | 地区=%s | DEFAULT_ISP=%s",
+        os.environ.get("IP_TYPE", "未知"),
+        region,
+        os.environ.get("DEFAULT_ISP", "未设置"),
+    )
+
+
+def _measure_direct_baseline(url: str, sample_count: int) -> float:
+    """Direct speed measurement, not used for routing but for 8K 判定."""
+    direct_mbps = measure(url, samples=sample_count)
+    os.environ["DIRECT_SPEED"] = f"{direct_mbps:.2f}"
+    show_report(direct_mbps, name="Direct")
+    logger.info(
+        "直连基准: %.2f Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）",
+        direct_mbps,
+    )
+    return direct_mbps
+
+
+def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
+    """Iterate every configured ISP node and return the aggregated context."""
+    nodes = _discover_isp_nodes()
+    ctx = IspSpeedContext()
+    if not nodes:
+        logger.warning("未发现 ISP 节点（无 *_ISP_IP 环境变量），将回退直连")
+        return ctx
+
+    os.environ["HAS_ISP_NODES"] = "true"
+    logger.info("发现 ISP 节点 %d 个，逐节点采样 %d 次", len(nodes), sample_count)
+    for prefix, ip, port, user, password in nodes:
+        tag = _isp_tag_for(prefix)
+        proxy_auth = f"{user}:{password}" if user and password else None
+        mbps = measure(
+            url,
+            samples=sample_count,
+            proxy=_proxy_url(ip, port),
+            proxy_auth=proxy_auth,
+        )
+        show_report(mbps, name=prefix)
+        ctx.record(tag, mbps)
+        if ctx.fastest_tag == tag and mbps > 0:
+            logger.info("%s: %.2f Mbps → 新最优", tag, mbps)
+        else:
+            logger.info(
+                "%s: %.2f Mbps (最优仍: %s %.2f Mbps)",
+                tag,
+                mbps,
+                ctx.fastest_tag or "未定",
+                ctx.fastest_speed,
+            )
+    return ctx
+
+
+def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
+    """Feed the routing logic and export the decision to env + STATUS_FILE."""
+    from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
+
+    os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(ctx.speeds)
+    if ctx.fastest_tag:
+        os.environ["FASTEST_PROXY_TAG"] = ctx.fastest_tag
+        # Bash export name is lowercase (_test_isp_node); mirror it verbatim.
+        os.environ["proxy_max_speed"] = f"{ctx.fastest_speed:.2f}"  # noqa: SIM112
+
+    decision = apply_isp_routing_logic(
+        RoutingContext(
+            ip_type=os.environ.get("IP_TYPE", "unknown"),
+            geoip_info=os.environ.get("GEOIP_INFO", ""),
+            default_isp=os.environ.get("DEFAULT_ISP", ""),
+            direct_speed=direct_mbps,
+            fastest_proxy_tag=ctx.fastest_tag,
+            proxy_max_speed=ctx.fastest_speed,
+        )
+    )
+    os.environ["ISP_TAG"] = decision.isp_tag
+    os.environ["IS_8K_SMOOTH"] = "true" if decision.is_8k_smooth else "false"
+
+    _write_status_line("IS_8K_SMOOTH", os.environ["IS_8K_SMOOTH"])
+    _write_status_line("ISP_TAG", decision.isp_tag)
+    logger.info(
+        "ISP_TAG=%s IS_8K_SMOOTH=%s",
+        decision.isp_tag,
+        os.environ["IS_8K_SMOOTH"],
+    )
+
+
+def run_isp_speed_tests(
+    *,
+    samples: int | None = None,
+    url: str = _SPEED_TEST_URL,
+) -> None:
+    """Port of ``run_speed_tests_if_needed`` (entrypoint.sh:1153).
+
+    Orchestrator — composed of 5 single-purpose helpers:
+
+      1. :func:`_try_cache_hit` — honor a valid ``ISP_TAG`` cache.
+      2. :func:`_reset_caches_for_fresh_run` — wipe stale state.
+      3. :func:`_measure_direct_baseline` — direct speed for 8K 判定.
+      4. :func:`_measure_isp_nodes` — per-``*_ISP_IP`` SOCKS5h probes.
+      5. :func:`_persist_routing_decision` — route + write STATUS_FILE.
+    """
+    sample_count = _resolve_sample_count(samples)
+
+    cached_tag = os.environ.get("ISP_TAG", "").strip()
+    if cached_tag and _try_cache_hit(cached_tag):
+        return
+
+    _reset_caches_for_fresh_run()
+    _log_routing_inputs()
+    direct_mbps = _measure_direct_baseline(url, sample_count)
+    ctx = _measure_isp_nodes(url, sample_count)
+    _persist_routing_decision(direct_mbps, ctx)
+
+
+def _json_speeds(speeds: dict[str, float]) -> str:
+    """Encode per-tag speeds for downstream consumers (routing.isp)."""
+    import json as _json
+
+    return _json.dumps({t: round(v, 2) for t, v in speeds.items()})
+
+
+def load_isp_speeds() -> dict[str, float]:
+    """Inverse of ``_json_speeds`` — returns an empty dict when unset."""
+    import json as _json
+
+    raw = os.environ.get("_ISP_SPEEDS_JSON", "")
+    if not raw:
+        return {}
+    try:
+        data = _json.loads(raw)
+    except _json.JSONDecodeError:
+        return {}
+    return {str(k): float(v) for k, v in data.items()}

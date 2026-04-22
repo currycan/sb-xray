@@ -125,6 +125,26 @@ environment:
 | `DUFS_ALLOW_UPLOAD` | `true` | 允许上传 |
 | `DUFS_ALLOW_DELETE` | `true` | 允许删除 |
 
+#### Entrypoint 日志（Python stdlib logging）
+
+| 变量 | 默认值 | 说明 |
+|:---|:---|:---|
+| `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`（大小写不敏感，`WARN` 作为 `WARNING` 的别名）。**与给 xray/sing-box 用的 `LOG_LEVEL` 分离**，避免 xray 的 `warning` 字符串意外屏蔽阶段进度 INFO 日志。 |
+| `NO_COLOR` | *(空)* | 设为任意非空值 → 关闭 entrypoint 日志的 ANSI 彩色。容器 stdout 非 TTY 时自动关闭，无需手动配置。 |
+
+**格式**：`[ISO-8601 时区时间戳] [LEVEL] [模块名] 消息`
+
+```
+[2026-04-22T13:59:33.123+08:00] [INFO] [sb_xray.entrypoint] ▶ Stage 5/17 speed: ISP 测速与选路
+[2026-04-22T13:59:33.876+08:00] [INFO] [sb_xray.routing.isp] 注入出站: proxy-us-isp (999.00 Mbps)
+[2026-04-22T13:59:33.891+08:00] [INFO] [sb_xray.entrypoint] ✓ Stage 5/17 speed ok in 768ms
+```
+
+- 每个阶段用 `▶ / ✓ / ⋯ / ✗` 标识 start / ok / skipped / failed，带毫秒级耗时。
+- 日志走 **stderr**；`SYSTEM STRATEGY SUMMARY` 方框与订阅 banner 是 **stdout** 的一次性报告，不属于日志流。
+- 日志流末尾会留一行锚点 `handing over to supervisord; subsequent lines come from supervisord / xray / nginx`，之后的 supervisord / xray / nginx 日志保留其原生格式。
+- 排查启动问题时推荐 `SB_LOG_LEVEL=DEBUG`；稳定后改回 `INFO`。
+
 ### 2.3 远端密钥变量（`/.env/secret`，由 `DECODE` 解密注入）
 
 这些变量从加密的远端密钥库中读取，**不应出现在 `docker-compose.yml`** 中：
@@ -319,30 +339,44 @@ SAN[1]: example.com       (主域名)
 
 ## 5. GeoIP/GeoSite 数据更新
 
-`scripts/geo_update.sh` 负责更新 Xray 和 Sing-box 使用的地理信息数据库。
+`scripts/sb_xray/geo.py` 负责下载 Xray 和 Sing-box 使用的规则库,并通过 `entrypoint.py geo-update` 子命令暴露给 cron。规则库落在持久化卷 `./geo:/geo`,容器重启不会重新下载。
 
 ### 5.1 自动更新
 
-系统通过 Supervisor 定时任务自动执行更新。
+- **启动阶段**: entrypoint 第 9 段 (`stages/geoip.py`) 调用 `geo.refresh(on_startup=True)`。文件 <7 天视为新鲜,直接跳过下载;仅维护 `/usr/local/bin/*.dat` 符号链接。
+- **每日任务**: cron 每天 03:00 (容器时区) 执行 `/scripts/entrypoint.py geo-update`,强制刷新并通过 `supervisorctl` 重启 xray 让新规则生效。
+- **日志**: cron 输出重定向到 `/var/log/geo_update.log`;启动阶段输出走 entrypoint 的 stderr。
 
 ### 5.2 手动更新
 
 ```bash
-# 手动触发更新
-docker exec sb-xray /scripts/geo_update.sh
+# 手动触发更新 (与 cron 等价:强制刷新 + 重启 xray)
+docker exec sb-xray /scripts/entrypoint.py geo-update
 
-# 查看当前 GeoIP 数据版本
-docker exec sb-xray ls -la /usr/local/bin/bin/
+# 查看缓存的规则库
+docker exec sb-xray ls -lh /geo/
+docker exec sb-xray ls -l /usr/local/bin/ | grep dat   # 符号链接 → /geo/*.dat
 ```
 
-### 5.3 数据源
+### 5.3 清空并重新下载
+
+```bash
+# 宿主机删除缓存,重启容器触发全量下载
+rm -rf ./geo/*.dat
+docker compose restart sb-xray
+```
+
+### 5.4 持久化卷要求
+
+`docker-compose.yml` 需挂载 `./geo:/geo`。早期版本(无此卷)仍可运行,但每次 `docker compose down/up` 都会丢失缓存并重新下载 6 个 ~10-30 MB 的文件。升级现网节点只需在 compose 里追加一行然后 `docker compose up -d` 即可。
+
+### 5.5 数据源
 
 | 文件 | 用途 | 来源 |
 |:---|:---|:---|
-| `geoip.dat` | IP 地理归属库 (Xray) | Loyalsoldier/v2ray-rules-dat |
-| `geosite.dat` | 域名分类库 (Xray) | Loyalsoldier/v2ray-rules-dat |
-| `geoip.db` | IP 地理归属库 (Sing-box) | SagerNet/sing-geoip |
-| `geosite.db` | 域名分类库 (Sing-box) | SagerNet/sing-geosite |
+| `geoip.dat` / `geosite.dat` | IP/域名分类库 (Xray, Sing-box) | Loyalsoldier/v2ray-rules-dat |
+| `geoip_IR.dat` / `geosite_IR.dat` | 伊朗区域规则 | chocolate4u/Iran-v2ray-rules |
+| `geoip_RU.dat` / `geosite_RU.dat` | 俄罗斯区域规则 | runetfreedom/russia-v2ray-rules-dat |
 
 ---
 
@@ -632,7 +666,7 @@ docker compose restart
 
 镜像默认启用全部 10 个 supervisord 进程（xray / sing-box / nginx / x-ui / s-ui / sub-store / http-meta / shoutrrr-forwarder / dufs / cron），常驻 RSS ~390–650 MB，启动峰值可达 650–870 MB。低于 1 GB 物理内存的节点需通过以下开关组合降载至 ~300–430 MB 常驻。
 
-**作用机制**：`scripts/entrypoint.sh:createConfig` 用 envsubst 渲染出完整 10 段 `/etc/supervisor.d/daemon.ini` 后，立即调用 `python3 /scripts/entrypoint.py trim`（实现在 `scripts/sb_xray/config_builder.py:trim_runtime_configs`），按环境变量 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤。所有开关都是 opt-out：仅显式设 `false` 生效，未设置或为空保持默认启用。
+**作用机制**：`scripts/sb_xray/config_builder.py:create_config` 用 `string.Template` envsubst 语义渲染出完整 10 段 `/etc/supervisor.d/daemon.ini` 后，`scripts/entrypoint.py:run_pipeline` 在步 11b 直接调用同模块的 `trim_runtime_configs` 按环境变量 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤（也可通过 `docker exec sb-xray python3 /scripts/entrypoint.py trim` 重跑一次）。所有开关都是 opt-out：仅显式设 `false` 生效，未设置或为空保持默认启用。
 
 ### 7.1 docker-compose.yml（宿主层硬约束）
 

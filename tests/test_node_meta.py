@@ -27,7 +27,7 @@ def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_derive_sets_node_name_from_domain(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear(monkeypatch)
-    monkeypatch.setenv("DOMAIN", "jp.ansandy.com")
+    monkeypatch.setenv("DOMAIN", "jp.example.com")
     monkeypatch.setenv("GEOIP_INFO", "Tokyo Japan|203.0.113.1")
     node_meta.derive_and_export()
     assert os.environ["NODE_NAME"] == "jp"

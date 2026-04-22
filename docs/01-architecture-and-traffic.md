@@ -1,6 +1,6 @@
 # 01. 系统架构与全流量链路引擎
 
-> 本文档深入剖析 SB-Xray 的核心架构设计——从 Nginx 边界网关的流量拦截与分发，到双引擎内核的协议处理，再到容器启动的 16 段分层初始化流水线——进行全景式解读。
+> 本文档深入剖析 SB-Xray 的核心架构设计——从 Nginx 边界网关的流量拦截与分发，到双引擎内核的协议处理，再到容器启动的 15 段分层初始化流水线——进行全景式解读。
 
 ---
 
@@ -10,7 +10,7 @@
 2. [全流量链路深度拆解](#2-全流量链路深度拆解)
 3. [内部通信链路：Unix Domain Socket 清单](#3-内部通信链路unix-domain-socket-清单)
 4. [架构方案对比与选型分析](#4-架构方案对比与选型分析)
-5. [Entrypoint.sh 守护进程生命周期](#5-entrypointsh-守护进程生命周期)
+5. [Entrypoint 守护进程生命周期](#5-entrypoint-守护进程生命周期)
 6. [出站路由与多 ISP 链式落地引擎](#6-出站路由与多-isp-链式落地引擎)
 7. [参考文献](#7-参考文献)
 
@@ -290,7 +290,7 @@ graph LR
 
 ## 5. Entrypoint 守护进程生命周期
 
-容器在每次启动（或执行 `docker compose restart`）时，由 `scripts/entrypoint.py`（Python PID 1，argparse 子命令 `run` / `show` / `trim`，Docker `ENTRYPOINT ["dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]`）执行初始化：加载 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` → 按 `--python-stage` 开关选择性执行 Python 阶段（探测 / 证书 / providers / 配置渲染 / 流媒体探针）→ 剩余阶段 `subprocess` 调 `scripts/entrypoint.sh` 执行 **16 段 §N 分层初始化流水线**（§1-6 工具层 → §7-9 探测层 → §12 证书 → §13 渲染 → §13b 调用 `python3 /scripts/entrypoint.py trim` 按 `ENABLE_*` 开关对已渲染的 `daemon.ini` 做幂等 in-place 过滤 → §15-16 启动）→ `exec supervisord`。
+容器在每次启动（或执行 `docker compose restart`）时，由 `scripts/entrypoint.py`（Python PID 1，argparse 子命令 `run` / `show` / `trim`，Docker `ENTRYPOINT ["dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]`）**一次性编排 15 段 Python 启动流水线**：加载 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` → 基础 env 探测 (`sb_xray.network`) → ISP 测速选路 (`sb_xray.speed_test.run_isp_speed_tests`) → 流媒体/AI 可达性探针 (`sb_xray.routing.media.check_all`) + 密钥对 (`sb_xray.stages.keys`) → 出站 JSON 装配 (`sb_xray.routing.isp.build_client_and_server_configs`) → TLS 证书 (`sb_xray.cert`) → DH 参数 (`sb_xray.stages.dhparam`) → GeoIP 更新 (`sb_xray.stages.geoip`) → 渲染模板 (`sb_xray.config_builder.create_config` + `sb_xray.routing.providers`) → `trim_runtime_configs` 按 `ENABLE_*` 开关对已渲染 `daemon.ini` 做幂等 in-place 过滤 → X-UI / S-UI 初始化 (`sb_xray.stages.panels`) → Nginx htpasswd (`sb_xray.stages.nginx_auth`) → Cron 安装 (`sb_xray.stages.cron`) → 订阅链接 banner → `os.execvp` 接管 supervisord (`sb_xray.stages.supervisord`)。每一个阶段都可以通过 `--skip-stage <name>` 单独跳过用于诊断。Bash 入口 `entrypoint.sh` 已于 Phase 8 彻底退役。
 
 ### 5.1 整体生命周期流转图
 

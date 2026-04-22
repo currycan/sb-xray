@@ -11,14 +11,24 @@ services:
       - CDNDOMAIN=$cdndomain
       - DECODE=$code
       - ACMESH_DEBUG=1
-      # zerossl/google
-      - ACMESH_SERVER_NAME=zerossl
-      - ACMESH_EAB_KID=$eab_kid # 填入 Google EAB keyId
-      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key # 填入 Google EAB b64MacKey
+      # CA 候选（均支持 DNS-01 通配符证书）：
+      #   letsencrypt  无需 EAB，50 cert/domain/week，默认推荐
+      #   zerossl      acme.sh 自动申领 EAB；失败多次后会触发 retryafter=86400 冷却
+      #   google       手动 EAB 凭据（Google Cloud Shell 获取，7 天内一次性有效）
+      # 注意：buypass 不支持通配符，本项目场景勿选
+      - ACMESH_SERVER_NAME=letsencrypt
+      # 仅 Google / 预分配 ZeroSSL EAB 时需要填；letsencrypt 忽略
+      - ACMESH_EAB_KID=$eab_kid
+      - ACMESH_EAB_HMAC_KEY=$eab_hmac_key
       - DEST_HOST=speed.cloudflare.com
       - LISTENING_PORT=443
       # xray / sing-box 日志级别：debug | info | warning | error，默认 warning
       - LOG_LEVEL=warning
+      # Python entrypoint 日志级别 (DEBUG|INFO|WARNING|ERROR|CRITICAL)；与 LOG_LEVEL 分离，
+      # 避免 xray 的 "warning" 字符串意外屏蔽启动阶段的 INFO 级进度日志。默认 INFO。
+      - SB_LOG_LEVEL=INFO
+      # 设为 "1" 关闭 entrypoint 日志 ANSI 彩色（非 TTY 容器 stdout 默认自动关闭）。
+      # - NO_COLOR=1
       - DUFS_PATH_PREFIX=/myfiles
       - XUI_WEBBASEPATH=3xadmin
       # Gemini直连, true=直连, false=使用代理, 空=自动判断
@@ -38,6 +48,12 @@ services:
       - ENABLE_XUI=false # false: 关掉 x-ui 面板（省 ~35–55 MB）
       - ENABLE_SUI=false # false: 关掉 s-ui 面板（省 ~35–55 MB）
       - ENABLE_SHOUTRRR=true # false: 关掉 shoutrrr-forwarder（省 ~20–30 MB）
+      # shoutrrr 事件总线（完整说明见 docs/07-event-bus-shoutrrr.md）
+      # 留空 = dry-run，仅写日志不外推；多通道追加 ";discord://..." 或 ";slack://..."（详见文档 §6）
+      # ⚠ BOT_TOKEN 中的 ":" 必须 URL-encode 为 "%3A"；chat.id 私有为负数(-100...), 公开频道用 "name"(不带 @)
+      - SHOUTRRR_URLS= # e.g. telegram://123456789%3AABCdef...xyz@telegram?chats=-1001234567890
+      - SHOUTRRR_TITLE_PREFIX=[sb-xray:$domain] # 标题前缀；$domain 与顶部 DOMAIN=$domain 同源，由宿主 shell 或 .env 导出节点域名
+      - SHOUTRRR_FORWARDER_PORT=18085 # 监听端口（仅 127.0.0.1 绑定）
     ports:
       - "443:443/tcp"
       - "443:443/udp" # use UDP for usage of HTTP/3
@@ -55,6 +71,8 @@ services:
       - ./nginx-dhparam:/etc/nginx/dhparam
       - ./data:/data
       - ./logs:/var/log
+      # GeoIP/GeoSite 规则库缓存,避免每次容器重启重下 ~100 MB
+      - ./geo:/geo
       # - /lib/modules:/lib/modules:ro
     restart: always
     tty: true

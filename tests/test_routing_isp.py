@@ -55,7 +55,7 @@ def test_sb_urltest_empty_when_no_nodes() -> None:
 
 def test_sb_urltest_sorted_desc_by_speed() -> None:
     out = isp.build_sb_urltest({"proxy-slow": 5.0, "proxy-fast": 80.0, "proxy-mid": 30.0})
-    data = json.loads(out)
+    data = json.loads(out.rstrip(","))  # strip template-splice trailing comma
     assert data["type"] == "urltest"
     assert data["tag"] == "isp-auto"
     assert data["outbounds"] == [
@@ -65,6 +65,27 @@ def test_sb_urltest_sorted_desc_by_speed() -> None:
         "direct",
     ]
     assert data["url"] == "https://www.gstatic.com/generate_204"
+
+
+def test_sb_urltest_has_trailing_comma_for_template_splice() -> None:
+    """Regression: the fragment is spliced between two other JSON
+    objects in ``templates/sing-box/sb.json`` (``${SB_CUSTOM_OUTBOUNDS}``
+    → ``${SB_ISP_URLTEST}`` → literal block outbound). Without a
+    trailing comma, the rendered file has ``}{`` and
+    ``json.decoder.JSONDecodeError: Expecting ',' delimiter`` fires —
+    exactly the line-44 crash observed on prod."""
+    out = isp.build_sb_urltest({"proxy-hk": 120.0})
+    assert out.endswith(",")
+    # And the payload minus the trailing comma is valid JSON by itself.
+    import json as _json
+
+    _json.loads(out.rstrip(","))
+
+
+def test_sb_urltest_empty_has_no_trailing_comma() -> None:
+    """Empty fragment must stay empty — adding a stray "," would break
+    sb.json when zero ISP nodes are configured."""
+    assert isp.build_sb_urltest({}) == ""
 
 
 # ---- build_xray_balancer ----------------------------------------------------
@@ -83,6 +104,26 @@ def test_xray_balancer_selector_sorted_desc() -> None:
     assert '"isp-auto"' in bal
     assert '"leastPing"' in bal
     assert '"fallbackTag": "direct"' in bal
+
+
+def test_xray_balancer_fragments_roundtrip_as_json() -> None:
+    """Regression: ``.strip('{}')`` in the old port ate the inner closing
+    brace of the observatory object, producing invalid JSON when the
+    fragment was spliced into ``xr.json``."""
+    import json as _json
+
+    obs, bal = isp.build_xray_balancer({"proxy-cn2": 60.0, "proxy-aws": 80.0})
+    # Fragments always end with a comma (intended for templated splice).
+    assert obs.endswith(",")
+    assert bal.endswith(",")
+    # Wrap back into an object and verify each fragment is syntactically
+    # valid JSON on its own.
+    wrapped_obs = "{" + obs.rstrip(",") + "}"
+    wrapped_bal = "{" + bal.rstrip(",") + "}"
+    obs_obj = _json.loads(wrapped_obs)
+    bal_obj = _json.loads(wrapped_bal)
+    assert "observatory" in obs_obj
+    assert "balancers" in bal_obj
 
 
 # ---- apply_isp_routing_logic: decision branches ----------------------------

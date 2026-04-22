@@ -1,0 +1,35 @@
+"""Root crontab install (entrypoint.sh:main_init step 14 equivalent)."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_CRON = Path("/var/spool/cron/crontabs/root")
+_GEO_ENTRY = "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+_GEO_MARKER = "geo-update"
+
+
+def install_crontab(
+    *,
+    cron_file: Path = _DEFAULT_CRON,
+    geo_entry: str = _GEO_ENTRY,
+) -> None:
+    """Ensure the daily geo-update crontab entry exists, idempotently.
+
+    Drops any prior ``geo_update.sh`` / ``geo-update`` lines before
+    re-appending the current entry, so migrating installations upgrade
+    cleanly.
+    """
+    cron_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
+    lines = [
+        ln for ln in existing.splitlines() if _GEO_MARKER not in ln and "geo_update.sh" not in ln
+    ]
+    lines.append(geo_entry)
+    cleaned = "\n".join(lines).rstrip() + "\n"
+    cron_file.write_text(cleaned, encoding="utf-8")
+    cron_file.chmod(0o600)
+    logger.info("Cron 定时任务已安装 (geo-update daily 03:00)")
