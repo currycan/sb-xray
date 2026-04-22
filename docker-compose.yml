@@ -54,19 +54,14 @@ services:
       - SHOUTRRR_URLS= # e.g. telegram://123456789%3AABCdef...xyz@telegram?chats=-1001234567890
       - SHOUTRRR_TITLE_PREFIX=[sb-xray:$domain] # 标题前缀；$domain 与顶部 DOMAIN=$domain 同源，由宿主 shell 或 .env 导出节点域名
       - SHOUTRRR_FORWARDER_PORT=18085 # 监听端口（仅 127.0.0.1 绑定）
-      # ── isp-auto 优化开关（全部 optional；默认等价旧版行为，详见 docs/04-ops-and-troubleshooting.md §2.6）
-      # - ISP_PROBE_URL=https://speed.cloudflare.com/__down?bytes=1048576 # 探测 URL；换 generate_204 回退到 RTT-only
-      # - ISP_PROBE_INTERVAL=1m             # cn2 等小内存节点建议 5m
-      # - ISP_PROBE_TOLERANCE_MS=300
-      # - ISP_EVENTS_ENABLED=true           # 结构化 event= 日志（stdout + shoutrrr）
-      # - ISP_RETEST_INTERVAL_HOURS=6       # 周期性带宽重测；0 禁用
-      # - ISP_RETEST_DELTA_PCT=15           # 触发 daemon restart 的最小变化百分比
-      # - ISP_RETEST_ENABLED=true
-      # - ISP_PER_SERVICE_SB=false          # true: sing-box 为 Netflix/OpenAI/... 生成独立 balancer
-      # - ISP_FALLBACK_STRATEGY=direct      # direct / block(fail-closed) / warp(需 WARP_ENABLED=true)
-      # - WARP_ENABLED=false
-      # - ISP_SPEED_CACHE_TTL_MIN=60        # 冷启动缓存 TTL 分钟；0 禁用
-      # - ISP_SPEED_CACHE_ASYNC=true
+      # ── isp-auto 优化开关（所有默认值已在 Dockerfile ENV 注册，此处仅在需要**覆盖**时取消注释）
+      # 完整说明见 docs/04-ops-and-troubleshooting.md §2.6
+      # - ISP_PROBE_INTERVAL=5m           # cn2 等小内存节点建议降频
+      # - ISP_PER_SERVICE_SB=true         # 开启 sing-box 按服务分桶（Netflix/OpenAI/Claude/Gemini/Disney/YouTube 独立 balancer）
+      # - ISP_FALLBACK_STRATEGY=block     # CN/HK/RU 拒绝静默走 direct
+      # - ISP_FALLBACK_STRATEGY=warp      # 受限地区 + 自备 warp outbound
+      # - WARP_ENABLED=true               # 与 FALLBACK_STRATEGY=warp 配合
+      # - ISP_RETEST_INTERVAL_HOURS=0     # 完全禁用周期性重测
     ports:
       - "443:443/tcp"
       - "443:443/udp" # use UDP for usage of HTTP/3
