@@ -42,7 +42,7 @@ RUN set -ex; \
   echo "${HTTP_META_TPL_SHA256}  /sub-store/http-meta/tpl.yaml" | sha256sum -c -
 
 # --- Mihomo ---
-ARG MIHOMO_VERSION="1.19.23"
+ARG MIHOMO_VERSION="1.19.24"
 ARG MIHOMO_AMD64_SHA256=""
 ARG MIHOMO_ARM64_SHA256=""
 RUN set -ex; \
@@ -62,7 +62,7 @@ RUN set -ex; \
 
 # --- Sub-Store 后端 ---
 WORKDIR /sub-store
-ARG SUB_STORE_BACKEND_VERSION="2.21.95"
+ARG SUB_STORE_BACKEND_VERSION="2.22.5"
 ARG SUB_STORE_BACKEND_SHA256=""
 RUN set -ex; \
   [ -n "${SUB_STORE_BACKEND_SHA256}" ] || { echo "ERROR: SUB_STORE_BACKEND_SHA256 build-arg required"; exit 1; }; \
@@ -71,7 +71,7 @@ RUN set -ex; \
 
 # --- Sub-Store 前端 ---
 WORKDIR /app/frontend
-ARG SUB_STORE_FRONTEND_VERSION="2.16.52"
+ARG SUB_STORE_FRONTEND_VERSION="2.16.57"
 ENV SUB_STORE_WEBBASEPATH="sub-store"
 # pnpm store 缓存挂载 → 跨构建复用 npm 依赖下载
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
@@ -178,7 +178,7 @@ RUN set -ex; \
   mv /tmp/cloudflared /usr/local/bin/
 
 # --- X-UI ---
-ARG XUI_VERSION="2.8.11"
+ARG XUI_VERSION="2.9.0"
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
   set -ex; \
@@ -198,7 +198,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
   mv sui /usr/local/bin/
 
 # --- Sing-box ---
-ARG SING_BOX_VERSION="1.13.8"
+ARG SING_BOX_VERSION="1.13.9"
 ARG SING_BOX_AMD64_SHA256=""
 ARG SING_BOX_ARM64_SHA256=""
 RUN set -ex; \
@@ -217,7 +217,7 @@ RUN set -ex; \
   mv /tmp/sing-box /usr/local/bin/
 
 # --- Xray ---
-ARG XRAY_VERSION="26.4.13"
+ARG XRAY_VERSION="26.4.17"
 # 完整性：从上游发布的 ${BINARY_FILE}.dgst 文件中提取 SHA2-256 字段校验
 RUN set -ex; \
   case "${TARGETARCH}" in \
@@ -258,7 +258,11 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
   runtime_pkgs="curl bash iproute2 net-tools tzdata bash-completion ca-certificates python3 py3-pip py3-jinja2 py3-httpx py3-yaml py3-pydantic gettext libc6-compat gcompat vim libqrencode-tools jq sqlite nodejs grep sed coreutils dumb-init"; \
   apk -U add --virtual .runtime-deps ${runtime_pkgs}; \
   echo -e "[global]\nbreak-system-packages = true" > /etc/pip.conf; \
-  pip install -U pip supervisor; \
+  # socksio: httpx transport dep for socks5h:// ISP speed-test proxy. bash
+  # entrypoint.sh used curl which has SOCKS built in; httpx requires it
+  # explicitly or raises ImportError mid-pipeline. Installed via pip
+  # because Alpine 3.22+ py3-socksio lags httpx API changes.
+  pip install -U pip supervisor socksio; \
   rm -rf /tmp/*
 
 # 安装 acme.sh

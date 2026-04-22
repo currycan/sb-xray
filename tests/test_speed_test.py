@@ -75,6 +75,27 @@ def test_measure_converts_bytes_sec_to_mbps(
     assert pytest.approx(mbps, rel=0.01) == 10 * 1024 * 1024 * 8 / 1024 / 1024
 
 
+def test_measure_returns_zero_when_proxy_import_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: when the SOCKS transport dep (socksio) is missing in
+    the runtime image, httpx.Client(proxy='socks5h://...') raises
+    ImportError mid-boot. Bash parity is 'speed failed → 0 Mbps, keep
+    going', not 'crash the whole pipeline'."""
+
+    def _boom(**kw: object) -> st.httpx.Client:
+        raise ImportError("Using SOCKS proxy, but the 'socksio' package is not installed.")
+
+    monkeypatch.setattr(st.httpx, "Client", _boom)
+    mbps = st.measure(
+        "https://speed.test/dl",
+        samples=2,
+        proxy="socks5h://proxy:1080",
+        proxy_auth="u:p",
+    )
+    assert mbps == 0.0
+
+
 def test_measure_returns_zero_when_all_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

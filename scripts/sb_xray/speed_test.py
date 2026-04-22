@@ -32,17 +32,31 @@ _MIN_VALID_BPS: Final[float] = 1024.0  # < 1 KiB/s → connection failed
 
 def _httpx_client(
     *, timeout: float, proxy: str | None = None, proxy_auth: str | None = None
-) -> httpx.Client:
-    """Factory isolated so tests can monkeypatch it with a fake client."""
+) -> httpx.Client | None:
+    """Factory isolated so tests can monkeypatch it with a fake client.
+
+    Returns ``None`` when a SOCKS proxy is requested but the optional
+    ``socksio`` transport dependency is missing — ``measure()`` then
+    gracefully reports 0 Mbps instead of crashing the whole boot
+    pipeline (bash parity: a failed proxy test just yielded 0).
+    """
     if proxy and proxy_auth and "@" not in proxy:
         scheme, _, rest = proxy.partition("://")
         proxy = f"{scheme}://{proxy_auth}@{rest}"
-    return httpx.Client(
-        timeout=timeout,
-        follow_redirects=True,
-        headers={"User-Agent": sbhttp.DEFAULT_UA},
-        proxy=proxy,
-    )
+    try:
+        return httpx.Client(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": sbhttp.DEFAULT_UA},
+            proxy=proxy,
+        )
+    except ImportError as exc:
+        sblog.log(
+            "WARN",
+            f"[测速] httpx 代理依赖缺失 ({exc}); 跳过该节点（视为 0 Mbps）。"
+            " 生产镜像请确认 socksio 已 pip install。",
+        )
+        return None
 
 
 def _sample_once(client: httpx.Client, url: str) -> float:
@@ -125,7 +139,13 @@ def measure(
         + f" | 测速源: {url} | 采样: {samples}次",
     )
 
-    with _httpx_client(timeout=timeout, proxy=proxy, proxy_auth=proxy_auth) as client:
+    client = _httpx_client(timeout=timeout, proxy=proxy, proxy_auth=proxy_auth)
+    if client is None:
+        # Missing proxy transport dep (e.g. socksio for socks5h://). Log
+        # above; return 0 so the caller treats the node as unreachable
+        # instead of propagating the ImportError.
+        return 0.0
+    with client:
         valid: list[float] = []
         for idx in range(1, samples + 1):
             bps = _sample_once(client, url)
