@@ -150,6 +150,73 @@ def _sort_tags_desc(speeds: dict[str, float]) -> list[str]:
     return [t for t, _ in sorted(speeds.items(), key=lambda kv: kv[1], reverse=True)]
 
 
+def _build_sb_urltest_fragment(
+    *,
+    tag: str,
+    speeds: dict[str, float],
+    url: str,
+    interval: str,
+    tolerance_ms: int,
+) -> str:
+    """Internal: one urltest JSON object (used by legacy + per-service builders)."""
+    outbounds = [*_sort_tags_desc(speeds), "direct"]
+    return json.dumps(
+        {
+            "type": "urltest",
+            "tag": tag,
+            "outbounds": outbounds,
+            "url": url,
+            "interval": interval,
+            "tolerance": tolerance_ms,
+            "interrupt_exist_connections": True,
+        },
+        ensure_ascii=False,
+    )
+
+
+def build_sb_urltest_set(
+    speeds: dict[str, float],
+    *,
+    probe: ProbeConfig | None = None,
+) -> str:
+    """Phase 4: legacy ``isp-auto`` urltest plus one per-service balancer.
+
+    Each ``ServiceSpec`` in :data:`~sb_xray.routing.service_spec.SERVICE_SPECS`
+    yields a dedicated ``urltest`` outbound tagged ``isp-auto-<slug>`` that
+    probes the service's real domain (Netflix, OpenAI, etc.). The legacy
+    ``isp-auto`` tag is retained so xray (single-observatory) and
+    back-compat literal assertions keep working.
+
+    Empty speeds → ``""`` (parity with :func:`build_sb_urltest`).
+    Trailing comma is always present for template splice.
+    """
+    if not speeds:
+        return ""
+    from sb_xray.routing.service_spec import SERVICE_SPECS
+
+    cfg = probe or _resolve_probe_config()
+    fragments: list[str] = [
+        _build_sb_urltest_fragment(
+            tag="isp-auto",
+            speeds=speeds,
+            url=cfg.url,
+            interval=cfg.interval,
+            tolerance_ms=cfg.tolerance_ms,
+        )
+    ]
+    for spec in SERVICE_SPECS:
+        fragments.append(
+            _build_sb_urltest_fragment(
+                tag=spec.sb_tag,
+                speeds=speeds,
+                url=spec.probe_url,
+                interval=cfg.interval,
+                tolerance_ms=cfg.tolerance_ms,
+            )
+        )
+    return ",".join(fragments) + ","
+
+
 def build_sb_urltest(
     speeds: dict[str, float],
     *,
@@ -176,18 +243,12 @@ def build_sb_urltest(
     if not speeds:
         return ""
     cfg = probe or _resolve_probe_config()
-    outbounds = [*_sort_tags_desc(speeds), "direct"]
-    payload = json.dumps(
-        {
-            "type": "urltest",
-            "tag": "isp-auto",
-            "outbounds": outbounds,
-            "url": cfg.url,
-            "interval": cfg.interval,
-            "tolerance": cfg.tolerance_ms,
-            "interrupt_exist_connections": True,
-        },
-        ensure_ascii=False,
+    payload = _build_sb_urltest_fragment(
+        tag="isp-auto",
+        speeds=speeds,
+        url=cfg.url,
+        interval=cfg.interval,
+        tolerance_ms=cfg.tolerance_ms,
     )
     return f"{payload},"
 
@@ -411,15 +472,26 @@ def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -
     custom_out = "".join(xray_parts)
     sb_custom_out = "".join(sb_parts)
     probe = _resolve_probe_config()
-    urltest = build_sb_urltest(speeds, probe=probe) if has_isp_nodes else ""
+    from sb_xray.routing.service_spec import per_service_enabled
+
+    per_service = per_service_enabled()
+    if has_isp_nodes:
+        urltest = (
+            build_sb_urltest_set(speeds, probe=probe)
+            if per_service
+            else build_sb_urltest(speeds, probe=probe)
+        )
+    else:
+        urltest = ""
     observatory, balancer = build_xray_balancer(speeds, probe=probe) if has_isp_nodes else ("", "")
     if has_isp_nodes and speeds:
         logger.info(
-            "balancer configured: probe=%s interval=%s tolerance=%dms nodes=%d",
+            "balancer configured: probe=%s interval=%s tolerance=%dms nodes=%d per_service_sb=%s",
             probe.url,
             probe.interval,
             probe.tolerance_ms,
             len(speeds),
+            per_service,
         )
     service_rules = build_xray_service_rules(
         outbounds={

@@ -171,12 +171,54 @@ def _render_xray_templates(workdir: Path) -> None:
         _render_json(tpl, dest)
 
 
+def _snapshot_service_outs() -> dict[str, str | None]:
+    """Phase 4: capture ``*_OUT`` env values before sb.json render."""
+    from sb_xray.routing.service_spec import SERVICE_SPECS
+
+    return {spec.env_var: os.environ.get(spec.env_var) for spec in SERVICE_SPECS}
+
+
+def _override_service_outs_for_sb() -> None:
+    """Phase 4: swap ``*_OUT=isp-auto`` → ``isp-auto-<slug>`` for sb.json.
+
+    Only rewrites entries whose current value is exactly ``"isp-auto"``;
+    direct / proxy-<tag> / user-override values pass through unchanged
+    because the per-service balancer only helps operators who already
+    opted into the auto balancer for that service.
+    """
+    from sb_xray.routing.service_spec import SERVICE_SPECS
+
+    for spec in SERVICE_SPECS:
+        if os.environ.get(spec.env_var, "").strip() == "isp-auto":
+            os.environ[spec.env_var] = spec.sb_tag
+
+
+def _restore_service_outs(snapshot: dict[str, str | None]) -> None:
+    for key, value in snapshot.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 def _render_sing_box_templates(workdir: Path) -> None:
     template_dir = _TEMPLATES / "sing-box"
     dest_dir = workdir / "sing-box"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    for tpl in sorted(template_dir.glob("*.json")):
-        _render_json(tpl, dest_dir / tpl.name)
+
+    from sb_xray.routing.service_spec import per_service_enabled
+
+    enabled = per_service_enabled() and bool(os.environ.get("HAS_ISP_NODES"))
+    snapshot: dict[str, str | None] | None = None
+    if enabled:
+        snapshot = _snapshot_service_outs()
+        _override_service_outs_for_sb()
+    try:
+        for tpl in sorted(template_dir.glob("*.json")):
+            _render_json(tpl, dest_dir / tpl.name)
+    finally:
+        if snapshot is not None:
+            _restore_service_outs(snapshot)
 
 
 def _parse_reverse_domains(raw: str) -> list[str]:
