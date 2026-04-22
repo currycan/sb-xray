@@ -341,22 +341,61 @@ def _envsubst_render(src: Path, dst: Path) -> None:
     dst.write_text(rendered, encoding="utf-8")
 
 
+class CertStageError(RuntimeError):
+    """Fatal error from the cert stage — abort the entire pipeline.
+
+    Raised to abort startup **before** supervisord launches: nginx /
+    xray / sing-box all reference ``${SSL_PATH}/sb_xray_bundle.crt``
+    in their templates, so a missing cert triggers a permanent
+    ``nginx: [emerg] cannot load certificate`` / ``xray: open ...:
+    no such file`` restart loop. Bash ``set -eou pipefail`` had
+    similar fail-fast semantics at the ``acme.sh`` subcommand level;
+    Python makes it explicit so later stages never render configs
+    pointing at files that don't exist.
+    """
+
+
 def issue_bundle_certificate() -> None:
-    """entrypoint.sh:1381 ``issueCertificate sb_xray_bundle …`` wrapper."""
+    """entrypoint.sh:1381 ``issueCertificate sb_xray_bundle …`` wrapper.
+
+    **Fail-fast**: any unrecoverable problem (missing DOMAIN, acme.sh
+    exception, post-install cert files absent) raises
+    :class:`CertStageError`. ``run_pipeline`` lets the exception
+    propagate and Python exits non-zero; docker-compose restart policy
+    then respawns the container, giving the operator time to fix the
+    underlying issue (expired ACME credentials, wrong DNS, etc.).
+    """
     from sb_xray import cert as sbcert
 
     domain = os.environ.get("DOMAIN", "")
     cdn = os.environ.get("CDNDOMAIN", "")
     if not domain or not cdn:
-        sblog.log("WARN", "[cert] DOMAIN/CDNDOMAIN 未就绪,跳过证书签发")
-        return
+        raise CertStageError("DOMAIN/CDNDOMAIN 未设置，无法签发证书")
     params = f"{domain}:ali|{cdn}:cf"
     sblog.log("INFO", f"  [cert] ensure_certificate(sb_xray_bundle, {params})")
     try:
         status = sbcert.ensure_certificate(name="sb_xray_bundle", params=params)
-        sblog.log("INFO", f"  [cert] status={status.value}")
-    except Exception as exc:  # pragma: no cover — don't block boot on cert IO
-        sblog.log("ERROR", f"  [cert] 失败，继续启动: {exc}")
+    except Exception as exc:
+        raise CertStageError(f"ensure_certificate 抛异常: {exc}") from exc
+    sblog.log("INFO", f"  [cert] status={status.value}")
+
+    # Post-install verification: acme.sh --install-cert runs with
+    # check=False so a silent failure (wrong DNS cred, stale zone, etc.)
+    # returns INSTALLED without actually writing the files. Explicit
+    # on-disk check guarantees downstream template stages can't render
+    # configs pointing at non-existent cert paths.
+    ssl_path = Path(os.environ.get("SSL_PATH", "/pki"))
+    expected = [
+        ssl_path / "sb_xray_bundle.crt",
+        ssl_path / "sb_xray_bundle.key",
+        ssl_path / "sb_xray_bundle-ca.crt",
+    ]
+    missing = [p for p in expected if not p.is_file()]
+    if missing:
+        raise CertStageError(
+            "证书安装完成但预期文件缺失 — 检查 DNS 凭据与 acme.sh 日志: "
+            + ", ".join(str(p) for p in missing)
+        )
 
 
 def run_media_probes() -> dict[str, str]:

@@ -72,6 +72,9 @@ def _patch_stage_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
         "ensure_certificate",
         lambda **_kw: sbcert.CertStatus.SKIPPED,
     )
+    # Skip post-install on-disk file verification too — pipeline tests
+    # shouldn't need a real SSL_PATH with fake cert files staged in.
+    monkeypatch.setattr(ep, "issue_bundle_certificate", lambda: None)
     monkeypatch.setattr(sbdh, "ensure_dhparam", lambda **_: False)
     monkeypatch.setattr(sbgeo, "update_geo_data", lambda **_: 0)
     monkeypatch.setattr(sbcfg, "create_config", lambda **_: None)
@@ -462,9 +465,12 @@ def test_trim_subcommand_invokes_trim_runtime_configs(
 # ---------------------------------------------------------------------------
 
 
-def test_issue_bundle_certificate_skips_when_domain_missing(
+def test_issue_bundle_certificate_raises_when_domain_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Missing DOMAIN/CDNDOMAIN is a hard-fail: without cert paths the
+    downstream nginx/xray template stages render references to files
+    that won't exist → FATAL restart loop. Fail fast instead."""
     monkeypatch.delenv("DOMAIN", raising=False)
     monkeypatch.delenv("CDNDOMAIN", raising=False)
 
@@ -474,4 +480,46 @@ def test_issue_bundle_certificate_skips_when_domain_missing(
     import sb_xray.cert as sbcert
 
     monkeypatch.setattr(sbcert, "ensure_certificate", must_not_call)
-    ep.issue_bundle_certificate()
+    with pytest.raises(ep.CertStageError, match="DOMAIN/CDNDOMAIN"):
+        ep.issue_bundle_certificate()
+
+
+def test_issue_bundle_certificate_raises_when_files_missing_post_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: acme.sh --install-cert runs with check=False so a
+    silent failure (wrong DNS cred etc.) returns INSTALLED without
+    writing files. Without post-install verification, downstream
+    nginx/xray then hit 'no such file' and restart-loop forever — the
+    exact failure pattern observed on cn2 prod."""
+    import sb_xray.cert as sbcert
+
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
+    monkeypatch.setenv("SSL_PATH", str(tmp_path))  # empty directory
+    monkeypatch.setattr(
+        sbcert,
+        "ensure_certificate",
+        lambda **_kw: sbcert.CertStatus.INSTALLED,  # "success" but no files
+    )
+    with pytest.raises(ep.CertStageError, match="预期文件缺失"):
+        ep.issue_bundle_certificate()
+
+
+def test_issue_bundle_certificate_passes_when_files_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path: cert files actually on disk after install → no raise."""
+    import sb_xray.cert as sbcert
+
+    for suffix in (".crt", ".key", "-ca.crt"):
+        (tmp_path / f"sb_xray_bundle{suffix}").write_text("x", encoding="utf-8")
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
+    monkeypatch.setenv("SSL_PATH", str(tmp_path))
+    monkeypatch.setattr(
+        sbcert,
+        "ensure_certificate",
+        lambda **_kw: sbcert.CertStatus.SKIPPED,
+    )
+    ep.issue_bundle_certificate()  # no raise
