@@ -7,9 +7,9 @@
   "s_ui": "1.4.1",
   "dufs": "0.45.0",
   "cloudflared": "2026.3.0",
-  "x_ui": "2.9.1",
-  "sing_box": "1.13.9",
-  "xray": "26.3.27",
+  "x_ui": "2.9.2",
+  "sing_box": "1.13.10",
+  "xray": "26.4.17",
   "digests": {
     "mihomo_amd64_sha256": "a1aca7b07037d06d0093320386c54d86e4ed9979394a20034f3e86013a7ae6e7",
     "mihomo_arm64_sha256": "6d4a278e7ace1016f23d7245f6f8911f6f7a4adfba2095704473d937e1911840",
