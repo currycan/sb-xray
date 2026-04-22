@@ -327,23 +327,23 @@ ENV ENABLE_XUI="true"
 ENV ENABLE_SUI="true"
 ENV ENABLE_SHOUTRRR="true"
 
-# isp-auto 优化 (Phase 1-5) — 默认值设计为零行为变化（等价旧版）,
-# 运维可在 docker-compose.yml environment 覆写。详见 docs/04-ops-and-troubleshooting.md §2.6。
-# Phase 1: 可配置 probe URL (Cloudflare 1 MiB endpoint 携带带宽信号)
+# isp-auto 健康选优控制项。默认值开箱即用，运维可在 docker-compose.yml
+# environment 覆写。完整表格与典型组合参见 docs/04-ops-and-troubleshooting.md §2.6。
+# 探测参数
 ENV ISP_PROBE_URL="https://speed.cloudflare.com/__down?bytes=1048576"
 ENV ISP_PROBE_INTERVAL="1m"
 ENV ISP_PROBE_TOLERANCE_MS="300"
-# Phase 2: 结构化 event 日志 + 可选 shoutrrr 推送
+# 结构化事件日志（stdout + 可选 shoutrrr 推送）
 ENV ISP_EVENTS_ENABLED="true"
-# Phase 3: 周期性带宽重测 cron (0 禁用)
+# 周期性带宽重测 cron（0 禁用）
 ENV ISP_RETEST_INTERVAL_HOURS="6"
 ENV ISP_RETEST_DELTA_PCT="15"
 ENV ISP_RETEST_ENABLED="true"
-# Phase 4: sing-box 按服务分桶 (默认关闭;开启后 7 个 urltest × probe → 流量 ×7)
+# sing-box 按服务分桶（默认关闭；开启后探测流量与服务数成正比）
 ENV ISP_PER_SERVICE_SB="false"
-# Phase 5: fallback 策略 + 冷启动 TTL 缓存
-#   ISP_FALLBACK_STRATEGY: direct (默认) / block (fail-closed，拒绝静默走 direct)
+# Fallback 策略：direct / block（fail-closed）
 ENV ISP_FALLBACK_STRATEGY="direct"
+# 冷启动 TTL 缓存
 ENV ISP_SPEED_CACHE_TTL_MIN="60"
 ENV ISP_SPEED_CACHE_ASYNC="true"
 
@@ -451,7 +451,7 @@ VOLUME ${DUFS_SERVE_PATH} ${WORKDIR} ${SUB_STORE_DATA_BASE_PATH} ${LOGDIR} /etc/
 
 STOPSIGNAL SIGTERM
 
-# Python entrypoint (100% orchestration — entrypoint.sh retired in Phase 8).
+# Python entrypoint (100% orchestration — no bash fallback).
 # `run` runs every boot stage in Python and execs supervisord as PID 1.
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]
 CMD  [ "supervisord" ]
