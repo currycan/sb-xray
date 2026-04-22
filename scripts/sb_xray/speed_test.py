@@ -366,15 +366,28 @@ def run_isp_speed_tests(
 
     cached_tag = os.environ.get("ISP_TAG", "").strip()
     if cached_tag:
-        sblog.log("INFO", f"[选路] 命中缓存 ISP_TAG={cached_tag}，跳过测速")
         nodes = _discover_isp_nodes()
-        if nodes:
-            os.environ["HAS_ISP_NODES"] = "true"
-            speeds = {_isp_tag_for(prefix): 0.0 for prefix, *_ in nodes}
-            if cached_tag in speeds:
-                speeds[cached_tag] = _KEEP_ON_CACHE_HIT_MBPS
-            os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(speeds)
-        return
+        available_tags = {_isp_tag_for(prefix) for prefix, *_ in nodes}
+        # Validate the cache: a cached proxy-X tag must correspond to a
+        # still-configured *_ISP_IP env var. Otherwise build_client_and_
+        # server_configs won't emit the proxy-X outbound, and xray will
+        # refuse to start with "outbound tag proxy-X not found". Happens
+        # when the operator removes an ISP from SECRET_FILE without
+        # clearing STATUS_FILE — fall through to a full speed-test run.
+        if cached_tag == "direct" or cached_tag in available_tags:
+            sblog.log("INFO", f"[选路] 命中缓存 ISP_TAG={cached_tag}，跳过测速")
+            if nodes:
+                os.environ["HAS_ISP_NODES"] = "true"
+                speeds = {tag: 0.0 for tag in available_tags}
+                if cached_tag in speeds:
+                    speeds[cached_tag] = _KEEP_ON_CACHE_HIT_MBPS
+                os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(speeds)
+            return
+        sblog.log(
+            "WARN",
+            f"[选路] 缓存 ISP_TAG={cached_tag} 在当前 *_ISP_IP 环境里已不存在 "
+            f"(现有 {sorted(available_tags) or '无'})，清缓存后重新测速",
+        )
 
     _purge_service_caches()
     for v in (

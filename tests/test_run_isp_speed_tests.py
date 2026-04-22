@@ -51,6 +51,36 @@ def test_cache_hit_rebuilds_state_and_skips_measure(
     assert speeds["proxy-cn2-isp"] == 999.0
 
 
+def test_cache_hit_invalidated_when_node_missing_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: operator removes US_ISP_* from SECRET_FILE but
+    STATUS_FILE still has ISP_TAG=proxy-us-isp. Cache-hit path must
+    detect the stale reference and fall through to a fresh measure;
+    otherwise xray later crashes with 'outbound tag proxy-us-isp not
+    found' because build_client_and_server_configs doesn't emit an
+    outbound the env doesn't back."""
+    monkeypatch.setenv("ISP_TAG", "proxy-us-isp")  # cached, but US_ISP_IP absent
+    monkeypatch.setenv("CN2_ISP_IP", "1.2.3.4")
+    monkeypatch.setenv("CN2_ISP_PORT", "1080")
+    monkeypatch.setenv("IP_TYPE", "hosting")
+
+    measured: list[str | None] = []
+
+    def _fake_measure(url, *, samples=1, proxy=None, proxy_auth=None, timeout=5.0, name=None):
+        measured.append(proxy)
+        return 50.0 if proxy else 10.0
+
+    monkeypatch.setattr(sbspeed, "measure", _fake_measure)
+    monkeypatch.setattr(sbspeed, "show_report", lambda *a, **kw: None)
+    sbspeed.run_isp_speed_tests(samples=1)
+
+    # Fell through → direct baseline + CN2 proxy both measured.
+    assert measured, "must have run measure() after cache invalidation"
+    # Fresh ISP_TAG selection — must NOT still be the stale proxy-us-isp.
+    assert os.environ["ISP_TAG"] != "proxy-us-isp"
+
+
 def test_no_isp_env_falls_back_to_direct(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

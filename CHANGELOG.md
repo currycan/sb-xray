@@ -12,7 +12,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed（变更）
 
-- **Entrypoint Python 重写 · Phase 8 — `entrypoint.sh` 彻底退役（100% Python 编排）**：`scripts/entrypoint.sh`（1475 行 bash）物理删除；`scripts/entrypoint.py:run_pipeline` 在容器内按顺序 Python 跑完 16 段启动流水线（`_init_dirs` → `decrypt_remote_secrets` → `probe_base_env` → `run_isp_speed_tests` → 媒体探针 + `ensure_reality_keys/mlkem_keys` → `build_client_and_server_configs` → `issue_bundle_certificate` → `ensure_dhparam` → `update_geo_data` → `create_config` + providers → `trim_runtime_configs` → `init_panels` → `setup_basic_auth` → `install_crontab` → show banner → `os.execvp` supervisord）。新增 `sb_xray.stages/` 子包（`dhparam/geoip/panels/nginx_auth/cron/supervisord/keys`）封装剩余 subprocess 调用；`speed_test.measure` 升级为截断均值 + 标准差 + `[稳定]/[轻微波动]/[波动较大]` CV 标签与 bash §9 逐行对齐；`IspSpeedContext.tolerance` 默认改回 `1.0`（bash `_test_isp_node` 直接 `>` 比较）。`scripts/test_smoke.sh` 所有对 `entrypoint.sh` 的 grep 断言改为针对 `scripts/sb_xray/config_builder.py` 等 Python 模块；Dockerfile `ENTRYPOINT` / readme 文件树 / `docs/01/04/05` / nginx 模板注释全部同步。pytest 从 249 升至 275 条全绿，新增 `test_stages_*` + `test_run_isp_speed_tests` + `test_build_isp_outbounds` 共 8 个测试文件覆盖所有新增 Python 路径。
+- **Entrypoint Python 重写 · Phase 8 — `entrypoint.sh` 彻底退役（100% Python 编排）**：
+  - `scripts/entrypoint.sh`（1475 行 bash）**物理删除**；`scripts/entrypoint.py:run_pipeline` 在容器内顺序执行 15 段 Python 启动流水线（`_init_dirs` → 解密远端密钥库 + source → bootstrap ENV/STATUS → `probe_base_env` → `run_isp_speed_tests` → 媒体探针 → `ensure_all_keys`（Reality + MLKEM768）→ `build_client_and_server_configs` → `issue_bundle_certificate`（fail-fast）→ `ensure_dhparam` → `update_geo_data` → `create_config` + `generate_and_export` + `trim_runtime_configs` → `init_panels` → `setup_basic_auth` → `install_crontab` → banner → `os.execvp` supervisord）。
+  - 新增 `sb_xray/stages/` 子包封装 7 个 subprocess-only 阶段（`dhparam/geoip/panels/nginx_auth/cron/supervisord/keys`）。
+  - `sb_xray.speed_test.measure` 升级为截断均值 + 标准差 + CV `[稳定]/[轻微波动]/[波动较大]` 标签（bash §9 逐行对齐）；`IspSpeedContext.tolerance` 默认回到 `1.0` 匹配 bash `>` 比较。
+  - `_load_env_file` 委托给 `bash -c 'set -a; source "$1"; env -0'` 子进程而非自写解析器 —— 兼容 bash source 的全部语法（quoted / bareword / `export` 前缀 / `$(...)` 命令替换 / heredoc / CRLF / BOM / 注释），并在 SECRET_FILE 里的 7 个 ACME 凭据能覆盖 Dockerfile 里的空字符串占位符（`setdefault` 仅保护非空父值）。
+  - `config_builder._envsubst` 修正为"未定义 `$VAR` 保留原文"（对齐 GNU envsubst），防止 nginx.conf 里的 `$http_*` / `$arg_*` / `$client_ip` 等运行时变量被错误替换为空导致 `invalid number of arguments in "map" directive`。
+  - `routing/isp.py`:`build_xray_balancer` 用 `_unwrap_outer_braces` 精确剥一对 `{}`（老版 `.strip('{}')` 会连带删掉 JSON 内层闭括号）；`build_sb_urltest` 返回值追加尾逗号与 sb.json 模板约定一致。
+  - `sb_xray.cert`:`ensure_certificate` 改为**总是** `--register-account + --issue`（acme.sh 自身幂等，去除易污染的 `_acme_already_has` `--list` 短路）；`--issue` / `--install-cert` 全部检查返回码；`_acme_env()` 将 UPPER_CASE SECRET 凭据翻译为 acme.sh DNS 插件期望的 mixed-case（`Ali_Key`/`Ali_Secret`/`CF_Token`/`CF_Zone_ID`/`CF_Account_ID`）；新 `_issue_failure_hint` 按日志 pattern 给出运维级提示（rate-limit / 凭据缺失 / DNS 传播 / 配额）；`ssl_path` 默认读 `$SSL_PATH`（= `/pki`）与模板一致。
+  - 证书阶段引入 `CertStageError` 快速失败语义：`DOMAIN/CDNDOMAIN` 缺失 / acme.sh 非 0 返回码 / 安装后 `/pki/sb_xray_bundle.{crt,key,-ca.crt}` 文件缺失任一情况都中止 pipeline，Python 退出非 0，docker-compose restart 给运维明确信号，避免下游 nginx/xray 进入 FATAL restart 循环。
+  - `run_isp_speed_tests` cache-hit 路径做环境漂移检测：缓存的 `ISP_TAG` 对应节点已从 `*_ISP_IP` 中移除时，清缓存走完整测速，避免 xray 启动时报 "outbound tag not found"。
+  - `Dockerfile` pip 安装 `socksio` 以支持 `httpx` 的 socks5h:// 代理测速；`pyproject.toml` dep 改为 `httpx[socks]`；speed-test subprocess ImportError 时优雅降级为 0 Mbps（bash parity）。
+  - CA 默认 `ACMESH_SERVER_NAME=letsencrypt`（无需 EAB，支持 DNS-01 wildcard，速率限制宽松）；docker-compose.yml / Dockerfile ENV / docs/02 §4 CA 对照表全部对齐；新增 "Buypass 不支持通配符" 告警。
+  - 启动日志格式简化：去掉 `[步骤 N]` / `[N/15]` 魔法数字，改为 `▸ 阶段描述` + 子阶段域前缀 `[env]/[选路]/[测速]/[ISP]/[media]/[keys]/[cert]/[dhparam]/[geoip]/[nginx-auth]/[panels]/[cron]/[supervisord]/[secrets]/[skip]`。
+  - `scripts/test_smoke.sh` 里所有 `grep entrypoint.sh` 断言重定向到对应的 Python 模块（`sb_xray/config_builder.py` 等）；Dockerfile `ENTRYPOINT` / readme 文件树 / `docs/01/04/05` / nginx 模板注释全部同步。
+  - **pytest 从 249 升至 297 条全绿**，新增 `test_stages_*` / `test_run_isp_speed_tests` / `test_build_isp_outbounds` / `test_cert` 回归 + `test_entrypoint_py` 的 bash-source 委托测试共 30+ 条覆盖新增路径（包含 cn2 prod 7 轮攻坚定位出的每一类根因）。
 
 ### Added（新增功能）
 
