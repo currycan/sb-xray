@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [26.4.22] — 2026-04-22 · Polish: 构建工具链单一真相源 + 预览版过滤修复
+
 ### Fixed（修复）
 
 - **Pre-release 识别改为依赖 GitHub API 元数据而非字符串匹配** —— 上一版用 `tags?per_page=100` + 正则排除 `rc|beta|alpha` 做 stable 过滤，当上游（如 XTLS）把 Pre-release 打成纯数字型 tag（`v26.4.17` 标记 `prerelease: true` 但 tag 名不含 rc/beta/alpha）时，字符串过滤会漏掉，CI 再次把 xray pin 回退为预览版。现 `build.sh:get_latest_stable_tag` 与 `daily-build.yml:get_stable_tag` 改为查 `releases?per_page=100` 并按 `prerelease == false` 布尔过滤 —— 这是 GitHub UI 判定 Pre-release 徽章的唯一真相源。两处注释保留了 v26.4.17 的历史教训，防后续维护者再次换回字符串过滤。同步把 CI 错误写回 `versions.json` 的 `xray: 26.4.17` 手动回退为 `26.3.27`。
@@ -284,6 +286,7 @@ cd /root/sb-xray && docker compose up -d
 
 ---
 
-[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.3.27...HEAD
+[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.4.22...HEAD
+[26.4.22]: https://github.com/currycan/sb-xray/compare/v26.3.27...v26.4.22
 [26.3.27]: https://github.com/currycan/sb-xray/compare/v26.4.17...v26.3.27
 [26.4.17]: https://github.com/currycan/sb-xray/compare/v26.4.14...v26.4.17

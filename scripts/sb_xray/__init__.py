@@ -6,6 +6,6 @@ added phase-by-phase per `.claude/plans/entrypoint-majestic-oasis.md`.
 
 from __future__ import annotations
 
-__version__ = "26.3.27"
+__version__ = "26.4.22"
 
 __all__ = ["__version__"]

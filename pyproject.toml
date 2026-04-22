@@ -1,6 +1,6 @@
 [project]
 name = "sb-xray"
-version = "26.3.27"
+version = "26.4.22"
 description = "sb-xray container entrypoint (Python rewrite)"
 requires-python = ">=3.11"
 dependencies = [
