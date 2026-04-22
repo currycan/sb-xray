@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -179,20 +180,45 @@ def _init_dirs(env_file: Path) -> None:
     _safe_mkdir(Path(os.environ.get("SUB_STORE_DATA_BASE_PATH", "/opt/substore")))
 
 
-def _load_env_file(path: Path) -> None:
-    """Parse ``export KEY='VALUE'`` lines into ``os.environ`` (``setdefault``).
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
-    Missing files are ignored. Shell-set vars always win (first writer).
+
+def _load_env_file(path: Path) -> None:
+    """Parse bash-style env / secret files into ``os.environ``.
+
+    Accepts **both** formats bash ``source`` accepts::
+
+        export KEY='VALUE'     # Dockerfile-generated ENV_FILE / STATUS_FILE
+        KEY=VALUE              # crypctl-decrypted SECRET_FILE (no 'export')
+
+    Without the second form the ACMESH_* / ALI_* / CF_* credentials
+    decrypted from ``${SECRET_FILE}`` never reach ``os.environ`` and
+    ``cert.ensure_certificate`` raises 'required environment variables
+    missing' (entrypoint.sh invoked ``source`` which tolerates both).
+
+    Missing files are ignored. Comments and blank lines are skipped.
+    Shell-set vars always win (``setdefault``).
     """
     if not path.is_file():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
-        if not line.startswith("export "):
+        if not line or line.startswith("#"):
             continue
-        _, _, assign = line.partition("export ")
-        key, _, value_raw = assign.partition("=")
+        # Strip an optional leading `export ` (with or without a space).
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        if not _ASSIGN_RE.match(line):
+            continue
+        key, _, value_raw = line.partition("=")
         value = value_raw.strip()
+        # Strip a trailing inline comment — ``KEY=value # note`` is valid
+        # in sourced bash when value is unquoted. Only applied when value
+        # is *not* quoted (otherwise ``KEY='hash # in value'`` would break).
+        if value and value[0] not in ("'", '"'):
+            hash_idx = value.find(" #")
+            if hash_idx >= 0:
+                value = value[:hash_idx].rstrip()
         # Peel matching surrounding quotes until none remain — some
         # deployments wrote ``export PORT_HY='"9121"'`` (nested quotes from
         # Dockerfile ENV round-tripping). Without this, ``int('"9121"')``

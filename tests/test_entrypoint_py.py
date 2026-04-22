@@ -113,6 +113,48 @@ def test_bootstrap_shell_env_wins(tmp_env_file: Path, monkeypatch: pytest.Monkey
     assert os.environ["DOMAIN"] == "new"
 
 
+def test_load_env_file_accepts_bareword_assignment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SECRET_FILE produced by ``crypctl decrypt`` has plain ``KEY=value``
+    lines (no ``export``). bash ``source`` takes both; Python loader must
+    too or ACMESH_* / ALI_* / CF_* never reach ``os.environ`` and
+    ``cert.ensure_certificate`` raises 'required environment variables
+    missing' even though the decrypted file lives on disk."""
+    secret_file = tmp_path / "secret"
+    secret_file.write_text(
+        "# comment\n"
+        "ACMESH_REGISTER_EMAIL=alice@example.com\n"
+        "ACMESH_SERVER_NAME=letsencrypt\n"
+        'ALI_KEY="ali-key-123"\n'
+        "ALI_SECRET='ali-secret-abc'\n"
+        "CF_TOKEN=cf-token-xyz  # inline comment\n"
+        "\n"
+        "export CF_ZONE_ID='zone-1'\n"  # mixed: export also works
+        "CF_ACCOUNT_ID='acct-1'\n",
+        encoding="utf-8",
+    )
+    for key in (
+        "ACMESH_REGISTER_EMAIL",
+        "ACMESH_SERVER_NAME",
+        "ALI_KEY",
+        "ALI_SECRET",
+        "CF_TOKEN",
+        "CF_ZONE_ID",
+        "CF_ACCOUNT_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    ep._load_env_file(secret_file)
+    assert os.environ["ACMESH_REGISTER_EMAIL"] == "alice@example.com"
+    assert os.environ["ACMESH_SERVER_NAME"] == "letsencrypt"
+    assert os.environ["ALI_KEY"] == "ali-key-123"
+    assert os.environ["ALI_SECRET"] == "ali-secret-abc"
+    assert os.environ["CF_TOKEN"] == "cf-token-xyz"
+    assert os.environ["CF_ZONE_ID"] == "zone-1"
+    assert os.environ["CF_ACCOUNT_ID"] == "acct-1"
+
+
 def test_probe_base_env_persists_fields(
     tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
