@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed（变更）
+
+- **ISP 测速采样器重构（v2）**：跨境 SOCKS5 链路上，v1 的「单次 GET + 1 MiB 文件 + 5s 超时」系统性低估节点带宽 5–20 倍（生产观察：直连 463 Mbps，节点测得 0–21 Mbps）。根因是 TCP slow-start、TLS/SOCKS5 握手、小文件管道填不满三重叠加。
+  - v2 改用 `httpx.stream()` 流式读取：丢弃 `ISP_SPEED_WARMUP_SEC`（默认 1.5s）的 TCP 慢启动段 → 从**首字节之后**开始计时 → 在 `ISP_SPEED_WINDOW_SEC`（默认 8s）或 `ISP_SPEED_MAX_BYTES`（默认 256 MiB）封顶时停止 → 返回结构化 `SampleResult`。
+  - 失败不再静默 `0.0`：输出 `ok / connect_fail / timeout / low_speed / zero_body / proxy_dep_missing` 状态码。整批聚合成 `_ISP_SPEEDS_DIAG_JSON`（`{tag: {status, ok, total, statuses, bytes, window_sec}}`）并附加到 `isp.speed_test.result` 事件。
+  - 新增 `ISP_SPEED_URL_MAP`（JSON `{tag: url}`）按 tag 覆盖探针 URL；默认 Cloudflare 对所有地理位置并非最优。
+  - **Kill switch**：`ISP_SPEED_LEGACY=true` 一键回退 v1 路径（保留至少一个 release）。
+  - **兼容性**：`_ISP_SPEEDS_JSON` schema 仍是 `{tag: float}`，`stages/isp_retest.py:_max_delta_pct` 零改动。首次 cron 重测会因为新旧值差距触发一次 `delta_exceeded` 重启 xray + sing-box（一次性事件，CHANGELOG 在此显式提醒）。
+  - 文件改动：`scripts/sb_xray/speed_test.py`（+500 LoC），`Dockerfile` 暴露 9 个新 ENV，`docker-compose.yml` 示例行，`docs/01-architecture-and-traffic.md` / `docs/04-ops-and-troubleshooting.md` §2.6 新增 v2 小节 + 诊断 runbook。
+  - 测试：新增 `tests/test_speed_test_sampler.py`（13 用例）、`tests/test_speed_test_diagnostics.py`（10 用例）、`tests/test_speed_test_url_map.py`（8 用例）；现有 `tests/test_speed_test.py` + `tests/test_run_isp_speed_tests.py` 扩展兼容层。全量 413 通过。
+
 ## [26.4.22] — 2026-04-22 · Polish: 构建工具链单一真相源 + 预览版过滤修复
 
 ### Fixed（修复）
