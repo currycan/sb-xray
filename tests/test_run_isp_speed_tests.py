@@ -42,6 +42,7 @@ def test_cache_hit_rebuilds_state_and_skips_measure(
         raise AssertionError("measure must not run on ISP_TAG cache hit")
 
     monkeypatch.setattr(sbspeed, "measure", must_not_call)
+    monkeypatch.setattr(sbspeed, "measure_detailed", must_not_call)
     sbspeed.run_isp_speed_tests()
 
     assert os.environ["HAS_ISP_NODES"] == "true"
@@ -71,7 +72,14 @@ def test_cache_hit_invalidated_when_node_missing_from_env(
         measured.append(proxy)
         return 50.0 if proxy else 10.0
 
+    def _fake_measure_detailed(
+        url, *, samples=1, proxy=None, proxy_auth=None, timeout=5.0, name=None
+    ):
+        measured.append(proxy)
+        return (50.0 if proxy else 10.0), {"status": "ok", "ok": samples, "total": samples}
+
     monkeypatch.setattr(sbspeed, "measure", _fake_measure)
+    monkeypatch.setattr(sbspeed, "measure_detailed", _fake_measure_detailed)
     monkeypatch.setattr(sbspeed, "show_report", lambda *a, **kw: None)
     sbspeed.run_isp_speed_tests(samples=1)
 
@@ -121,7 +129,13 @@ def test_isp_nodes_tested_and_fastest_selected(
     def fake_measure(url, *, samples=1, proxy=None, proxy_auth=None, timeout=5.0, name=None):
         return speed_map[proxy]
 
+    def fake_measure_detailed(
+        url, *, samples=1, proxy=None, proxy_auth=None, timeout=5.0, name=None
+    ):
+        return speed_map[proxy], {"status": "ok", "ok": samples, "total": samples}
+
     monkeypatch.setattr(sbspeed, "measure", fake_measure)
+    monkeypatch.setattr(sbspeed, "measure_detailed", fake_measure_detailed)
     monkeypatch.setattr(sbspeed, "show_report", lambda *a, **kw: None)
     sbspeed.run_isp_speed_tests(samples=1)
 
@@ -136,6 +150,11 @@ def test_isp_nodes_tested_and_fastest_selected(
 
 def test_status_file_is_written(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sbspeed, "measure", lambda *a, **kw: 5.0)
+    monkeypatch.setattr(
+        sbspeed,
+        "measure_detailed",
+        lambda *a, **kw: (5.0, {"status": "ok", "ok": 1, "total": 1}),
+    )
     monkeypatch.setattr(sbspeed, "show_report", lambda *a, **kw: None)
     sbspeed.run_isp_speed_tests(samples=1)
     status = (tmp_path / "status").read_text(encoding="utf-8")

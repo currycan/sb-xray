@@ -244,6 +244,39 @@ def _truncated_mean_with_stability(
     return round(trimmed_mean_mbps, 2), round(stddev, 2), label
 
 
+def _aggregate_diag(statuses: list[str], samples: list[SampleResult]) -> dict[str, object]:
+    """Summarize a batch of v2 SampleResults into a single per-tag diag record.
+
+    Schema (stable, consumed by _ISP_SPEEDS_DIAG_JSON + event payload):
+      - ``status``: overall classification — ``ok`` (all ok),
+        the shared failure code if all samples share one, or
+        ``mixed`` if samples disagree.
+      - ``ok``: count of status=="ok" samples.
+      - ``total``: total samples attempted.
+      - ``statuses``: per-sample list for deep troubleshooting.
+      - ``bytes``: sum of bytes_read across samples.
+      - ``window_sec``: sum of window_sec across samples.
+    """
+    ok_count = sum(1 for s in statuses if s == "ok")
+    unique = set(statuses)
+    if not statuses:
+        status = "zero_body"
+    elif unique == {"ok"}:
+        status = "ok"
+    elif len(unique) == 1:
+        status = next(iter(unique))
+    else:
+        status = "mixed"
+    return {
+        "status": status,
+        "ok": ok_count,
+        "total": len(statuses),
+        "statuses": list(statuses),
+        "bytes": sum(s.bytes_read for s in samples),
+        "window_sec": round(sum(s.window_sec for s in samples), 2),
+    }
+
+
 def _legacy_sampler_enabled() -> bool:
     """Kill switch: ``ISP_SPEED_LEGACY=true`` routes ``measure()`` through
     the v1 single-GET sampler. Any other value (or unset) runs the v2
@@ -380,6 +413,70 @@ def measure(
     return trimmed_mean
 
 
+def measure_detailed(
+    url: str,
+    *,
+    samples: int = 3,
+    proxy: str | None = None,
+    proxy_auth: str | None = None,
+    timeout: float = 5.0,
+    name: str | None = None,
+) -> tuple[float, dict[str, object]]:
+    """Variant of :func:`measure` that also returns a diag dict.
+
+    Runs the v2 streaming sampler (ignores ``ISP_SPEED_LEGACY`` because
+    diag is a v2-only artefact), aggregates per-sample SampleResults
+    via :func:`_aggregate_diag`, and returns ``(mbps, diag)``.
+
+    For the v1 legacy path, callers should call :func:`measure` directly
+    — diag is not meaningful when the v1 sampler has no structured
+    failure classification.
+    """
+    label_name = name or "节点"
+    effective_timeout = _env_float("ISP_SPEED_TIMEOUT_SEC", _DEFAULT_SAMPLE_TIMEOUT_SEC)
+
+    logger.info(
+        "开始(diag): %s%s | 测速源: %s | 采样: %d次",
+        label_name,
+        f" | 代理: {proxy}" if proxy else "",
+        url,
+        samples,
+    )
+
+    client = _httpx_client(timeout=effective_timeout, proxy=proxy, proxy_auth=proxy_auth)
+    if client is None:
+        return 0.0, {
+            "status": "proxy_dep_missing",
+            "ok": 0,
+            "total": samples,
+            "statuses": ["proxy_dep_missing"] * samples,
+            "bytes": 0,
+            "window_sec": 0.0,
+        }
+
+    with client:
+        results: list[SampleResult] = []
+        for _ in range(samples):
+            result = _stream_measure(
+                client,
+                url,
+                warmup_sec=_env_float("ISP_SPEED_WARMUP_SEC", _DEFAULT_WARMUP_SEC),
+                window_sec=_env_float("ISP_SPEED_WINDOW_SEC", _DEFAULT_WINDOW_SEC),
+                max_bytes=_env_int("ISP_SPEED_MAX_BYTES", _DEFAULT_MAX_BYTES),
+                chunk_bytes=_env_int("ISP_SPEED_CHUNK_BYTES", _DEFAULT_CHUNK_BYTES),
+            )
+            results.append(result)
+
+    valid_bps = [r.mbps * 1024 * 1024 / 8 for r in results if r.status == "ok"]
+    if valid_bps:
+        mbps, _stddev, _label = _truncated_mean_with_stability(valid_bps)
+    else:
+        mbps = 0.0
+
+    diag = _aggregate_diag([r.status for r in results], results)
+    return mbps, diag
+
+
 def rate(mbps: float) -> str:
     """Translate Mbps into the Bash show_report categories."""
     if mbps > _THRESH_8K_HDR:
@@ -424,15 +521,30 @@ class IspSpeedContext:
     (``_test_isp_node``) uses a plain ``awk '>'`` comparison — i.e. any
     strictly larger value wins — so the default is ``1.0`` for parity.
     Raise it only when you want to dampen oscillations on near-ties.
+
+    ``diag`` holds optional v2 sampler per-tag diagnostics
+    (``status`` / ``ok`` / ``total`` / ``bytes`` / ``window_sec``). It is
+    exposed via ``_ISP_SPEEDS_DIAG_JSON`` in the STATUS_FILE *separately*
+    from ``speeds``; the primary ``_ISP_SPEEDS_JSON`` stays
+    ``{tag: float}`` so ``stages/isp_retest.py`` keeps parsing unchanged.
     """
 
     tolerance: float = 1.0
     speeds: dict[str, float] = field(default_factory=dict)
     fastest_tag: str | None = None
     fastest_speed: float = 0.0
+    diag: dict[str, dict[str, object]] = field(default_factory=dict)
 
-    def record(self, tag: str, mbps: float) -> None:
+    def record(
+        self,
+        tag: str,
+        mbps: float,
+        *,
+        diag: dict[str, object] | None = None,
+    ) -> None:
         self.speeds[tag] = mbps
+        if diag is not None:
+            self.diag[tag] = diag
         if self.fastest_tag is None:
             self.fastest_tag = tag
             self.fastest_speed = mbps
@@ -628,18 +740,35 @@ def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
         return ctx
 
     os.environ["HAS_ISP_NODES"] = "true"
-    logger.info("发现 ISP 节点 %d 个，逐节点采样 %d 次", len(nodes), sample_count)
+    legacy = _legacy_sampler_enabled()
+    logger.info(
+        "发现 ISP 节点 %d 个，逐节点采样 %d 次 | sampler=%s",
+        len(nodes),
+        sample_count,
+        "v1" if legacy else "v2",
+    )
     for prefix, ip, port, user, password in nodes:
         tag = _isp_tag_for(prefix)
         proxy_auth = f"{user}:{password}" if user and password else None
-        mbps = measure(
-            url,
-            samples=sample_count,
-            proxy=_proxy_url(ip, port),
-            proxy_auth=proxy_auth,
-        )
+        if legacy:
+            mbps = measure(
+                url,
+                samples=sample_count,
+                proxy=_proxy_url(ip, port),
+                proxy_auth=proxy_auth,
+                name=prefix,
+            )
+            diag: dict[str, object] | None = None
+        else:
+            mbps, diag = measure_detailed(
+                url,
+                samples=sample_count,
+                proxy=_proxy_url(ip, port),
+                proxy_auth=proxy_auth,
+                name=prefix,
+            )
         show_report(mbps, name=prefix)
-        ctx.record(tag, mbps)
+        ctx.record(tag, mbps, diag=diag)
         if ctx.fastest_tag == tag and mbps > 0:
             logger.info("%s: %.2f Mbps → 新最优", tag, mbps)
         else:
@@ -658,6 +787,17 @@ def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
     from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
 
     os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(ctx.speeds)
+
+    # v2: sibling JSON with per-tag status/bytes/window for diagnostics.
+    # Controlled by ISP_SPEED_DIAG_ENABLED (default true). The primary
+    # _ISP_SPEEDS_JSON stays {tag: float} so isp_retest._max_delta_pct
+    # remains schema-compatible with v1.
+    diag_enabled = os.environ.get("ISP_SPEED_DIAG_ENABLED", "true").strip().lower() != "false"
+    if diag_enabled and ctx.diag:
+        diag_json = _json.dumps(ctx.diag)
+        os.environ["_ISP_SPEEDS_DIAG_JSON"] = diag_json
+        _write_status_line("_ISP_SPEEDS_DIAG_JSON", diag_json)
+
     if ctx.fastest_tag:
         os.environ["FASTEST_PROXY_TAG"] = ctx.fastest_tag
         # Bash export name is lowercase (_test_isp_node); mirror it verbatim.
@@ -685,20 +825,22 @@ def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
     )
 
     # Phase 2 observability: structured event so ops can track every
-    # speed-test outcome (boot-time and cron-triggered alike).
+    # speed-test outcome (boot-time and cron-triggered alike). v2 adds
+    # per-tag 'diag' so operators can tell connect_fail from low_speed
+    # from timeout at a glance.
     from sb_xray.events import emit_event
 
-    emit_event(
-        "isp.speed_test.result",
-        {
-            "direct_mbps": round(direct_mbps, 2),
-            "fastest_tag": ctx.fastest_tag or "",
-            "fastest_mbps": round(ctx.fastest_speed, 2),
-            "speeds": {t: round(v, 2) for t, v in ctx.speeds.items()},
-            "isp_tag": decision.isp_tag,
-            "is_8k_smooth": decision.is_8k_smooth,
-        },
-    )
+    payload: dict[str, object] = {
+        "direct_mbps": round(direct_mbps, 2),
+        "fastest_tag": ctx.fastest_tag or "",
+        "fastest_mbps": round(ctx.fastest_speed, 2),
+        "speeds": {t: round(v, 2) for t, v in ctx.speeds.items()},
+        "isp_tag": decision.isp_tag,
+        "is_8k_smooth": decision.is_8k_smooth,
+    }
+    if ctx.diag:
+        payload["diag"] = ctx.diag
+    emit_event("isp.speed_test.result", payload)
 
 
 def run_isp_speed_tests(
