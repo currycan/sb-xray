@@ -244,6 +244,36 @@ def _truncated_mean_with_stability(
     return round(trimmed_mean_mbps, 2), round(stddev, 2), label
 
 
+def _legacy_sampler_enabled() -> bool:
+    """Kill switch: ``ISP_SPEED_LEGACY=true`` routes ``measure()`` through
+    the v1 single-GET sampler. Any other value (or unset) runs the v2
+    streaming sampler introduced by feat(isp-speed-test-v2).
+    """
+    return os.environ.get("ISP_SPEED_LEGACY", "false").strip().lower() == "true"
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("invalid %s=%r — falling back to %s", name, raw, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("invalid %s=%r — falling back to %s", name, raw, default)
+        return default
+
+
 def measure(
     url: str,
     *,
@@ -255,26 +285,46 @@ def measure(
 ) -> float:
     """Sample ``url`` ``samples`` times; return truncated-mean throughput in Mbps.
 
-    Semantics match entrypoint.sh::speed_test:
+    Two sampler implementations exist:
+
+    * **v2 (default)** — streamed measurement with warmup discard, time
+      window, and structured failure classification. Gives accurate
+      results on cross-border SOCKS5 paths where v1 systematically
+      underestimates due to TCP slow-start + small probe file.
+    * **v1 (opt-in via ``ISP_SPEED_LEGACY=true``)** — original single
+      GET + ``resp.content`` + ``time.perf_counter`` wall-clock. Kept as
+      a kill switch for one release cycle.
+
+    Both paths share the same post-processing:
       - samples < 1 KiB/s are discarded as failed connections;
       - with ≥3 valid samples, drop min + max before averaging (truncated mean);
-      - compute population stddev across ALL valid samples to surface the
-        raw variability (not the trimmed one);
-      - log a ``[稳定]/[轻微波动]/[波动较大]`` label based on CV vs. thresholds
-        (<0.2 / <0.5 / else).
+      - compute population stddev across ALL valid samples to surface
+        the raw variability;
+      - log a ``[稳定]/[轻微波动]/[波动较大]`` label based on CV.
 
     ``name`` is surfaced in the summary log line when supplied.
     """
     label_name = name or "节点"
+    legacy = _legacy_sampler_enabled()
+    sampler_tag = "v1" if legacy else "v2"
+
+    # v2 needs a longer transport timeout than v1's 5s because a single
+    # sample covers warmup + measurement window + slack. Respect the
+    # caller's explicit override when it differs from the v1 default.
+    effective_timeout = timeout
+    if not legacy and timeout == 5.0:
+        effective_timeout = _env_float("ISP_SPEED_TIMEOUT_SEC", _DEFAULT_SAMPLE_TIMEOUT_SEC)
+
     logger.info(
-        "开始: %s%s | 测速源: %s | 采样: %d次",
+        "开始: %s%s | 测速源: %s | 采样: %d次 | sampler=%s",
         label_name,
         f" | 代理: {proxy}" if proxy else "",
         url,
         samples,
+        sampler_tag,
     )
 
-    client = _httpx_client(timeout=timeout, proxy=proxy, proxy_auth=proxy_auth)
+    client = _httpx_client(timeout=effective_timeout, proxy=proxy, proxy_auth=proxy_auth)
     if client is None:
         # Missing proxy transport dep (e.g. socksio for socks5h://). Log
         # above; return 0 so the caller treats the node as unreachable
@@ -283,7 +333,23 @@ def measure(
     with client:
         valid: list[float] = []
         for idx in range(1, samples + 1):
-            bps = _sample_once(client, url)
+            if legacy:
+                bps = _sample_once(client, url)
+            else:
+                result = _stream_measure(
+                    client,
+                    url,
+                    warmup_sec=_env_float("ISP_SPEED_WARMUP_SEC", _DEFAULT_WARMUP_SEC),
+                    window_sec=_env_float("ISP_SPEED_WINDOW_SEC", _DEFAULT_WINDOW_SEC),
+                    max_bytes=_env_int("ISP_SPEED_MAX_BYTES", _DEFAULT_MAX_BYTES),
+                    chunk_bytes=_env_int("ISP_SPEED_CHUNK_BYTES", _DEFAULT_CHUNK_BYTES),
+                )
+                # Convert back to bytes/sec for the downstream
+                # _truncated_mean_with_stability input. The round-trip
+                # preserves result.mbps byte-for-byte since that
+                # function's internal conversion is the exact inverse
+                # (bps * 8 / 1024 / 1024).
+                bps = result.mbps * 1024 * 1024 / 8 if result.status == "ok" else 0.0
             kbps = bps / 1024
             mbps_raw = bps * 8 / 1024 / 1024
             logger.info(
