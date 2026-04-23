@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
@@ -24,6 +25,34 @@ import httpx
 from sb_xray import http as sbhttp
 
 logger = logging.getLogger(__name__)
+
+# v2 sampler defaults (see docs/01-architecture-and-traffic.md §speed-test)
+_DEFAULT_WARMUP_SEC: Final[float] = 1.5
+_DEFAULT_WINDOW_SEC: Final[float] = 8.0
+_DEFAULT_MAX_BYTES: Final[int] = 256 * 1024 * 1024
+_DEFAULT_CHUNK_BYTES: Final[int] = 64 * 1024
+_DEFAULT_SAMPLE_TIMEOUT_SEC: Final[float] = 20.0
+
+
+@dataclass(frozen=True)
+class SampleResult:
+    """Outcome of one streamed bandwidth sample.
+
+    ``status`` is one of:
+      - ``ok`` — measurement succeeded above the valid-rate threshold
+      - ``connect_fail`` — stream open / HTTP status failed
+      - ``timeout`` — httpx raised a timeout mid-transfer
+      - ``low_speed`` — measured rate below ``_MIN_VALID_BPS``
+      - ``zero_body`` — stream opened but delivered no bytes
+      - ``proxy_dep_missing`` — upstream reports socksio unavailable
+    """
+
+    mbps: float
+    status: str
+    bytes_read: int
+    window_sec: float
+    proxy_overhead_ms: float = 0.0
+
 
 # Thresholds from the Bash ``show_report`` ladder (Mbps)
 _THRESH_8K_HDR: Final[float] = 100.0
@@ -76,6 +105,107 @@ def _sample_once(client: httpx.Client, url: str) -> float:
         return body_len / elapsed
     except httpx.HTTPError:
         return 0.0
+
+
+def _stream_measure(
+    client: httpx.Client,
+    url: str,
+    *,
+    warmup_sec: float = _DEFAULT_WARMUP_SEC,
+    window_sec: float = _DEFAULT_WINDOW_SEC,
+    max_bytes: int = _DEFAULT_MAX_BYTES,
+    chunk_bytes: int = _DEFAULT_CHUNK_BYTES,
+    clock: Callable[[], float] = time.monotonic,
+) -> SampleResult:
+    """Streamed bandwidth sample with warmup / time-window / byte-cap.
+
+    Key differences from :func:`_sample_once`:
+      * Opens a streaming response (``client.stream``) instead of reading
+        the full body — never materializes >chunk_bytes at once.
+      * Discards the first ``warmup_sec`` of received bytes so that TCP
+        slow-start does not pollute the measured throughput.
+      * Starts the meter clock at **first-byte arrival after warmup**,
+        excluding DNS / TLS / SOCKS5 handshake and TTFB from the
+        denominator.
+      * Halts at ``window_sec`` elapsed *or* ``max_bytes`` transferred,
+        whichever comes first.
+
+    Returns a :class:`SampleResult` with a structured ``status`` so
+    callers can distinguish "node down" from "node slow" from
+    "measurement truncated" instead of all collapsing to ``0.0``.
+    """
+    try:
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            iterator = resp.iter_bytes(chunk_bytes)
+
+            t_first: float | None = None
+            t_warm_end: float | None = None
+            t_meter_start: float | None = None
+            warmup_bytes = 0
+            metered_bytes = 0
+            elapsed = 0.0
+
+            for chunk in iterator:
+                now = clock()
+                clen = len(chunk)
+
+                if t_first is None:
+                    t_first = now
+                    t_warm_end = t_first + warmup_sec
+                    warmup_bytes += clen
+                    continue
+
+                if t_meter_start is None:
+                    assert t_warm_end is not None
+                    if now < t_warm_end:
+                        warmup_bytes += clen
+                        continue
+                    # Warmup is over — this chunk is the first metered one.
+                    t_meter_start = now
+                    metered_bytes = clen
+                    continue
+
+                # Metering phase.
+                metered_bytes += clen
+                elapsed = now - t_meter_start
+                if elapsed >= window_sec or metered_bytes >= max_bytes:
+                    break
+    except httpx.ConnectError:
+        return SampleResult(mbps=0.0, status="connect_fail", bytes_read=0, window_sec=0.0)
+    except httpx.TimeoutException:
+        return SampleResult(mbps=0.0, status="timeout", bytes_read=0, window_sec=0.0)
+    except httpx.HTTPError:
+        return SampleResult(mbps=0.0, status="connect_fail", bytes_read=0, window_sec=0.0)
+
+    if t_first is None:
+        return SampleResult(mbps=0.0, status="zero_body", bytes_read=0, window_sec=0.0)
+
+    if t_meter_start is None:
+        # Never reached the metering window — use warmup data as fallback.
+        total_elapsed = max(clock() - t_first, 1e-9)
+        bps = warmup_bytes / total_elapsed
+        mbps = bps * 8 / 1024 / 1024
+        status = "low_speed" if bps < _MIN_VALID_BPS else "ok"
+        return SampleResult(
+            mbps=mbps,
+            status=status,
+            bytes_read=warmup_bytes,
+            window_sec=total_elapsed,
+        )
+
+    if elapsed <= 0.0:
+        elapsed = max(clock() - t_meter_start, 1e-9)
+
+    bps = metered_bytes / elapsed if elapsed > 0 else 0.0
+    mbps = bps * 8 / 1024 / 1024
+    status = "low_speed" if bps < _MIN_VALID_BPS else "ok"
+    return SampleResult(
+        mbps=mbps,
+        status=status,
+        bytes_read=metered_bytes,
+        window_sec=elapsed,
+    )
 
 
 def _truncated_mean_with_stability(
