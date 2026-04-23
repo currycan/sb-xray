@@ -65,8 +65,9 @@ class _FakeClient:
 def test_measure_converts_bytes_sec_to_mbps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Bash parity: ``awk '{printf "%.2f", s * 8 / 1024 / 1024}'`` — mebibit/s.
+    # v1 semantics: ``awk '{printf "%.2f", s * 8 / 1024 / 1024}'`` — mebibit/s.
     # 10 MiB payload / 1 second elapsed → exactly 80.00 Mibps.
+    monkeypatch.setenv("ISP_SPEED_LEGACY", "true")
     content = b"x" * (10 * 1024 * 1024)
     monkeypatch.setattr(st, "_httpx_client", lambda **_: _FakeClient(content))
     times = iter([0.0, 1.0])
@@ -99,6 +100,8 @@ def test_measure_returns_zero_when_proxy_import_missing(
 def test_measure_returns_zero_when_all_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("ISP_SPEED_LEGACY", "true")
+
     class _BrokenClient:
         def __enter__(self) -> _BrokenClient:
             return self
@@ -118,6 +121,7 @@ def test_measure_returns_zero_when_all_fail(
 def test_measure_averages_valid_samples(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("ISP_SPEED_LEGACY", "true")
     content = b"x" * (1 * 1024 * 1024)  # 1 MiB
     monkeypatch.setattr(st, "_httpx_client", lambda **_: _FakeClient(content))
     # Two samples: first 1.0s (~8 Mbps), second 0.5s (~16 Mbps)
@@ -154,3 +158,143 @@ def test_isp_context_empty() -> None:
     assert ctx.fastest_tag is None
     assert ctx.fastest_speed == 0.0
     assert ctx.speeds == {}
+
+
+# ---- v2 sampler kill switch -------------------------------------------------
+
+
+class _FakeStreamResp:
+    def __init__(self, chunks: list[bytes], status_code: int = 200) -> None:
+        self._chunks = list(chunks)
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def iter_bytes(self, chunk_size: int | None = None):
+        for c in self._chunks:
+            yield c
+
+
+class _FakeStreamCM:
+    def __init__(self, resp: _FakeStreamResp) -> None:
+        self._resp = resp
+
+    def __enter__(self) -> _FakeStreamResp:
+        return self._resp
+
+    def __exit__(self, *a: object) -> None:
+        pass
+
+
+class _FakeV2Client:
+    """Supports both v1 ``.get()`` and v2 ``.stream()`` call sites."""
+
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    def __enter__(self) -> _FakeV2Client:
+        return self
+
+    def __exit__(self, *a: object) -> None:
+        pass
+
+    def get(self, url: str, **kw: object) -> _FakeResponse:
+        return _FakeResponse(self._content)
+
+    def stream(self, method: str, url: str) -> _FakeStreamCM:
+        # Deliver the body in three chunks so the sampler sees a
+        # warmup / meter_start / metered pattern.
+        third = len(self._content) // 3
+        return _FakeStreamCM(
+            _FakeStreamResp(
+                [
+                    self._content[:third],
+                    self._content[third : 2 * third],
+                    self._content[2 * third :],
+                ]
+            )
+        )
+
+
+def test_measure_defaults_to_v2_sampler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default path runs the v2 stream sampler, not _sample_once."""
+    monkeypatch.delenv("ISP_SPEED_LEGACY", raising=False)
+    seen = {"v1": 0, "v2": 0}
+
+    def _fake_stream_measure(*a: object, **kw: object) -> st.SampleResult:
+        seen["v2"] += 1
+        return st.SampleResult(mbps=50.0, status="ok", bytes_read=10_000_000, window_sec=1.0)
+
+    def _fake_sample_once(*a: object, **kw: object) -> float:
+        seen["v1"] += 1
+        return 10 * 1024 * 1024  # 10 MiB/s as bytes
+
+    monkeypatch.setattr(st, "_stream_measure", _fake_stream_measure)
+    monkeypatch.setattr(st, "_sample_once", _fake_sample_once)
+    monkeypatch.setattr(st, "_httpx_client", lambda **_: _FakeV2Client(b"x" * 1024))
+
+    st.measure("https://speed.test/dl", samples=2)
+    assert seen["v2"] == 2
+    assert seen["v1"] == 0
+
+
+def test_measure_honours_legacy_kill_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ISP_SPEED_LEGACY=true routes through the v1 _sample_once."""
+    monkeypatch.setenv("ISP_SPEED_LEGACY", "true")
+    seen = {"v1": 0, "v2": 0}
+
+    def _fake_stream_measure(*a: object, **kw: object) -> st.SampleResult:
+        seen["v2"] += 1
+        return st.SampleResult(mbps=50.0, status="ok", bytes_read=10_000_000, window_sec=1.0)
+
+    def _fake_sample_once(*a: object, **kw: object) -> float:
+        seen["v1"] += 1
+        return 2 * 1024 * 1024  # 2 MiB/s bytes
+
+    monkeypatch.setattr(st, "_stream_measure", _fake_stream_measure)
+    monkeypatch.setattr(st, "_sample_once", _fake_sample_once)
+    monkeypatch.setattr(st, "_httpx_client", lambda **_: _FakeV2Client(b"x" * 1024))
+
+    st.measure("https://speed.test/dl", samples=2)
+    assert seen["v1"] == 2
+    assert seen["v2"] == 0
+
+
+def test_measure_v2_returns_trimmed_mean_of_mbps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v2 path averages SampleResult.mbps via _truncated_mean_with_stability."""
+    monkeypatch.delenv("ISP_SPEED_LEGACY", raising=False)
+    results = iter(
+        [
+            st.SampleResult(mbps=80.0, status="ok", bytes_read=10**7, window_sec=1.0),
+            st.SampleResult(mbps=90.0, status="ok", bytes_read=10**7, window_sec=1.0),
+            st.SampleResult(mbps=100.0, status="ok", bytes_read=10**7, window_sec=1.0),
+        ]
+    )
+    monkeypatch.setattr(st, "_stream_measure", lambda *a, **kw: next(results))
+    monkeypatch.setattr(st, "_httpx_client", lambda **_: _FakeV2Client(b"x" * 1024))
+
+    mbps = st.measure("https://speed.test/dl", samples=3)
+    # n=3 truncated mean drops min (80) + max (100) → returns 90
+    assert pytest.approx(mbps, rel=0.01) == 90.0
+
+
+def test_measure_v2_returns_zero_when_all_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-ok statuses (connect_fail/timeout/zero_body) yield 0 like v1."""
+    monkeypatch.delenv("ISP_SPEED_LEGACY", raising=False)
+
+    def _all_fail(*a: object, **kw: object) -> st.SampleResult:
+        return st.SampleResult(mbps=0.0, status="connect_fail", bytes_read=0, window_sec=0.0)
+
+    monkeypatch.setattr(st, "_stream_measure", _all_fail)
+    monkeypatch.setattr(st, "_httpx_client", lambda **_: _FakeV2Client(b""))
+
+    assert st.measure("https://speed.test/dl", samples=3) == 0.0

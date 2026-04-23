@@ -241,6 +241,54 @@ docker compose restart
 | `ISP_SPEED_CACHE_TTL_MIN` | `60` | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
 | `ISP_SPEED_CACHE_ASYNC` | `true` | 缓存命中时是否后台线程异步刷新速度;`false` 仅用于调试 |
 
+#### v2 带宽采样器（流式 + 预热丢弃 + 时间窗 + 诊断）
+
+v1 单次 GET + 1 MiB 文件 + 5s 超时的采样在跨境 SOCKS5 链路上受 TCP slow-start、TLS/SOCKS5 握手开销和小文件管道填不满三重因素叠加影响，系统性低估节点带宽 5–20 倍。v2 采样器改用 `httpx.stream()` 流式读取 + 时间窗 + 首字节后计时 + 结构化失败码。
+
+| 变量 | 默认 | 作用 |
+|:---|:---|:---|
+| `ISP_SPEED_WINDOW_SEC` | `8.0` | 稳态测速窗口秒数（加长可减少噪声,建议 ≥ 5） |
+| `ISP_SPEED_WARMUP_SEC` | `1.5` | TCP 慢启动预热丢弃秒数；高延迟链路可拉长到 2–3 |
+| `ISP_SPEED_MAX_BYTES` | `268435456` | 单样本字节封顶（256 MiB 默认足够覆盖 1 Gbps 链路在 8s 窗口内跑满） |
+| `ISP_SPEED_CHUNK_BYTES` | `65536` | `iter_bytes` 分块大小；默认 64 KiB 兼顾内存与精度 |
+| `ISP_SPEED_SAMPLES` | `3` | 每个节点外层采样次数；≥ 3 时启用 drop-min/drop-max 截断均值 |
+| `ISP_SPEED_TIMEOUT_SEC` | `20` | 单样本硬超时（应 > warmup + window + 网络缓冲） |
+| `ISP_SPEED_URL_MAP` | `""` | JSON `{"proxy-kr-isp":"https://kr-speed.example/100mb"}`,按 tag 覆盖探针 URL；缺项回退到 `ISP_PROBE_URL` |
+| `ISP_SPEED_DIAG_ENABLED` | `true` | 是否把 `_ISP_SPEEDS_DIAG_JSON`（每 tag 诊断）写入 STATUS_FILE 和 event payload |
+| `ISP_SPEED_LEGACY` | `false` | **Kill switch** — 置 `true` 回退到 v1 单次 GET 采样器（保留至少一个 release 以防新算法在某台机器上水土不服） |
+| `ISP_SPEED_RTT_ADAPTIVE` | `false` | Opt-in：测速前发一次 HEAD 探 RTT，按 `max(warmup, 10 × RTT)` 拉长预热窗口（封顶 5s）；RTT 高的跨境链路可避开更长的 TCP slow-start |
+
+**读懂 `_ISP_SPEEDS_DIAG_JSON`**
+
+每次测速后，`/.env/status` 多写一行：
+
+```
+export _ISP_SPEEDS_DIAG_JSON='{"proxy-la-isp":{"status":"ok","ok":3,"total":3,"statuses":["ok","ok","ok"],"bytes":100663296,"window_sec":24.0},"proxy-kr-isp":{"status":"connect_fail","ok":0,"total":3,"statuses":["connect_fail","connect_fail","connect_fail"],"bytes":0,"window_sec":0.0}}'
+```
+
+字段含义：
+
+| 字段 | 含义 |
+|:---|:---|
+| `status` | 整体分类：`ok` = 全部采样成功；`mixed` = 部分成功；单一失败码（`connect_fail` / `timeout` / `low_speed` / `zero_body` / `proxy_dep_missing`）= 全部同类失败 |
+| `ok` | 成功采样数（status=="ok"） |
+| `total` | 总采样数 |
+| `statuses` | 每次采样的原始状态列表，便于排查偶发抖动 |
+| `bytes` | 所有采样的 metered 字节总和（排除 warmup） |
+| `window_sec` | 所有采样的 metered 时长总和（排除 warmup） |
+
+失败码对照：
+
+| 状态码 | 含义 | 排查方向 |
+|:---|:---|:---|
+| `ok` | 成功且速率 ≥ 1 KiB/s | 正常 |
+| `connect_fail` | SOCKS5 / TLS / HTTP 握手失败 或 4xx/5xx | 节点 IP:PORT 不通 / 凭据错 / 探针 URL 被节点屏蔽 |
+| `timeout` | httpx 读取超时 | RTT 过高 / 节点严重拥塞；尝试拉长 `ISP_SPEED_TIMEOUT_SEC` |
+| `low_speed` | 测得速率 < 1 KiB/s | 节点真的很慢 / 链路被限速 |
+| `zero_body` | 流开启但零字节 | 节点接受连接后立即关闭 — 检查认证或节点状态 |
+| `proxy_dep_missing` | 镜像缺 `socksio` | 升级镜像或 `pip install httpx[socks]` |
+| `mixed` | 采样间结果不一致 | 节点状态抖动，观察 `statuses` 找规律 |
+
 > **典型组合**
 > - **小内存节点（OOM 敏感）**: `ISP_PROBE_INTERVAL=5m`, `ISP_PER_SERVICE_SB=false`, `ISP_RETEST_INTERVAL_HOURS=12`
 > - **CN / HK / RU 受限地区 fail-closed**: `ISP_FALLBACK_STRATEGY=block`

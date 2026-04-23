@@ -60,6 +60,15 @@ services:
       # - ISP_PER_SERVICE_SB=true         # 开启 sing-box 按服务分桶（Netflix/OpenAI/Claude/Gemini/Disney/YouTube 独立 balancer）
       # - ISP_FALLBACK_STRATEGY=block     # CN/HK/RU 拒绝静默走 direct
       # - ISP_RETEST_INTERVAL_HOURS=0     # 完全禁用周期性重测
+      # ── v2 带宽采样器（流式 + 预热 + 时间窗 + 诊断），默认值已在 Dockerfile 注册
+      # - ISP_SPEED_WINDOW_SEC=8          # 稳态测速窗口秒数（加长可减少噪声）
+      # - ISP_SPEED_WARMUP_SEC=1.5        # TCP 慢启动预热丢弃秒数
+      # - ISP_SPEED_MAX_BYTES=268435456   # 单样本字节封顶（256 MiB 覆盖 1 Gbps）
+      # - ISP_SPEED_SAMPLES=3             # 每个节点外层采样次数
+      # - ISP_SPEED_TIMEOUT_SEC=20        # 单样本硬超时
+      # - ISP_SPEED_URL_MAP='{"proxy-kr-isp":"https://kr-speed.example/100mb"}'  # 按 tag 覆盖探针 URL
+      # - ISP_SPEED_DIAG_ENABLED=false    # 关闭 _ISP_SPEEDS_DIAG_JSON（默认开）
+      # - ISP_SPEED_LEGACY=true           # kill switch：回退到 v1 单次 GET 采样器
     ports:
       - "443:443/tcp"
       - "443:443/udp" # use UDP for usage of HTTP/3

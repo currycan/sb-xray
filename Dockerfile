@@ -346,6 +346,27 @@ ENV ISP_FALLBACK_STRATEGY="direct"
 # 冷启动 TTL 缓存
 ENV ISP_SPEED_CACHE_TTL_MIN="60"
 ENV ISP_SPEED_CACHE_ASYNC="true"
+# v2 带宽采样器（流式 + 预热丢弃 + 时间窗 + 结构化诊断）
+#   ISP_SPEED_WINDOW_SEC       稳态测速窗口（秒）
+#   ISP_SPEED_WARMUP_SEC       丢弃的 TCP 慢启动预热时长（秒）
+#   ISP_SPEED_MAX_BYTES        单样本字节封顶（256 MiB 默认可覆盖 1 Gbps 链路）
+#   ISP_SPEED_CHUNK_BYTES      iter_bytes 分块大小
+#   ISP_SPEED_SAMPLES          外层采样次数
+#   ISP_SPEED_TIMEOUT_SEC      单样本硬超时
+#   ISP_SPEED_URL_MAP          JSON {tag: url}，按节点覆盖探针 URL（默认空 = 全部用 ISP_PROBE_URL）
+#   ISP_SPEED_DIAG_ENABLED     是否把 _ISP_SPEEDS_DIAG_JSON 写入 STATUS_FILE / event
+#   ISP_SPEED_LEGACY           kill switch：true 回退到 v1 单次 GET 采样器
+ENV ISP_SPEED_WINDOW_SEC="8.0"
+ENV ISP_SPEED_WARMUP_SEC="1.5"
+ENV ISP_SPEED_MAX_BYTES="268435456"
+ENV ISP_SPEED_CHUNK_BYTES="65536"
+ENV ISP_SPEED_SAMPLES="3"
+ENV ISP_SPEED_TIMEOUT_SEC="20"
+ENV ISP_SPEED_URL_MAP=""
+ENV ISP_SPEED_DIAG_ENABLED="true"
+ENV ISP_SPEED_LEGACY="false"
+#   ISP_SPEED_RTT_ADAPTIVE   opt-in：测速前 HEAD 探 RTT，按需拉长 warmup（封顶 5s）
+ENV ISP_SPEED_RTT_ADAPTIVE="false"
 
 WORKDIR ${WORKDIR}
 

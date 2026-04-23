@@ -324,7 +324,7 @@ Entrypoint 有三个子命令:
 |---:|:---|:---|
 | 1 | 加载环境 | 读取 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` 到 `os.environ` |
 | 2 | 基础网络探测 | 检测 IPv4/IPv6、GeoIP、IP_TYPE、受限地区标志 |
-| 3 | ISP 测速选路 | 逐个 ISP 节点带宽实测,按 Mbps 排序写入 `_ISP_SPEEDS_JSON` |
+| 3 | ISP 测速选路 | 逐个 ISP 节点带宽实测（v2 流式采样器：warmup 丢弃 + 时间窗 + 首字节起算 + 结构化诊断），按 Mbps 排序写入 `_ISP_SPEEDS_JSON`；每 tag 诊断写入 `_ISP_SPEEDS_DIAG_JSON`（见 [§2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)） |
 | 4 | 流媒体/AI 可达性探针 | 试探 Netflix / OpenAI / Claude / Gemini 等服务的直连状态 |
 | 5 | 密钥对生成 | VLESS UUID、Reality / MLKEM768 密钥、订阅 Token 首次生成并持久化 |
 | 6 | 出站 JSON 装配 | 把 ISP 节点渲染成 xray / sing-box 的 SOCKS5 出站,生成 `isp-auto` balancer |
