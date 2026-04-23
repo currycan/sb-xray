@@ -244,6 +244,51 @@ def _truncated_mean_with_stability(
     return round(trimmed_mean_mbps, 2), round(stddev, 2), label
 
 
+def _resolve_tag_probe_url(tag: str, fallback: str) -> str:
+    """Look up ``tag`` in ``ISP_SPEED_URL_MAP`` JSON; return ``fallback`` if
+    unset, missing, or malformed.
+
+    Example ``ISP_SPEED_URL_MAP``::
+
+        {"proxy-kr-isp": "https://kr-speed.example/100mb",
+         "proxy-us-isp": "https://us-speed.example/100mb"}
+
+    Rationale: a single Cloudflare URL is a poor benchmark across
+    geographies because Cloudflare's routing, per-region PoP load, and
+    any ISP-side CF rate-limiting inject noise that dominates the v2
+    bandwidth signal. Operators can pin a geo-appropriate target per
+    tag — if any tag is not listed, the fallback URL is used so
+    unconfigured deployments keep working.
+    """
+    raw = os.environ.get("ISP_SPEED_URL_MAP", "").strip()
+    if not raw:
+        return fallback
+    try:
+        mapping = _json.loads(raw)
+    except _json.JSONDecodeError:
+        logger.warning("invalid ISP_SPEED_URL_MAP JSON (ignored): %r", raw[:80])
+        return fallback
+    if not isinstance(mapping, dict):
+        return fallback
+    candidate = mapping.get(tag)
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+    return fallback
+
+
+def _adaptive_warmup_sec(*, base: float, rtt_sec: float) -> float:
+    """Extend ``base`` to ``max(base, 10*rtt_sec)`` capped at 5 seconds.
+
+    TCP slow-start doubles cwnd every RTT; 5 doublings (≈ 10 RTTs) clears
+    the exponential ramp on most OSes. For RTT=200ms (cross-border
+    typical) this pulls warmup from 1.5s default to 2.0s. For pathological
+    RTT the cap prevents burning the entire sample budget on warmup.
+    """
+    rtt_sec = max(0.0, rtt_sec)
+    target = max(base, 10.0 * rtt_sec)
+    return min(5.0, target)
+
+
 def _aggregate_diag(statuses: list[str], samples: list[SampleResult]) -> dict[str, object]:
     """Summarize a batch of v2 SampleResults into a single per-tag diag record.
 
@@ -750,9 +795,12 @@ def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
     for prefix, ip, port, user, password in nodes:
         tag = _isp_tag_for(prefix)
         proxy_auth = f"{user}:{password}" if user and password else None
+        # Per-tag URL override (Phase D) — falls back to global ``url``
+        # when ISP_SPEED_URL_MAP is unset or doesn't list this tag.
+        tag_url = _resolve_tag_probe_url(tag, url)
         if legacy:
             mbps = measure(
-                url,
+                tag_url,
                 samples=sample_count,
                 proxy=_proxy_url(ip, port),
                 proxy_auth=proxy_auth,
@@ -761,7 +809,7 @@ def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
             diag: dict[str, object] | None = None
         else:
             mbps, diag = measure_detailed(
-                url,
+                tag_url,
                 samples=sample_count,
                 proxy=_proxy_url(ip, port),
                 proxy_auth=proxy_auth,
