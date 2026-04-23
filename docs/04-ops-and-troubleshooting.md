@@ -256,6 +256,7 @@ v1 单次 GET + 1 MiB 文件 + 5s 超时的采样在跨境 SOCKS5 链路上受 T
 | `ISP_SPEED_URL_MAP` | `""` | JSON `{"proxy-kr-isp":"https://kr-speed.example/100mb"}`,按 tag 覆盖探针 URL；缺项回退到 `ISP_PROBE_URL` |
 | `ISP_SPEED_DIAG_ENABLED` | `true` | 是否把 `_ISP_SPEEDS_DIAG_JSON`（每 tag 诊断）写入 STATUS_FILE 和 event payload |
 | `ISP_SPEED_LEGACY` | `false` | **Kill switch** — 置 `true` 回退到 v1 单次 GET 采样器（保留至少一个 release 以防新算法在某台机器上水土不服） |
+| `ISP_SPEED_RTT_ADAPTIVE` | `false` | Opt-in：测速前发一次 HEAD 探 RTT，按 `max(warmup, 10 × RTT)` 拉长预热窗口（封顶 5s）；RTT 高的跨境链路可避开更长的 TCP slow-start |
 
 **读懂 `_ISP_SPEEDS_DIAG_JSON`**
 

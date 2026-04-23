@@ -289,6 +289,22 @@ def _adaptive_warmup_sec(*, base: float, rtt_sec: float) -> float:
     return min(5.0, target)
 
 
+def _probe_rtt(client: httpx.Client, url: str) -> float | None:
+    """Estimate one-way RTT via a HEAD request. Returns seconds or None.
+
+    Defensive: any transport error falls through as ``None`` so callers
+    can skip adaptive warmup and proceed with the ``base`` value.
+    """
+    try:
+        t0 = time.monotonic()
+        resp = client.head(url)
+        elapsed = time.monotonic() - t0
+        resp.close() if hasattr(resp, "close") else None
+        return max(0.0, elapsed)
+    except httpx.HTTPError:
+        return None
+
+
 def _aggregate_diag(statuses: list[str], samples: list[SampleResult]) -> dict[str, object]:
     """Summarize a batch of v2 SampleResults into a single per-tag diag record.
 
@@ -499,13 +515,29 @@ def measure_detailed(
             "window_sec": 0.0,
         }
 
+    base_warmup = _env_float("ISP_SPEED_WARMUP_SEC", _DEFAULT_WARMUP_SEC)
+    effective_warmup = base_warmup
+    rtt_adaptive = os.environ.get("ISP_SPEED_RTT_ADAPTIVE", "false").strip().lower() == "true"
+
     with client:
+        if rtt_adaptive:
+            rtt = _probe_rtt(client, url)
+            if rtt is not None:
+                effective_warmup = _adaptive_warmup_sec(base=base_warmup, rtt_sec=rtt)
+                logger.info(
+                    "%s | RTT=%.3fs → warmup %.2fs (base=%.2f)",
+                    label_name,
+                    rtt,
+                    effective_warmup,
+                    base_warmup,
+                )
+
         results: list[SampleResult] = []
         for _ in range(samples):
             result = _stream_measure(
                 client,
                 url,
-                warmup_sec=_env_float("ISP_SPEED_WARMUP_SEC", _DEFAULT_WARMUP_SEC),
+                warmup_sec=effective_warmup,
                 window_sec=_env_float("ISP_SPEED_WINDOW_SEC", _DEFAULT_WINDOW_SEC),
                 max_bytes=_env_int("ISP_SPEED_MAX_BYTES", _DEFAULT_MAX_BYTES),
                 chunk_bytes=_env_int("ISP_SPEED_CHUNK_BYTES", _DEFAULT_CHUNK_BYTES),
