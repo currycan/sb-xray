@@ -188,8 +188,8 @@ def render_info_links(out: io.TextIOBase) -> None:
     )
     _print_colored(
         BRIGHT_CYAN,
-        f"🔓 V2rayN-Compat 订阅  {DIM}[mihomo/OpenClash/Karing + 低版 Xray-core · "
-        f"无 VLESS 加密]{RESET}{BRIGHT_CYAN}\n{base}/v2rayn-compat{token_param}",
+        f"🔓 Common 订阅  {DIM}[mihomo/OpenClash/Karing + 低版 Xray-core · "
+        f"无 VLESS 加密 · 7 协议]{RESET}{BRIGHT_CYAN}\n{base}/common{token_param}",
         out=out,
     )
 

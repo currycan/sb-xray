@@ -94,9 +94,9 @@ def test_show_info_links_prints_banner(
     assert "cdn.example.com" in out
     assert "📋 Index" in out
     assert "🚀 V2rayN 订阅" in out
-    assert "🔓 V2rayN-Compat 订阅" in out
+    assert "🔓 Common 订阅" in out
     assert "https://cdn.example.com/sb-xray/v2rayn" in out
-    assert "https://cdn.example.com/sb-xray/v2rayn-compat" in out
+    assert "https://cdn.example.com/sb-xray/common" in out
 
 
 def test_show_info_links_token_block_only_when_token_set(

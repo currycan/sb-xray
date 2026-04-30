@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed（变更）
 
+- **兼容订阅轨重命名为 `common`**：原 `/v2rayn-compat` 分享链接改为 `/common`，`write_subscriptions()` 只生成 `v2rayn` + `common` 两个 base64 订阅文件。`common` 从原 9 条裁剪为 7 条：保留 Hysteria2 / AnyTLS / VMess / XTLS-Reality / Xhttp+Reality直连 / 上行 Xhttp+TLS+CDN 下行 Xhttp+Reality / Xhttp+TLS+CDN 上下行不分离，移除 TUIC 与 `上行Xhttp+Reality下行Xhttp+TLS+CDN`。同步更新 `show` 输出、订阅单测与协议文档。
+
 - **ISP 测速采样器重构（v2）**：跨境 SOCKS5 链路上，v1 的「单次 GET + 1 MiB 文件 + 5s 超时」系统性低估节点带宽 5–20 倍（生产观察：直连 463 Mbps，节点测得 0–21 Mbps）。根因是 TCP slow-start、TLS/SOCKS5 握手、小文件管道填不满三重叠加。
   - v2 改用 `httpx.stream()` 流式读取：丢弃 `ISP_SPEED_WARMUP_SEC`（默认 1.5s）的 TCP 慢启动段 → 从**首字节之后**开始计时 → 在 `ISP_SPEED_WINDOW_SEC`（默认 8s）或 `ISP_SPEED_MAX_BYTES`（默认 256 MiB）封顶时停止 → 返回结构化 `SampleResult`。
   - 失败不再静默 `0.0`：输出 `ok / connect_fail / timeout / low_speed / zero_body / proxy_dep_missing` 状态码。整批聚合成 `_ISP_SPEEDS_DIAG_JSON`（`{tag: {status, ok, total, statuses, bytes, window_sec}}`）并附加到 `isp.speed_test.result` 事件。

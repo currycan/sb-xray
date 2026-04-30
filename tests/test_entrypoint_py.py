@@ -405,7 +405,8 @@ def test_show_subcommand_runs_pipeline(
     assert isinstance(archive, Path)
     assert archive.name == "show-config"
     assert (tmp_path / "subscribe" / "v2rayn").is_file()
-    assert (tmp_path / "subscribe" / "v2rayn-compat").is_file()
+    assert (tmp_path / "subscribe" / "common").is_file()
+    assert not (tmp_path / "subscribe" / "v2rayn-compat").exists()
 
 
 def test_show_pipeline_loads_status_and_secret_files(

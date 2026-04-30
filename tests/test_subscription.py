@@ -82,22 +82,22 @@ def test_xhttp_h3_link(env: None) -> None:
 
 
 def test_write_subscriptions_produces_two_files(tmp_path: Path, env: None) -> None:
+    (tmp_path / "v2rayn-compat").write_text("stale", encoding="utf-8")
     sub.write_subscriptions(output_dir=tmp_path)
     v2rayn = tmp_path / "v2rayn"
-    v2rayn_compat = tmp_path / "v2rayn-compat"
+    common = tmp_path / "common"
     assert v2rayn.is_file()
-    assert v2rayn_compat.is_file()
+    assert common.is_file()
+    assert not (tmp_path / "v2rayn-compat").exists()
     decoded = base64.b64decode(v2rayn.read_text(encoding="utf-8")).decode("utf-8", errors="replace")
     assert "hysteria2://" in decoded or "tuic://" in decoded
 
 
-def test_compat_track_has_no_mlkem(tmp_path: Path, env: None) -> None:
+def test_common_track_has_no_mlkem(tmp_path: Path, env: None) -> None:
     sub.write_subscriptions(output_dir=tmp_path)
-    compat = base64.b64decode((tmp_path / "v2rayn-compat").read_text(encoding="utf-8")).decode(
-        "utf-8"
-    )
-    if "encryption=" in compat:
-        assert "mlkem768" not in compat
+    common = base64.b64decode((tmp_path / "common").read_text(encoding="utf-8")).decode("utf-8")
+    if "encryption=" in common:
+        assert "mlkem768" not in common
 
 
 def test_urlquote_noop_for_plain_string() -> None:
@@ -220,13 +220,22 @@ def test_v2rayn_subscription_includes_all_ten_lines(env: None) -> None:
     assert lines[6].startswith("vless://") and "Xhttp+Reality直连" in lines[6]
 
 
-def test_v2rayn_compat_subscription_has_nine_lines(env: None) -> None:
-    sub_text = sub.build_v2rayn_compat_subscription()
+def test_common_subscription_has_seven_lines(env: None) -> None:
+    sub_text = sub.build_common_subscription()
     lines = sub_text.split("\n")
-    # part1 (5) + part2_compat (4) = 9
-    assert len(lines) == 9
-    # main-only H3 link must NOT be in compat track
+    # part1_common (4) + part2_common (3) = 7
+    assert len(lines) == 7
+    assert lines[0].startswith("hysteria2://")
+    assert lines[1].startswith("anytls://")
+    assert lines[2].startswith("vmess://")
+    assert lines[3].startswith("vless://") and "flow=xtls-rprx-vision" in lines[3]
+    assert "Xhttp+Reality直连" in lines[4]
+    assert "上行Xhttp+TLS+CDN下行Xhttp+Reality" in lines[5]
+    assert "Xhttp+TLS+CDN上下行不分离" in lines[6]
+    assert not any(ln.startswith("tuic://") for ln in lines)
+    assert not any("上行Xhttp+Reality下行Xhttp+TLS+CDN" in ln for ln in lines)
+    # main-only H3 link must NOT be in common track
     assert not any("Xhttp-H3+BBR" in ln for ln in lines)
-    # compat variants must all use mode=packet-up or encryption=none
-    for ln in lines[5:]:
+    # common XHTTP variants must all use mode=packet-up or encryption=none
+    for ln in lines[4:]:
         assert "encryption=none" in ln

@@ -8,9 +8,9 @@ re-subscribe.
 Two subscription tracks are produced:
 
   * ``v2rayn``        — full feature set (ML-KEM-768 + XHTTP obfs + H3)
-  * ``v2rayn-compat`` — ``encryption=none`` + ``mode=packet-up`` for
-                        clients without modern Xray VLESS encryption
-                        (mihomo/OpenClash/Karing).
+  * ``common``        — ``encryption=none`` + ``mode=packet-up`` common
+                        client track without TUIC or split Reality→CDN
+                        downlink.
 
 ``os.environ`` is the single source of truth — callers are expected to
 have bootstrapped ``EnvManager`` first.
@@ -331,15 +331,25 @@ def build_xhttp_h3_link() -> str:
 # show-config.sh concatenation order:
 #   part1 = hysteria2 / tuic / anytls / vmess / vless-vision
 #   part2 = xhttp-h3 / xhttp-reality / up_cdn / up_reality / mix
-#   part2_compat = xhttp-reality_compat / up_cdn_compat / up_reality_compat / mix_compat
+#   part1_common = hysteria2 / anytls / vmess / vless-vision
+#   part2_common = xhttp-reality_compat / up_cdn_compat / mix_compat
 # v2rayn        = part1 + part2
-# v2rayn-compat = part1 + part2_compat
+# common        = part1_common + part2_common
 
 
 def _part1_links() -> list[str]:
     return [
         build_hysteria2_link(),
         build_tuic_link(),
+        build_anytls_link(),
+        build_vmess_link(),
+        build_vless_vision_link(),
+    ]
+
+
+def _part1_common_links() -> list[str]:
+    return [
+        build_hysteria2_link(),
         build_anytls_link(),
         build_vmess_link(),
         build_vless_vision_link(),
@@ -356,11 +366,10 @@ def _part2_main_links() -> list[str]:
     ]
 
 
-def _part2_compat_links() -> list[str]:
+def _part2_common_links() -> list[str]:
     return [
         build_xhttp_reality_link(compat=True),
         build_up_cdn_down_reality_link(compat=True),
-        build_up_reality_down_cdn_link(compat=True),
         build_mix_link(compat=True),
     ]
 
@@ -369,19 +378,20 @@ def build_v2rayn_subscription() -> str:
     return "\n".join(_part1_links() + _part2_main_links())
 
 
-def build_v2rayn_compat_subscription() -> str:
-    return "\n".join(_part1_links() + _part2_compat_links())
+def build_common_subscription() -> str:
+    return "\n".join(_part1_common_links() + _part2_common_links())
 
 
 def write_subscriptions(*, output_dir: Path) -> None:
-    """Write base64-encoded ``v2rayn`` + ``v2rayn-compat`` into ``output_dir``.
+    """Write base64-encoded ``v2rayn`` + ``common`` into ``output_dir``.
 
     Matches ``base64 -w0`` behaviour (no line wrapping, keep ``=`` padding).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "v2rayn-compat").unlink(missing_ok=True)
     for name, content in (
         ("v2rayn", build_v2rayn_subscription()),
-        ("v2rayn-compat", build_v2rayn_compat_subscription()),
+        ("common", build_common_subscription()),
     ):
         encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
         (output_dir / name).write_text(encoded, encoding="utf-8")
