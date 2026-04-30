@@ -310,6 +310,8 @@ _图解：当节点延迟差距小于 300ms 时，系统绝对服从高权重分
 | 🛡️ **StableSmart** | 800ms  | AI-智选（ChatGPT、Claude） | AI 对 IP 变动极敏感，高容忍度防止频繁换区         |
 | 🎬 **MediaSmart**  | 1000ms | 家宽-智选、媒体-智选       | IP 纯净度是**唯一标准**，几乎"只看权重，无视延迟" |
 
+> **Claude / Gemini 稳定入口**：`OneSmartPro.yaml` 中的 `SelectStable` 现在直接以 `家宽-智选` 为首选，后接 `AI-智选`、`默认代理` 等通用兜底；客户端侧不再额外暴露家宽锁定 fallback 分组。需要固定服务端 ISP 出口时，继续使用 §1.3 的 `DEFAULT_ISP` 锁定模式。
+
 ### 2.7 六套 Policy-Priority 策略模板
 
 以下是 `OneSmartPro.yaml` 中定义的完整策略模板（基础权重 + 地区偏好）：
@@ -498,7 +500,7 @@ flowchart TD
 
 | 模板                 | 定位         | 内核          | 核心机制                              | 策略组 | 适用场景                               |
 | :------------------- | :----------- | :------------ | :------------------------------------ | :----: | :------------------------------------- |
-| **OneSmartPro.yaml** | 智能完整版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |  ~40   | OpenClash / Mihomo 自动选择最优节点    |
+| **OneSmartPro.yaml** | 智能完整版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |  46    | OpenClash / Mihomo 自动选择最优节点    |
 | **FallBackPro.yaml** | 故障转移版   | Mihomo        | Fallback 故转 + url-test 自动切换     |  ~50   | OpenClash / ClashMi 稳定优先、自动容灾 |
 | **stash.yaml**       | 移动端精简版 | Clash (Stash) | Fallback 故转 + url-test 自动切换     |  ~25   | iOS / macOS Stash 客户端，精简分流     |
 | **surge.conf**       | Surge 配置   | Surge         | url-test + 正则分组                   |  ~15   | macOS / iOS Surge 客户端               |
