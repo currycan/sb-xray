@@ -45,7 +45,7 @@
 | 7 | **Xhttp+TLS+CDN 上下行不分离** | Xray | TCP/443 | XHTTP, TLS | v2rayn + common | 上下行均经 CDN，服务器 IP 被封的保底 | ⭐⭐⭐ |
 | 8 | **Vmess** (WS-TLS) | Xray | TCP/443 via CDN | WebSocket, CDN | v2rayn + common | 传统兼容，救火 | ⭐⭐ |
 | 9 | **TUIC** | Sing-box | UDP/8443 | QUIC | **仅 v2rayn** | Hysteria2 备选 | ⭐⭐⭐ |
-| 10 | **AnyTLS** | Sing-box | TCP/4433 | TCP 指纹伪装 | v2rayn + common | 企业级防火墙 | ⭐⭐⭐ |
+| 10 | **AnyTLS** | Sing-box | TCP/4433 | TCP 指纹伪装 | **仅 v2rayn** | 企业级防火墙 | ⭐⭐⭐ |
 
 > **阅读路径**：订阅模型是所有协议的公共语境，先读 §1.1；所有 UDP 协议共享 ISP 高峰期 QoS 对策，集中在 §1.2。随后 §1.3–§1.9 按 Xray 系（星级降序 + XHTTP 服务端机制 §1.8 贴近 XHTTP 章节）展开，§1.10–§1.11 为 Sing-box 系，§1.12 为服务端落地代理附录。
 
@@ -58,7 +58,7 @@
 | 订阅 | 面向客户端 | 加密 | 节点数 | 独有节点 |
 |:---|:---|:---|:---:|:---|
 | `/v2rayn` **主轨** | v2rayN / Xray-core **≥ 26.3.27** | **ML-KEM-768** 后量子 | 10 | **XHTTP/3 + BBR**（#3） |
-| `/common` **通用轨** | mihomo / Karing / OpenClash / 旧版 Xray-core（**< 26.3.27**） | `decryption=none` | 7 | 无（不含 H3 / TUIC / 上行 Reality 下行 CDN） |
+| `/common` **通用轨** | mihomo / Karing / OpenClash / 旧版 Xray-core（**< 26.3.27**） | `decryption=none` | 6 | 无（不含 H3 / TUIC / AnyTLS / 上行 Reality 下行 CDN） |
 
 #### 如何判断客户端走哪条轨
 
@@ -464,7 +464,7 @@ flowchart LR
 * **连接方式**: UDP / 固定端口 8443（Dockerfile ENV 定义）
 * **订阅轨**: **仅 `v2rayn` 主轨**（common 轨不含）
 
-> **UDP QoS 对策**：见 §1.2；本协议抗 QoS 强度 ⭐⭐（仅标准 QUIC，依赖高位端口）。TUIC 只保留在 `/v2rayn` 主轨；`common` 会在 Hy2/H3 不可用时直接依赖 TCP 轨（AnyTLS / Reality / XHTTP）。
+> **UDP QoS 对策**：见 §1.2；本协议抗 QoS 强度 ⭐⭐（仅标准 QUIC，依赖高位端口）。TUIC 只保留在 `/v2rayn` 主轨；`common` 会在 Hy2/H3 不可用时直接依赖 TCP 轨（Reality / XHTTP）。
 
 #### 流量图解
 
@@ -492,6 +492,7 @@ flowchart LR
 伪装成任意 HTTPS 流量的 TCP 协议。
 
 * **连接方式**: TCP / 固定端口 4433（Dockerfile ENV 定义）
+* **订阅轨**: **仅 `v2rayn` 主轨**（common 轨不含；mihomo/Karing 等通用客户端的 anytls outbound 在部分 core 版本下 url-test 会持续返回 -1，故仅在已验证可用的 v2rayN / sing-box 客户端轨道暴露）
 
 #### 流量图解
 

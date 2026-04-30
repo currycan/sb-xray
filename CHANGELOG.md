@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed（变更）
 
+- **`common` 订阅轨移除 AnyTLS 节点**：mihomo / OpenClash / Karing 等通用客户端的 anytls outbound 在 mihomo `1.19.24` 及附近版本上出现 url-test 持续返回 `-1` 的回归（上游 commit `9613f02` 重构 22 个 outbound 的 `Base` 初始化路径，对 anytls 字段映射存在静默副作用）。`common` 从 7 条裁剪为 6 条，保留 Hysteria2 / VMess / XTLS-Reality / Xhttp+Reality直连 / 上行 Xhttp+TLS+CDN 下行 Xhttp+Reality / Xhttp+TLS+CDN 上下行不分离。AnyTLS 仍保留在 `/v2rayn` 主轨（v2rayN / sing-box 客户端实现可靠）。同步更新 `show` 输出（"6 协议"）、订阅单测与协议文档（§1.1 表格、§1.10 TUIC 备注、§1.11 AnyTLS 订阅轨标注）。
+
 - **兼容订阅轨重命名为 `common`**：原 `/v2rayn-compat` 分享链接改为 `/common`，`write_subscriptions()` 只生成 `v2rayn` + `common` 两个 base64 订阅文件。`common` 从原 9 条裁剪为 7 条：保留 Hysteria2 / AnyTLS / VMess / XTLS-Reality / Xhttp+Reality直连 / 上行 Xhttp+TLS+CDN 下行 Xhttp+Reality / Xhttp+TLS+CDN 上下行不分离，移除 TUIC 与 `上行Xhttp+Reality下行Xhttp+TLS+CDN`。同步更新 `show` 输出、订阅单测与协议文档。
 
 - **ISP 测速采样器重构（v2）**：跨境 SOCKS5 链路上，v1 的「单次 GET + 1 MiB 文件 + 5s 超时」系统性低估节点带宽 5–20 倍（生产观察：直连 463 Mbps，节点测得 0–21 Mbps）。根因是 TCP slow-start、TLS/SOCKS5 握手、小文件管道填不满三重叠加。

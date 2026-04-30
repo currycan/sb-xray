@@ -331,10 +331,16 @@ def build_xhttp_h3_link() -> str:
 # show-config.sh concatenation order:
 #   part1 = hysteria2 / tuic / anytls / vmess / vless-vision
 #   part2 = xhttp-h3 / xhttp-reality / up_cdn / up_reality / mix
-#   part1_common = hysteria2 / anytls / vmess / vless-vision
+#   part1_common = hysteria2 / vmess / vless-vision
 #   part2_common = xhttp-reality_compat / up_cdn_compat / mix_compat
 # v2rayn        = part1 + part2
 # common        = part1_common + part2_common
+#
+# Note: AnyTLS is intentionally excluded from the common track. Mihomo's
+# anytls outbound silently regresses url-test (-1) on certain core builds,
+# and several common-track clients (legacy Xray-core, Karing) lack a
+# fully compatible anytls implementation. v2rayn track keeps it for
+# v2rayN / sing-box clients that handle anytls reliably.
 
 
 def _part1_links() -> list[str]:
@@ -350,7 +356,6 @@ def _part1_links() -> list[str]:
 def _part1_common_links() -> list[str]:
     return [
         build_hysteria2_link(),
-        build_anytls_link(),
         build_vmess_link(),
         build_vless_vision_link(),
     ]
