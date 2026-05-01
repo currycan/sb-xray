@@ -280,12 +280,15 @@
                 ],
                 "outbound": "block"
             }
-        ]
+        ],
+        "final": "direct"
     },
     "experimental": {
         "cache_file": {
             "enabled": true,
-            "path": "${WORKDIR}/sing-box/cache.db"
+            "path": "${WORKDIR}/sing-box/cache.db",
+            "store_rdrc": true,
+            "rdrc_timeout": "7d"
         }
     }
 }
