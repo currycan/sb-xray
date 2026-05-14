@@ -151,6 +151,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Re-run ISP speed test and hot-reload balancer if composition changed (cron entry).",
     )
 
+    sub.add_parser(
+        "xray-run",
+        help="Clean stale UDS sockets in /dev/shm, then exec xray (supervisord-managed).",
+    )
+
+    sub.add_parser(
+        "xray-exit-listener",
+        help="supervisord eventlistener: log xray exit details (long-running).",
+    )
+
     args, extras = parser.parse_known_args(argv)
     args.extras = extras
 
@@ -197,10 +207,10 @@ def _init_dirs(env_file: Path) -> None:
             logger.debug("mkdir %s skipped: %s", path, exc)
 
     log_dir = Path(os.environ.get("LOGDIR", "/var/log"))
-    for child in ("supervisor", "xray", "sing-box", "dufs", "nginx", "x-ui", "s-ui"):
+    for child in ("supervisor", "xray", "sing-box", "dufs", "nginx", "x-ui"):
         _safe_mkdir(log_dir / child)
 
-    _safe_mkdir(Path(os.environ.get("SUI_DB_FOLDER", "/opt/s-ui")))
+    # _safe_mkdir(Path(os.environ.get("SUI_DB_FOLDER", "/opt/s-ui")))  # s-ui removed
     _safe_mkdir(Path(os.environ.get("SUB_STORE_DATA_BASE_PATH", "/opt/substore")))
 
 
@@ -697,6 +707,17 @@ def main(argv: list[str] | None = None) -> int:
         from sb_xray.stages import isp_retest
 
         return isp_retest.run()
+
+    if args.command == "xray-run":
+        from sb_xray.stages import xray_run
+
+        xray_run.exec_xray()
+        return 0  # exec_xray never returns on success; defensive only.
+
+    if args.command == "xray-exit-listener":
+        from sb_xray.stages import xray_exit_listener
+
+        return xray_exit_listener.run()
 
     logger.info("sb-xray entrypoint.py starting (env_file=%s)", args.env_file)
     return run_pipeline(

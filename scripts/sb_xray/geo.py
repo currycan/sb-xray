@@ -110,22 +110,19 @@ def _restart_xray_if_running(
     socket_path: Path = _SUPERVISOR_SOCKET,
     runner: object = subprocess,
 ) -> None:
-    """只在 supervisord 存活时重启 xray,启动阶段自动无操作。"""
+    """只在 supervisord 存活时重启 xray,启动阶段自动无操作。
+
+    Stale UDS socket 清理由 ``stages/xray_run.py`` 在 supervisord 拉起 xray 前
+    统一执行(覆盖 ISP-switching、cron、autorestart 三条路径),此处只发
+    ``supervisorctl restart``。
+    """
     if not socket_path.is_socket():
         return
     try:
         runner.run(  # type: ignore[attr-defined]
-            ["supervisorctl", "stop", "xray"],
+            ["supervisorctl", "restart", "xray"],
             check=False,
-            timeout=10,
-        )
-        for stale in Path("/dev/shm").glob("uds*"):
-            with contextlib.suppress(OSError):
-                stale.unlink()
-        runner.run(  # type: ignore[attr-defined]
-            ["supervisorctl", "start", "xray"],
-            check=False,
-            timeout=10,
+            timeout=15,
         )
         logger.info("xray 已重启以加载新规则")
     except (subprocess.TimeoutExpired, OSError) as exc:
