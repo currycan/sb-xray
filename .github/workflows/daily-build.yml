@@ -113,7 +113,6 @@ jobs:
             --arg http_meta "$HTTP_META" \
             --arg sub_store_frontend "$SUB_FRONT" \
             --arg sub_store_backend "$SUB_BACK" \
-            # --arg s_ui "$S_UI" \  # s-ui removed
             --arg dufs "$DUFS" \
             --arg cloudflared "$CLOUDFLARED" \
             --arg x_ui "$X_UI" \
@@ -125,7 +124,6 @@ jobs:
               http_meta: $http_meta,
               sub_store_frontend: $sub_store_frontend,
               sub_store_backend: $sub_store_backend,
-              # s_ui: $s_ui,  # s-ui removed
               dufs: $dufs,
               cloudflared: $cloudflared,
               x_ui: $x_ui,
