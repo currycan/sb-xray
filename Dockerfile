@@ -168,13 +168,23 @@ RUN set -ex; \
 
 # --- X-UI ---
 ARG XUI_VERSION="2.9.0"
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-  set -ex; \
-  (git clone --recursive --depth 1 --shallow-submodules --branch v${XUI_VERSION} https://github.com/MHSanaei/3x-ui /app/xui || (sleep 5 && git clone --recursive --depth 1 --shallow-submodules --branch v${XUI_VERSION} https://github.com/MHSanaei/3x-ui /app/xui)); \
-  cd /app/xui && go build -ldflags="-s -w" -trimpath -o x-ui main.go; \
-  upx --lzma --best x-ui; \
-  mv x-ui /usr/local/bin/
+ARG XUI_AMD64_SHA256=""
+ARG XUI_ARM64_SHA256=""
+RUN set -ex; \
+  case "${TARGETARCH}" in \
+    amd64) EXPECTED_SHA="${XUI_AMD64_SHA256}";; \
+    arm64) EXPECTED_SHA="${XUI_ARM64_SHA256}";; \
+    *)     echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
+  esac; \
+  [ -n "${EXPECTED_SHA}" ] || { echo "ERROR: XUI_$(echo "${TARGETARCH}" | tr a-z A-Z)_SHA256 build-arg required"; exit 1; }; \
+  BINARY_FILE="x-ui-linux-${TARGETARCH}.tar.gz"; \
+  curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/${BINARY_FILE}" \
+    "https://github.com/MHSanaei/3x-ui/releases/download/v${XUI_VERSION}/${BINARY_FILE}"; \
+  echo "${EXPECTED_SHA}  /tmp/${BINARY_FILE}" | sha256sum -c -; \
+  tar -xzf "/tmp/${BINARY_FILE}" -C /tmp/; \
+  rm -f "/tmp/${BINARY_FILE}"; \
+  chmod +x /tmp/x-ui; \
+  mv /tmp/x-ui /usr/local/bin/
 
 # s-ui removed
 # COPY --from=s-ui-front-builder /app/s-ui /app/s-ui

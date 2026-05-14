@@ -52,6 +52,8 @@ jobs:
       dufs_arm64_sha256: ${{ steps.versions.outputs.dufs_arm64_sha256 }}
       cloudflared_amd64_sha256: ${{ steps.versions.outputs.cloudflared_amd64_sha256 }}
       cloudflared_arm64_sha256: ${{ steps.versions.outputs.cloudflared_arm64_sha256 }}
+      xui_amd64_sha256: ${{ steps.versions.outputs.xui_amd64_sha256 }}
+      xui_arm64_sha256: ${{ steps.versions.outputs.xui_arm64_sha256 }}
       sing_box_amd64_sha256: ${{ steps.versions.outputs.sing_box_amd64_sha256 }}
       sing_box_arm64_sha256: ${{ steps.versions.outputs.sing_box_arm64_sha256 }}
     steps:
@@ -191,6 +193,7 @@ jobs:
           V_MIHOMO=$(jq -r .mihomo /tmp/new_versions.json)
           V_DUFS=$(jq -r .dufs /tmp/new_versions.json)
           V_CLOUDFLARED=$(jq -r .cloudflared /tmp/new_versions.json)
+          V_XUI=$(jq -r .x_ui /tmp/new_versions.json)
           V_SING_BOX=$(jq -r .sing_box /tmp/new_versions.json)
 
           echo "::group::Fetching asset digests"
@@ -203,6 +206,8 @@ jobs:
           DUFS_ARM64_SHA=$(digest sigoden/dufs "v$V_DUFS" "dufs-v${V_DUFS}-arm-unknown-linux-musleabihf.tar.gz")
           CLOUDFLARED_AMD64_SHA=$(digest cloudflare/cloudflared "$V_CLOUDFLARED" cloudflared-linux-amd64)
           CLOUDFLARED_ARM64_SHA=$(digest cloudflare/cloudflared "$V_CLOUDFLARED" cloudflared-linux-arm64)
+          XUI_AMD64_SHA=$(digest MHSanaei/3x-ui "v$V_XUI" "x-ui-linux-amd64.tar.gz")
+          XUI_ARM64_SHA=$(digest MHSanaei/3x-ui "v$V_XUI" "x-ui-linux-arm64.tar.gz")
           SING_BOX_AMD64_SHA=$(digest SagerNet/sing-box "v$V_SING_BOX" "sing-box-${V_SING_BOX}-linux-amd64.tar.gz")
           SING_BOX_ARM64_SHA=$(digest SagerNet/sing-box "v$V_SING_BOX" "sing-box-${V_SING_BOX}-linux-arm64.tar.gz")
           require_sha http_meta_bundle_sha256  "$HTTP_META_BUNDLE_SHA"
@@ -214,6 +219,8 @@ jobs:
           require_sha dufs_arm64_sha256        "$DUFS_ARM64_SHA"
           require_sha cloudflared_amd64_sha256 "$CLOUDFLARED_AMD64_SHA"
           require_sha cloudflared_arm64_sha256 "$CLOUDFLARED_ARM64_SHA"
+          require_sha xui_amd64_sha256         "$XUI_AMD64_SHA"
+          require_sha xui_arm64_sha256         "$XUI_ARM64_SHA"
           require_sha sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA"
           require_sha sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA"
           echo "::endgroup::"
@@ -231,6 +238,8 @@ jobs:
             --arg dufs_arm64_sha256        "$DUFS_ARM64_SHA" \
             --arg cloudflared_amd64_sha256 "$CLOUDFLARED_AMD64_SHA" \
             --arg cloudflared_arm64_sha256 "$CLOUDFLARED_ARM64_SHA" \
+            --arg xui_amd64_sha256         "$XUI_AMD64_SHA" \
+            --arg xui_arm64_sha256         "$XUI_ARM64_SHA" \
             --arg sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA" \
             --arg sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA" \
             '.digests = {
@@ -243,6 +252,8 @@ jobs:
               dufs_arm64_sha256: $dufs_arm64_sha256,
               cloudflared_amd64_sha256: $cloudflared_amd64_sha256,
               cloudflared_arm64_sha256: $cloudflared_arm64_sha256,
+              xui_amd64_sha256: $xui_amd64_sha256,
+              xui_arm64_sha256: $xui_arm64_sha256,
               sing_box_amd64_sha256: $sing_box_amd64_sha256,
               sing_box_arm64_sha256: $sing_box_arm64_sha256
             }' /tmp/new_versions.json > "$_merged" && mv "$_merged" /tmp/new_versions.json
@@ -324,6 +335,8 @@ jobs:
             DUFS_ARM64_SHA256=${{ needs.check.outputs.dufs_arm64_sha256 }}
             CLOUDFLARED_AMD64_SHA256=${{ needs.check.outputs.cloudflared_amd64_sha256 }}
             CLOUDFLARED_ARM64_SHA256=${{ needs.check.outputs.cloudflared_arm64_sha256 }}
+            XUI_AMD64_SHA256=${{ needs.check.outputs.xui_amd64_sha256 }}
+            XUI_ARM64_SHA256=${{ needs.check.outputs.xui_arm64_sha256 }}
             SING_BOX_AMD64_SHA256=${{ needs.check.outputs.sing_box_amd64_sha256 }}
             SING_BOX_ARM64_SHA256=${{ needs.check.outputs.sing_box_arm64_sha256 }}
 

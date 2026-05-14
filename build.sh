@@ -257,7 +257,6 @@ if [ "$MODE" == "refresh" ]; then
         --arg http_meta            "${HTTP_META_VERSION#v}" \
         --arg sub_store_frontend   "${SUB_STORE_FRONTEND_VERSION#v}" \
         --arg sub_store_backend    "${SUB_STORE_BACKEND_VERSION#v}" \
-        # --arg s_ui                 "${SUI_TAG#v}" \  # s-ui removed
         --arg dufs                 "${DUFS_TAG#v}" \
         --arg cloudflared          "${CLOUDFLARED_VERSION#v}" \
         --arg x_ui                 "${XUI_TAG#v}" \
@@ -290,7 +289,8 @@ echo -e "${BLUE}获取各组件发布文件的 SHA256...${NC}"
 # 11 个 digest key 列表（便于校验/遍历）
 DIGEST_KEYS="http_meta_bundle_sha256 http_meta_tpl_sha256 sub_store_backend_sha256 \
   mihomo_amd64_sha256 mihomo_arm64_sha256 dufs_amd64_sha256 dufs_arm64_sha256 \
-  cloudflared_amd64_sha256 cloudflared_arm64_sha256 sing_box_amd64_sha256 sing_box_arm64_sha256"
+  cloudflared_amd64_sha256 cloudflared_arm64_sha256 xui_amd64_sha256 xui_arm64_sha256 \
+  sing_box_amd64_sha256 sing_box_arm64_sha256"
 
 VERSIONS_JSON_PATH="$(cd "$(dirname "$0")" && pwd)/versions.json"
 
@@ -324,6 +324,8 @@ if [ "$MODE" == "offline" ]; then
     DUFS_ARM64_SHA=$(get_cached_digest dufs_arm64_sha256)
     CLOUDFLARED_AMD64_SHA=$(get_cached_digest cloudflared_amd64_sha256)
     CLOUDFLARED_ARM64_SHA=$(get_cached_digest cloudflared_arm64_sha256)
+    XUI_AMD64_SHA=$(get_cached_digest xui_amd64_sha256)
+    XUI_ARM64_SHA=$(get_cached_digest xui_arm64_sha256)
     SING_BOX_AMD64_SHA=$(get_cached_digest sing_box_amd64_sha256)
     SING_BOX_ARM64_SHA=$(get_cached_digest sing_box_arm64_sha256)
 
@@ -339,7 +341,7 @@ if [ "$MODE" == "offline" ]; then
     fi
 else
     # ---------- 刷新模式：从 GitHub API 获取 digests，写回 versions.json ----------
-    check_gh_rate_limit 6
+    check_gh_rate_limit 7
 
     _extract_arg() { echo "$BUILD_ARGS" | grep -oE "$1=[^ ]+" | cut -d= -f2- | tail -1; }
     MIHOMO_V=$(_extract_arg MIHOMO_VERSION)
@@ -347,6 +349,7 @@ else
     SUB_STORE_BACKEND_V=$(_extract_arg SUB_STORE_BACKEND_VERSION)
     DUFS_V=$(_extract_arg DUFS_VERSION)
     CLOUDFLARED_V=$(_extract_arg CLOUDFLARED_VERSION)
+    XUI_V=$(_extract_arg XUI_VERSION)
     SING_BOX_V=$(_extract_arg SING_BOX_VERSION)
 
     HTTP_META_BUNDLE_SHA=$(get_asset_digest xream/http-meta "$HTTP_META_V" "http-meta.bundle.js")
@@ -358,6 +361,8 @@ else
     DUFS_ARM64_SHA=$(get_asset_digest sigoden/dufs "v$DUFS_V" "dufs-v${DUFS_V}-arm-unknown-linux-musleabihf.tar.gz")
     CLOUDFLARED_AMD64_SHA=$(get_asset_digest cloudflare/cloudflared "$CLOUDFLARED_V" "cloudflared-linux-amd64")
     CLOUDFLARED_ARM64_SHA=$(get_asset_digest cloudflare/cloudflared "$CLOUDFLARED_V" "cloudflared-linux-arm64")
+    XUI_AMD64_SHA=$(get_asset_digest MHSanaei/3x-ui "v$XUI_V" "x-ui-linux-amd64.tar.gz")
+    XUI_ARM64_SHA=$(get_asset_digest MHSanaei/3x-ui "v$XUI_V" "x-ui-linux-arm64.tar.gz")
     SING_BOX_AMD64_SHA=$(get_asset_digest SagerNet/sing-box "v$SING_BOX_V" "sing-box-${SING_BOX_V}-linux-amd64.tar.gz")
     SING_BOX_ARM64_SHA=$(get_asset_digest SagerNet/sing-box "v$SING_BOX_V" "sing-box-${SING_BOX_V}-linux-arm64.tar.gz")
 fi
@@ -371,6 +376,8 @@ _require_sha "DUFS_AMD64_SHA256"        "$DUFS_AMD64_SHA"
 _require_sha "DUFS_ARM64_SHA256"        "$DUFS_ARM64_SHA"
 _require_sha "CLOUDFLARED_AMD64_SHA256" "$CLOUDFLARED_AMD64_SHA"
 _require_sha "CLOUDFLARED_ARM64_SHA256" "$CLOUDFLARED_ARM64_SHA"
+_require_sha "XUI_AMD64_SHA256"         "$XUI_AMD64_SHA"
+_require_sha "XUI_ARM64_SHA256"         "$XUI_ARM64_SHA"
 _require_sha "SING_BOX_AMD64_SHA256"    "$SING_BOX_AMD64_SHA"
 _require_sha "SING_BOX_ARM64_SHA256"    "$SING_BOX_ARM64_SHA"
 
@@ -389,6 +396,8 @@ if [ "$MODE" == "refresh" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
         --arg dufs_arm64_sha256        "$DUFS_ARM64_SHA" \
         --arg cloudflared_amd64_sha256 "$CLOUDFLARED_AMD64_SHA" \
         --arg cloudflared_arm64_sha256 "$CLOUDFLARED_ARM64_SHA" \
+        --arg xui_amd64_sha256         "$XUI_AMD64_SHA" \
+        --arg xui_arm64_sha256         "$XUI_ARM64_SHA" \
         --arg sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA" \
         --arg sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA" \
         '.digests = {
@@ -401,6 +410,8 @@ if [ "$MODE" == "refresh" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
             dufs_arm64_sha256: $dufs_arm64_sha256,
             cloudflared_amd64_sha256: $cloudflared_amd64_sha256,
             cloudflared_arm64_sha256: $cloudflared_arm64_sha256,
+            xui_amd64_sha256: $xui_amd64_sha256,
+            xui_arm64_sha256: $xui_arm64_sha256,
             sing_box_amd64_sha256: $sing_box_amd64_sha256,
             sing_box_arm64_sha256: $sing_box_arm64_sha256
         }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
@@ -417,6 +428,8 @@ BUILD_ARGS="${BUILD_ARGS} \
   --build-arg DUFS_ARM64_SHA256=${DUFS_ARM64_SHA} \
   --build-arg CLOUDFLARED_AMD64_SHA256=${CLOUDFLARED_AMD64_SHA} \
   --build-arg CLOUDFLARED_ARM64_SHA256=${CLOUDFLARED_ARM64_SHA} \
+  --build-arg XUI_AMD64_SHA256=${XUI_AMD64_SHA} \
+  --build-arg XUI_ARM64_SHA256=${XUI_ARM64_SHA} \
   --build-arg SING_BOX_AMD64_SHA256=${SING_BOX_AMD64_SHA} \
   --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA}"
 
