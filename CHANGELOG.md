@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed（修复）
+
+- **xray supervisord autorestart 路径下因 stale UDS socket 死循环** —— 部分小内存节点观察到 xray 进程异常退出后,supervisord 自动拉起时 inbound 报 `bind: address already in use /dev/shm/udsxhttp-compat.sock`,容器进入 "进程 RUNNING 但 inbound 全挂" 的隐性故障(`supervisorctl status` 显示正常,订阅链路对外不可用)。手动 `docker restart` 可恢复(tmpfs 被销毁),但过段时间复发。
+  - 根因:xray 启动时通过 `/dev/shm/uds*.sock` 监听 4 路 UDS inbound(XHTTP / XHTTP-compat / Reality / VMess+WS),崩溃时 sock 文件残留;supervisord `autorestart=true` 只是 `exec xray run`,不清理 stale socket;ISP switching 路径(`geo.py:_restart_xray_if_running`)虽显式 `glob unlink` 清理,但 autorestart 路径完全绕过。
+  - 修复:新增 Python 启动器 `scripts/sb_xray/stages/xray_run.py`,在 `os.execvp("xray", …)` 之前清理 `/dev/shm/uds*.sock`;`templates/supervisord/daemon.ini` 的 `[program:xray]` 改为 `command=python3 /scripts/entrypoint.py xray-run`,使三条路径(autorestart / cron geo-update / ISP switching)统一从干净状态启动。`geo.py` 同步去重(改为单次 `supervisorctl restart xray`,清理交给启动器)。
+  - 配套:新增 supervisord eventlistener `xray_exit_listener`,捕获 `PROCESS_STATE_EXITED` 写入容器日志(`[xray-exit] processname=xray from_state=… pid=… expected=…`),便于后续定位崩溃根因(SIGKILL=-9 → OOM 嫌疑)。
+  - 文件改动:`scripts/sb_xray/stages/xray_run.py`(新),`scripts/sb_xray/stages/xray_exit_listener.py`(新),`scripts/entrypoint.py`(注册 `xray-run` / `xray-exit-listener` 子命令),`templates/supervisord/daemon.ini`(改 `[program:xray]` + 新增 `[eventlistener:xray_exit_listener]`),`scripts/sb_xray/geo.py`(去重)。
+  - 测试:新增 `tests/test_stages_xray_run.py`(6 用例)、`tests/test_stages_xray_exit_listener.py`(7 用例)。全量 430 通过。
+
 ### Changed（变更）
 
 - **`common` 订阅轨移除 AnyTLS 节点**：mihomo / OpenClash / Karing 等通用客户端的 anytls outbound 在 mihomo `1.19.24` 及附近版本上出现 url-test 持续返回 `-1` 的回归（上游 commit `9613f02` 重构 22 个 outbound 的 `Base` 初始化路径，对 anytls 字段映射存在静默副作用）。`common` 从 7 条裁剪为 6 条，保留 Hysteria2 / VMess / XTLS-Reality / Xhttp+Reality直连 / 上行 Xhttp+TLS+CDN 下行 Xhttp+Reality / Xhttp+TLS+CDN 上下行不分离。AnyTLS 仍保留在 `/v2rayn` 主轨（v2rayN / sing-box 客户端实现可靠）。同步更新 `show` 输出（"6 协议"）、订阅单测与协议文档（§1.1 表格、§1.10 TUIC 备注、§1.11 AnyTLS 订阅轨标注）。

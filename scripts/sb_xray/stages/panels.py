@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -65,70 +64,15 @@ def init_xui() -> bool:
     return True
 
 
-def init_sui() -> bool:
-    """Initialise S-UI. Returns True iff the CLI was invoked.
-
-    Required env: ``PUBLIC_USER``, ``PUBLIC_PASSWORD``, ``SUI_PORT``,
-    ``SUI_SUB_PORT``, ``SUI_WEBBASEPATH``, ``SUI_SUB_PATH``, ``DOMAIN``.
-    Optional: ``SUI_DB_FOLDER`` (default ``/opt/s-ui``).
-    """
-    if not _flag_enabled("ENABLE_SUI"):
-        return False
-
-    port = os.environ.get("SUI_PORT", "")
-    sub_port = os.environ.get("SUI_SUB_PORT", "")
-    base_path = os.environ.get("SUI_WEBBASEPATH", "")
-    sub_path = os.environ.get("SUI_SUB_PATH", "")
-    user = os.environ.get("PUBLIC_USER", "")
-    password = os.environ.get("PUBLIC_PASSWORD", "")
-    if not all([port, sub_port, base_path, sub_path, user, password]):
-        logger.warning("S-UI 所需变量未就绪，跳过 setting")
-        return False
-
-    _run(
-        [
-            "sui",
-            "setting",
-            "-port",
-            port,
-            "-subPort",
-            sub_port,
-            "-path",
-            f"/{base_path}",
-            "-subPath",
-            f"/{sub_path}",
-        ]
-    )
-    _run(["sui", "admin", "-password", password, "-username", user])
-
-    db_folder = Path(os.environ.get("SUI_DB_FOLDER", "/opt/s-ui"))
-    db_file = db_folder / "s-ui.db"
-    domain = os.environ.get("DOMAIN", "")
-    if db_file.is_file() and domain:
-        sub_uri = f"https://{domain}/{sub_path}/"
-        _run(
-            [
-                "sqlite3",
-                str(db_file),
-                f"UPDATE settings SET value='{sub_uri}' WHERE key='subURI';",
-            ]
-        )
-    return True
+# s-ui project removed — init_sui disabled
+# def init_sui() -> bool: ...
 
 
 def init_panels() -> None:
-    """Run X-UI + S-UI init with a shared info log banner."""
-    xui_on = _flag_enabled("ENABLE_XUI")
-    sui_on = _flag_enabled("ENABLE_SUI")
-    if not xui_on and not sui_on:
-        logger.info("ENABLE_XUI=ENABLE_SUI=false，两个面板均已禁用，跳过初始化")
+    """Run X-UI init with a shared info log banner."""
+    if not _flag_enabled("ENABLE_XUI"):
+        logger.info("ENABLE_XUI=false，X-UI 面板已禁用，跳过初始化")
         return
 
-    parts: list[str] = []
-    if xui_on:
-        parts.append("X-UI")
-    if sui_on:
-        parts.append("S-UI")
-    logger.info("初始化 %s", " / ".join(parts))
+    logger.info("初始化 X-UI")
     init_xui()
-    init_sui()

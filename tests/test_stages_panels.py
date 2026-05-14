@@ -10,12 +10,9 @@ from sb_xray.stages import panels as sbpanels
 
 @pytest.fixture(autouse=True)
 def _isolate_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reset panel-control flags so leaks from earlier tests (e.g.
-    ``test_config_builder.py`` writes ``ENABLE_SUI=false`` directly into
-    ``os.environ``) don't make ``init_sui`` short-circuit."""
-    monkeypatch.setenv("SUI_DB_FOLDER", str(tmp_path))
+    """Reset panel-control flags so leaks from earlier tests don't affect init_xui."""
     monkeypatch.delenv("ENABLE_XUI", raising=False)
-    monkeypatch.delenv("ENABLE_SUI", raising=False)
+    # monkeypatch.delenv("ENABLE_SUI", raising=False)  # s-ui removed
 
 
 def _common_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,10 +20,11 @@ def _common_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PUBLIC_PASSWORD", "hunter2")
     monkeypatch.setenv("XUI_LOCAL_PORT", "54321")
     monkeypatch.setenv("XUI_WEBBASEPATH", "panel")
-    monkeypatch.setenv("SUI_PORT", "2095")
-    monkeypatch.setenv("SUI_SUB_PORT", "2096")
-    monkeypatch.setenv("SUI_WEBBASEPATH", "sui")
-    monkeypatch.setenv("SUI_SUB_PATH", "sub")
+    # s-ui removed
+    # monkeypatch.setenv("SUI_PORT", "2095")
+    # monkeypatch.setenv("SUI_SUB_PORT", "2096")
+    # monkeypatch.setenv("SUI_WEBBASEPATH", "sui")
+    # monkeypatch.setenv("SUI_SUB_PATH", "sub")
     monkeypatch.setenv("DOMAIN", "vpn.example.com")
 
 
@@ -59,37 +57,21 @@ def test_init_xui_invokes_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     assert commands[1][:2] == ["fail2ban-client", "-x"]
 
 
-def test_init_sui_updates_suburi_when_db_exists(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _common_env(monkeypatch)
-    monkeypatch.setenv("SUI_DB_FOLDER", str(tmp_path))
-    (tmp_path / "s-ui.db").write_text("placeholder", encoding="utf-8")
-
-    commands: list[list[str]] = []
-
-    def fake_run(cmd: list[str], capture: bool = True) -> int:
-        commands.append(cmd)
-        return 0
-
-    monkeypatch.setattr(sbpanels, "_run", fake_run)
-    assert sbpanels.init_sui() is True
-    # sqlite3 invocation must contain the subURI update.
-    assert any(
-        c[0] == "sqlite3" and "subURI" in c[-1] and "https://vpn.example.com/sub/" in c[-1]
-        for c in commands
-    )
+# s-ui removed — test disabled
+# def test_init_sui_updates_suburi_when_db_exists(
+#     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+# ) -> None:
+#     ...
 
 
-def test_init_panels_short_circuits_when_both_disabled(
+# s-ui removed — test updated to only check XUI
+def test_init_panels_short_circuits_when_xui_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ENABLE_XUI", "false")
-    monkeypatch.setenv("ENABLE_SUI", "false")
 
     def must_not_call(*args: object, **kwargs: object) -> object:
-        raise AssertionError("init_xui/init_sui must not run when both disabled")
+        raise AssertionError("init_xui must not run when disabled")
 
     monkeypatch.setattr(sbpanels, "init_xui", must_not_call)
-    monkeypatch.setattr(sbpanels, "init_sui", must_not_call)
     sbpanels.init_panels()  # no raise → pass
