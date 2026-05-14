@@ -169,7 +169,7 @@ if [ "$MODE" == "offline" ]; then
     HTTP_META_VERSION=$(get_cached_version http_meta)
     SUB_STORE_FRONTEND_VERSION=$(get_cached_version sub_store_frontend)
     SUB_STORE_BACKEND_VERSION=$(get_cached_version sub_store_backend)
-    SUI_TAG=$(get_cached_version s_ui)
+    # SUI_TAG=$(get_cached_version s_ui)  # s-ui removed
     DUFS_TAG=$(get_cached_version dufs)
     CLOUDFLARED_VERSION=$(get_cached_version cloudflared)
     XUI_TAG=$(get_cached_version x_ui)
@@ -182,7 +182,7 @@ else
     HTTP_META_VERSION=$(get_latest_release "xream/http-meta")
     SUB_STORE_FRONTEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store-Front-End")
     SUB_STORE_BACKEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store")
-    SUI_TAG=$(get_latest_release "alireza0/s-ui")
+    # SUI_TAG=$(get_latest_release "alireza0/s-ui")  # s-ui removed
     DUFS_TAG=$(get_latest_stable_tag "sigoden/dufs")
     CLOUDFLARED_VERSION=$(get_latest_stable_tag "cloudflare/cloudflared")
     XUI_TAG=$(get_latest_stable_tag "MHSanaei/3x-ui")
@@ -240,7 +240,7 @@ check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"
 check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"
 check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION"
 check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"
-check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"
+# check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"  # s-ui removed
 check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"
 check_version "Cloudflared"     "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSION"
 check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"
@@ -257,7 +257,7 @@ if [ "$MODE" == "refresh" ]; then
         --arg http_meta            "${HTTP_META_VERSION#v}" \
         --arg sub_store_frontend   "${SUB_STORE_FRONTEND_VERSION#v}" \
         --arg sub_store_backend    "${SUB_STORE_BACKEND_VERSION#v}" \
-        --arg s_ui                 "${SUI_TAG#v}" \
+        # --arg s_ui                 "${SUI_TAG#v}" \  # s-ui removed
         --arg dufs                 "${DUFS_TAG#v}" \
         --arg cloudflared          "${CLOUDFLARED_VERSION#v}" \
         --arg x_ui                 "${XUI_TAG#v}" \
@@ -269,7 +269,7 @@ if [ "$MODE" == "refresh" ]; then
             http_meta: $http_meta,
             sub_store_frontend: $sub_store_frontend,
             sub_store_backend: $sub_store_backend,
-            s_ui: $s_ui,
+            # s_ui: $s_ui,  # s-ui removed
             dufs: $dufs,
             cloudflared: $cloudflared,
             x_ui: $x_ui,

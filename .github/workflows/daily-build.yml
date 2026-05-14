@@ -37,7 +37,7 @@ jobs:
       http_meta: ${{ steps.versions.outputs.http_meta }}
       sub_front: ${{ steps.versions.outputs.sub_front }}
       sub_back: ${{ steps.versions.outputs.sub_back }}
-      s_ui: ${{ steps.versions.outputs.s_ui }}
+      # s_ui: ${{ steps.versions.outputs.s_ui }}  # s-ui removed
       dufs: ${{ steps.versions.outputs.dufs }}
       cloudflared: ${{ steps.versions.outputs.cloudflared }}
       x_ui: ${{ steps.versions.outputs.x_ui }}
@@ -98,7 +98,7 @@ jobs:
           HTTP_META=$(get_release "xream/http-meta")
           SUB_FRONT=$(get_release "sub-store-org/Sub-Store-Front-End")
           SUB_BACK=$(get_release "sub-store-org/Sub-Store")
-          S_UI=$(get_release "alireza0/s-ui")
+          # S_UI=$(get_release "alireza0/s-ui")  # s-ui removed
           DUFS=$(get_stable_tag "sigoden/dufs")
           CLOUDFLARED=$(get_stable_tag "cloudflare/cloudflared")
           X_UI=$(get_stable_tag "MHSanaei/3x-ui")
@@ -113,7 +113,7 @@ jobs:
             --arg http_meta "$HTTP_META" \
             --arg sub_store_frontend "$SUB_FRONT" \
             --arg sub_store_backend "$SUB_BACK" \
-            --arg s_ui "$S_UI" \
+            # --arg s_ui "$S_UI" \  # s-ui removed
             --arg dufs "$DUFS" \
             --arg cloudflared "$CLOUDFLARED" \
             --arg x_ui "$X_UI" \
@@ -125,7 +125,7 @@ jobs:
               http_meta: $http_meta,
               sub_store_frontend: $sub_store_frontend,
               sub_store_backend: $sub_store_backend,
-              s_ui: $s_ui,
+              # s_ui: $s_ui,  # s-ui removed
               dufs: $dufs,
               cloudflared: $cloudflared,
               x_ui: $x_ui,
@@ -168,7 +168,7 @@ jobs:
           echo "http_meta=$(jq -r .http_meta /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "sub_front=$(jq -r .sub_store_frontend /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "sub_back=$(jq -r .sub_store_backend /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
-          echo "s_ui=$(jq -r .s_ui /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          # echo "s_ui=$(jq -r .s_ui /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"  # s-ui removed
           echo "dufs=$(jq -r .dufs /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "cloudflared=$(jq -r .cloudflared /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "x_ui=$(jq -r .x_ui /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
@@ -311,7 +311,7 @@ jobs:
             HTTP_META_VERSION=${{ needs.check.outputs.http_meta }}
             SUB_STORE_FRONTEND_VERSION=${{ needs.check.outputs.sub_front }}
             SUB_STORE_BACKEND_VERSION=${{ needs.check.outputs.sub_back }}
-            SUI_VERSION=${{ needs.check.outputs.s_ui }}
+            # SUI_VERSION=${{ needs.check.outputs.s_ui }}  # s-ui removed
             DUFS_VERSION=${{ needs.check.outputs.dufs }}
             CLOUDFLARED_VERSION=${{ needs.check.outputs.cloudflared }}
             XUI_VERSION=${{ needs.check.outputs.x_ui }}

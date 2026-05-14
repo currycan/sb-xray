@@ -22,7 +22,7 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "RANDOM_NUM",
         "ENABLE_SUBSTORE",
         "ENABLE_XUI",
-        "ENABLE_SUI",
+        # "ENABLE_SUI",  # s-ui removed
         "ENABLE_SHOUTRRR",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -271,10 +271,6 @@ def test_create_config_full_flow(
 
 
 _DAEMON_INI_FIXTURE = """\
-[program:s-ui]
-command=sui
-priority=5
-
 [program:x-ui]
 command=x-ui
 priority=5
@@ -328,19 +324,19 @@ def test_filter_supervisord_drops_substore_pair(env: Path, tmp_path: Path) -> No
     text = dest.read_text(encoding="utf-8")
     assert "[program:sub-store]" not in text
     assert "[program:http-meta]" not in text
-    assert "[program:s-ui]" in text  # unaffected
+    # assert "[program:s-ui]" in text  # s-ui removed
     assert "[program:xray]" in text
     assert "[program:nginx]" in text
 
 
-def test_filter_supervisord_drops_multiple_flags(env: Path, tmp_path: Path) -> None:
-    os.environ["ENABLE_SUI"] = "false"
+# s-ui removed — test updated
+def test_filter_supervisord_drops_shoutrrr(env: Path, tmp_path: Path) -> None:
     os.environ["ENABLE_SHOUTRRR"] = "false"
     dest = tmp_path / "daemon.ini"
     dest.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
     cb._filter_supervisord_programs(dest)
     text = dest.read_text(encoding="utf-8")
-    assert "[program:s-ui]" not in text
+    # assert "[program:s-ui]" not in text  # s-ui removed from fixture
     assert "[program:shoutrrr-forwarder]" not in text
     assert "[program:sub-store]" in text
     assert "[program:x-ui]" in text  # ENABLE_XUI unset → kept
@@ -354,22 +350,22 @@ def test_filter_supervisord_drops_xui_when_flag_false(env: Path, tmp_path: Path)
     cb._filter_supervisord_programs(dest)
     text = dest.read_text(encoding="utf-8")
     assert "[program:x-ui]" not in text
-    assert "[program:s-ui]" in text  # 不同开关互不影响
+    # assert "[program:s-ui]" in text  # s-ui removed
     assert "[program:xray]" in text
 
 
+# s-ui removed — test updated
 def test_filter_supervisord_preserves_supervisor_interpolation(env: Path, tmp_path: Path) -> None:
     """``%(ENV_*)s`` must survive filtering verbatim (regex, not configparser)."""
-    os.environ["ENABLE_SUI"] = "false"
     dest = tmp_path / "daemon.ini"
     dest.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
     cb._filter_supervisord_programs(dest)
     assert "%(ENV_SUB_STORE_DOCKER)s" in dest.read_text(encoding="utf-8")
 
 
+# s-ui removed — test updated
 def test_trim_runtime_configs_filters_existing_daemon_ini(env: Path, tmp_path: Path) -> None:
     os.environ["ENABLE_SUBSTORE"] = "false"
-    os.environ["ENABLE_SUI"] = "false"
     daemon = tmp_path / "daemon.ini"
     daemon.write_text(_DAEMON_INI_FIXTURE, encoding="utf-8")
 
@@ -378,7 +374,7 @@ def test_trim_runtime_configs_filters_existing_daemon_ini(env: Path, tmp_path: P
     text = daemon.read_text(encoding="utf-8")
     assert "[program:sub-store]" not in text
     assert "[program:http-meta]" not in text
-    assert "[program:s-ui]" not in text
+    # assert "[program:s-ui]" not in text  # s-ui removed from fixture
     assert "[program:xray]" in text
 
 

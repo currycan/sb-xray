@@ -79,27 +79,16 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
   set -ex; \
   (git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend || (sleep 5 && git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend)); \
   npm install -g pnpm; \
-  pnpm install --frozen-lockfile; \
+  cd /app/frontend && pnpm install --frozen-lockfile --ignore-scripts; \
+  pnpm approve-builds "@parcel/watcher@2.5.6" "core-js@3.49.0" "esbuild@0.15.18" "vue-demi@0.14.10"; \
+  pnpm rebuild; \
   VITE_PUBLIC_PATH="/${SUB_STORE_WEBBASEPATH}/" pnpm run build; \
   mv /app/frontend/dist /sub-store/frontend
 
-# ==========================================
-# 第二阶段: S-UI 前端构建层
-# 构建 S-UI 的前端静态资源
-# ==========================================
-FROM node:alpine AS s-ui-front-builder
-
-RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
-    apk add git curl
-
-ARG SUI_VERSION="1.4.1"
-# npm 全局缓存挂载
-RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-  set -ex; \
-  (git clone --depth 1 --branch v${SUI_VERSION} https://github.com/alireza0/s-ui /app/s-ui || (sleep 5 && git clone --depth 1 --branch v${SUI_VERSION} https://github.com/alireza0/s-ui /app/s-ui)); \
-  (git clone --depth 1 --branch main https://github.com/alireza0/s-ui-frontend /app/s-ui-frontend || (sleep 5 && git clone --depth 1 --branch main https://github.com/alireza0/s-ui-frontend /app/s-ui-frontend)); \
-  cd /app/s-ui-frontend && npm install && npm run build; \
-  mv /app/s-ui-frontend/dist /app/s-ui/web/html
+# s-ui project removed — build stage disabled
+# FROM node:alpine AS s-ui-front-builder
+# ARG SUI_VERSION="1.4.1"
+# RUN git clone --depth 1 --branch v${SUI_VERSION} https://github.com/alireza0/s-ui /app/s-ui && ...
 
 # ==========================================
 # 第三阶段: 主构建层 (Golang)
@@ -187,15 +176,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
   upx --lzma --best x-ui; \
   mv x-ui /usr/local/bin/
 
-# --- S-UI ---
-COPY --from=s-ui-front-builder /app/s-ui /app/s-ui
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    --mount=type=cache,target=/go/pkg/mod \
-  set -ex; \
-  cd /app/s-ui; \
-  go build -ldflags="-s -w" -trimpath -tags "with_quic,with_grpc,with_utls,with_acme,with_gvisor" -o sui main.go; \
-  upx --lzma --best sui; \
-  mv sui /usr/local/bin/
+# s-ui removed
+# COPY --from=s-ui-front-builder /app/s-ui /app/s-ui
+# RUN cd /app/s-ui && go build ... -o sui main.go && mv sui /usr/local/bin/
 
 # --- Sing-box ---
 ARG SING_BOX_VERSION="1.13.9"
@@ -320,11 +303,10 @@ ENV XDNS_DOMAIN=""
 # 小内存节点降载开关（内存不超过 512 MB 的 VPS；opt-out 语义，仅显式 "false" 生效）
 #   ENABLE_SUBSTORE      ：sub-store + http-meta 两个 V8 实例（-130~200 MB）
 #   ENABLE_XUI           ：x-ui 面板（-35~55 MB）
-#   ENABLE_SUI           ：s-ui 面板（-35~55 MB）
 #   ENABLE_SHOUTRRR      ：shoutrrr-forwarder 事件转发（-20~30 MB）
 ENV ENABLE_SUBSTORE="true"
 ENV ENABLE_XUI="true"
-ENV ENABLE_SUI="true"
+# ENV ENABLE_SUI="true"  # s-ui removed
 ENV ENABLE_SHOUTRRR="true"
 
 # isp-auto 健康选优控制项。默认值开箱即用，运维可在 docker-compose.yml
@@ -423,14 +405,14 @@ ENV XUI_WEBBASEPATH="xui"
 ENV XUI_ACCOUNT="admin"
 ENV XUI_PORT="8888"
 
-# s-ui
-ENV SUI_LOG_LEVEL="info"
-ENV SUI_DEBUG="false"
-ENV SUI_PORT="3095"
-ENV SUI_SUB_PORT="3096"
-ENV SUI_DB_FOLDER="/s-ui/db"
-ENV SUI_WEBBASEPATH="sui"
-ENV SUI_SUB_PATH="sub"
+# s-ui removed
+# ENV SUI_LOG_LEVEL="info"
+# ENV SUI_DEBUG="false"
+# ENV SUI_PORT="3095"
+# ENV SUI_SUB_PORT="3096"
+# ENV SUI_DB_FOLDER="/s-ui/db"
+# ENV SUI_WEBBASEPATH="sui"
+# ENV SUI_SUB_PATH="sub"
 
 # sub-store
 ENV SUB_STORE_META_FOLDER="/sub-store/http-meta/"

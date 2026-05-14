@@ -37,7 +37,7 @@ _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)
 # low-memory deployments (≤ 512 MB RAM) to trim ~220–320 MB of resident RSS.
 _SUPERVISOR_PROGRAM_FLAGS: dict[str, str] = {
     "x-ui": "ENABLE_XUI",
-    "s-ui": "ENABLE_SUI",
+    # "s-ui": "ENABLE_SUI",  # s-ui project removed
     "sub-store": "ENABLE_SUBSTORE",
     "http-meta": "ENABLE_SUBSTORE",
     "shoutrrr-forwarder": "ENABLE_SHOUTRRR",
