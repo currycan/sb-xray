@@ -2,26 +2,26 @@
   "shoutrrr": "0.8.0",
   "mihomo": "1.19.24",
   "http_meta": "1.1.0",
-  "sub_store_frontend": "2.17.5",
-  "sub_store_backend": "2.23.5",
+  "sub_store_frontend": "2.17.6",
+  "sub_store_backend": "2.23.7",
   "dufs": "0.46.0",
   "cloudflared": "2026.5.0",
   "x_ui": "3.0.2",
-  "sing_box": "1.13.11",
+  "sing_box": "1.13.12",
   "xray": "26.3.27",
   "digests": {
     "mihomo_amd64_sha256": "a1aca7b07037d06d0093320386c54d86e4ed9979394a20034f3e86013a7ae6e7",
     "mihomo_arm64_sha256": "6d4a278e7ace1016f23d7245f6f8911f6f7a4adfba2095704473d937e1911840",
     "http_meta_bundle_sha256": "9d2201d3c56c8aba404315ffdecd773dc7be6bd46e61d8cdf568d081d234acf2",
     "http_meta_tpl_sha256": "6f3ecf199ae9a5014b0090a46b0dfc16c64e4fc45350880726a56ecb652dd16c",
-    "sub_store_backend_sha256": "a380d683e8f83893a8dfeccef3560d88ba57c182fa77f42d1ca4237d35bf98c6",
+    "sub_store_backend_sha256": "9f257c999e379976b87c28775c35b2d7c63ed9d9b099395c5c1c50fd05855934",
     "dufs_amd64_sha256": "817769f726613194bcff9d0e3e481eaccc86ac11208857614f36a8c02f410977",
     "dufs_arm64_sha256": "a2c0a922f944952673ab27706b66f272a76760a8480dc6a067993ab002eca122",
     "cloudflared_amd64_sha256": "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec",
     "cloudflared_arm64_sha256": "2dc0945345677d27de3ae390a31c3b168866b48766da5f4cfd3fc473ce572303",
     "xui_amd64_sha256": "687849a62ffe7b02de3f18eec6cac4f4231728d6eea1ec610781f2c6e28a7b43",
     "xui_arm64_sha256": "5e4f814720f308676916edfba403fdf26d75abe5d52d1aef1381305a9b9acf00",
-    "sing_box_amd64_sha256": "10ff037632165ca4f6472a0ec21393280ef5a33677e05bcde7fbcf6f9737637b",
-    "sing_box_arm64_sha256": "6e024ee9d938fde8e05c553cf29c10f02012dba1c4bdbca6aa548653b3ac88e4"
+    "sing_box_amd64_sha256": "1540533adb3df24f5ad5f14b5c7ca3dbc2401b10a1c1eb278fcadcada47ec6c4",
+    "sing_box_arm64_sha256": "1ffa3b48ad6fa98f9fd810482e39bdd5b6157782ef11ce37d67bdcfd9338547a"
   }
 }
