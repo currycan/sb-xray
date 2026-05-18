@@ -183,8 +183,9 @@ RUN set -ex; \
   echo "${EXPECTED_SHA}  /tmp/${BINARY_FILE}" | sha256sum -c -; \
   tar -xzf "/tmp/${BINARY_FILE}" -C /tmp/; \
   rm -f "/tmp/${BINARY_FILE}"; \
-  chmod +x /tmp/x-ui; \
-  mv /tmp/x-ui /usr/local/bin/
+  chmod +x /tmp/x-ui/x-ui; \
+  mv /tmp/x-ui/x-ui /usr/local/bin/; \
+  rm -rf /tmp/x-ui
 
 # s-ui removed
 # COPY --from=s-ui-front-builder /app/s-ui /app/s-ui
