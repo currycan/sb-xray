@@ -83,7 +83,7 @@ SelectStable:   &SelectStable {type: select, include-all: true, filter: *FilterA
 
 # ==================== 代理提供者 ====================
 proxy-providers:
-${CLASH_PROXY_PROVIDERS}
+  AllOne:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/AllOne-Common", override: {additional-prefix: "[AllOne] ", skip-cert-verify: false, udp: true, up: 2500 Mbps, down: 2500 Mbps}}
 
 # ==================== 策略组 ====================
 # Icon URLs reference a private repo; replace with your own icon hosting if needed

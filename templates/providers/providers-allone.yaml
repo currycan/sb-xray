@@ -1,0 +1,3 @@
+# GIST_CODE env var must be set to your GitHub Gist ID for provider subscriptions
+proxy-providers:
+  AllOne:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/AllOne-Common", override: {additional-prefix: "[AllOne] ", skip-cert-verify: false, udp: true, up: 2500 Mbps, down: 2500 Mbps}}
