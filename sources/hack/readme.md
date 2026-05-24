@@ -34,6 +34,11 @@ scp sources/hack/cdn-speedtest.sh root@openwrt:/root/cdn-speedtest.sh
 
 # 赋予执行权限
 ssh root@openwrt “chmod +x /root/cdn-speedtest.sh”
+
+# 或者下载
+wegt https://raw.githubusercontent.com/currycan/sb-xray/main/sources/hack/cdn-speedtest.sh
+
+chmod +x cdn-speedtest.sh && cp cdn-speedtest.sh /usr/bin
 ```
 
 ### 使用
