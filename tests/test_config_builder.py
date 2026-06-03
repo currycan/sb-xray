@@ -441,3 +441,63 @@ def test_apply_cn_exit_noop_when_cn_ip_rule_absent(env: Path, tmp_path: Path) ->
     cb._apply_cn_exit(xr)
     data = json.loads(xr.read_text(encoding="utf-8"))
     assert len(data["routing"]["rules"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# CN exit - SOCKS5 mode (CN_EXIT_SOCKS5_HOST)
+# ---------------------------------------------------------------------------
+
+_SOCKS5_XR_BASE = {
+    "outbounds": [{"tag": "direct"}, {"tag": "block"}],
+    "routing": {
+        "rules": [
+            {"ruleTag": "bt", "outboundTag": "block"},
+            {"ruleTag": "cn-ip", "ip": ["geoip:cn"], "outboundTag": "block"},
+            {"ruleTag": "ad-domain", "outboundTag": "block"},
+        ]
+    },
+}
+
+
+def test_apply_cn_exit_socks5_injects_outbound(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    os.environ["CN_EXIT_SOCKS5_PORT"] = "7891"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    outbounds = data["outbounds"]
+    socks_obs = [o for o in outbounds if o.get("tag") == "cn-exit"]
+    assert len(socks_obs) == 1
+    assert socks_obs[0]["protocol"] == "socks"
+    assert socks_obs[0]["settings"]["servers"][0]["address"] == "100.99.99.1"
+    assert socks_obs[0]["settings"]["servers"][0]["port"] == 7891
+
+
+def test_apply_cn_exit_socks5_rewires_rules(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    rules = data["routing"]["rules"]
+    assert len(rules) == 4
+    assert rules[0]["ruleTag"] == "bt"
+    assert rules[1]["ruleTag"] == "cn-geosite"
+    assert rules[1]["domain"] == ["geosite:cn"]
+    assert rules[1]["outboundTag"] == "cn-exit"
+    assert rules[2]["ruleTag"] == "cn-ip"
+    assert rules[2]["outboundTag"] == "cn-exit"
+    assert rules[3]["ruleTag"] == "ad-domain"
+
+
+def test_apply_cn_exit_socks5_takes_priority_over_rtunnel(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    os.environ["REVERSE_CN_EXIT"] = "true"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    rules = data["routing"]["rules"]
+    cn_ip_rule = next(r for r in rules if r["ruleTag"] == "cn-ip")
+    assert cn_ip_rule["outboundTag"] == "cn-exit"

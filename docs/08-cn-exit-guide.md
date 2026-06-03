@@ -1,94 +1,133 @@
 # 回国代理部署指南
 
-通过现有的 VLESS reverse bridge 功能，让境外设备能访问大陆限定服务（爱奇艺、优酷、哔哩哔哩、网银、支付宝等）。大陆家宽 OpenWrt 软路由作为落地 bridge，海外 VPS 上的 sb-xray 作为 portal。
+让境外设备访问大陆限定服务（爱奇艺、优酷、哔哩哔哩、网银、支付宝等），流量经由大陆家宽出口。
 
-## 流量路径
+---
+
+## 方案一（推荐）：Tailscale + OpenClash
+
+适用于 OpenWrt 上已安装 OpenClash 的场景，无需公网 IP，无需手动管理 xray 密钥。
+
+### 架构
 
 ```
-[境外设备]
-  │ geosite:iqiyi / youku / bilibili / category-bank-cn 等
-  ▼
-[海外 VPS · sb-xray portal]
-  │ VLESS reverse bridge（xr.json 路由）
-  ▼
-[OpenWrt bridge · 大陆家宽]
-  │ freedom outbound → 直接出境
-  ▼
-[国内应用服务器]
+[ClashMi / Karing / 任何 Clash 客户端]
+  规则: iqiyi / youku / bilibili / 银行 → 🇨🇳 回国组 → 选择 VPS 节点
+
+[VPS · xray 路由]
+  geosite:cn / geoip:cn → cn-exit outbound (SOCKS5)
+  ↓ Tailscale 加密隧道（自动 NAT 穿透）
+
+[OpenWrt · OpenClash (Mihomo)]
+  接受 SOCKS5 连接（port 7891）
+  国内流量 → DIRECT → 中国 ISP → 目标服务
 ```
 
-访问 Google、Twitter 等境外服务不走任何代理，直接走节点或 DIRECT。
-
-## 前提条件
-
-- 已部署 sb-xray 海外 VPS（参见 [06-reverse-proxy-guide.md](06-reverse-proxy-guide.md)）
-- 大陆有一台 OpenWrt 软路由，可出访 VPS 的 443 端口
-- 大陆 ISP 宽带有公网 IP（或软路由可正常向外建立长连接）
-
-## 一、OpenWrt bridge 配置
-
-### 1.1 下载 xray 二进制
-
-在 OpenWrt 上安装或下载 xray（建议版本与 VPS 相同）：
+### 1.1 OpenWrt 安装 Tailscale
 
 ```sh
-# amd64
-wget -O /usr/bin/xray https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-# arm64（OpenWrt 路由器通常用此架构）
+opkg update && opkg install tailscale kmod-tun
+/etc/init.d/tailscale enable && /etc/init.d/tailscale start
+tailscale up --auth-key=<tskey> --hostname=home-openwrt
+tailscale ip   # 记录此 IP，后面填入 CN_EXIT_SOCKS5_HOST
+```
+
+### 1.2 防火墙：允许 Tailscale 接口访问 OpenClash SOCKS5
+
+```sh
+iptables -I INPUT -i tailscale0 -p tcp --dport 7891 -j ACCEPT
+# 持久化（写入 /etc/firewall.user）
+echo 'iptables -I INPUT -i tailscale0 -p tcp --dport 7891 -j ACCEPT' >> /etc/firewall.user
+```
+
+### 1.3 VPS：安装 Tailscale 并加入同一账号
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh
+tailscale up --auth-key=<tskey>
+```
+
+同一账号下所有 VPS（JP/US/SG 等）均可访问同一个 OpenWrt Tailscale IP，无需额外配置。
+
+### 1.4 VPS：配置 docker-compose.yml
+
+在 `docker-compose.yml` 中取消注释并填值：
+
+```yaml
+- CN_EXIT_SOCKS5_HOST=100.x.x.x   # 替换为 tailscale ip 输出的 OpenWrt IP
+- CN_EXIT_SOCKS5_PORT=7891         # OpenClash 默认 SOCKS5 端口
+```
+
+重启容器：
+
+```sh
+docker compose down && docker compose up -d
+```
+
+### 1.5 验证
+
+```sh
+# 确认 SOCKS5 outbound 已注入
+docker compose exec sb-xray cat /sb-xray/xray/xr.json | python3 -m json.tool | grep -A5 '"cn-exit"'
+# 预期：protocol=socks，address=100.x.x.x
+
+# 通过 OpenWrt SOCKS5 访问国内内容
+curl --socks5 100.x.x.x:7891 https://www.iqiyi.com -o /dev/null -w "%{http_code}"
+# 预期：200
+```
+
+---
+
+## 方案二（备用）：xray reverse bridge
+
+适用于无法使用 Tailscale 的环境（如 OpenWrt 无 kmod-tun）。需要大陆软路由能主动向 VPS 建立长连接。
+
+### 前提条件
+
+- 大陆 OpenWrt 可访问 VPS 的 443 端口
+- 已部署 sb-xray（参见 [06-reverse-proxy-guide.md](06-reverse-proxy-guide.md)）
+
+### 2.1 OpenWrt 安装 xray
+
+```sh
+# arm64（大多数 OpenWrt 路由器）
 wget -O /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip
 unzip /tmp/xray.zip xray -d /usr/bin/
 chmod +x /usr/bin/xray
 ```
 
-### 1.2 生成 bridge 专用 UUID
-
-在任意机器上运行：
+### 2.2 生成 bridge 专用 UUID
 
 ```sh
-xray uuid
-# 或
 cat /proc/sys/kernel/random/uuid
 ```
 
-记录此 UUID，下面两处都要用到（VPS 环境变量 `XRAY_REVERSE_UUID` 和 bridge 配置）。
-
-### 1.3 获取 VPS Reality 公钥
-
-在 VPS 上查看：
+### 2.3 获取 VPS Reality 公钥
 
 ```sh
-grep XRAY_REALITY_PUBLIC_KEY /path/to/.env
-# 或从 sb-xray 日志获取
 docker compose logs sb-xray | grep "public key"
 ```
 
-### 1.4 创建 bridge 配置文件
+### 2.4 创建 bridge 配置
 
 将 `templates/reverse_bridge/client.json` 复制到 OpenWrt，填入以下值并保存为 `/etc/xray/bridge.json`：
 
 | 占位符 | 说明 |
 |--------|------|
 | `${XRAY_REVERSE_UUID}` | 上面生成的 UUID |
-| `${DOMAIN}` | VPS 域名（如 `jp.example.com`） |
+| `${DOMAIN}` | VPS 域名 |
 | `${LISTENING_PORT}` | 443 |
-| `${DEST_HOST}` | Reality 目标伪装域名（同 VPS 配置） |
+| `${DEST_HOST}` | Reality 伪装域名 |
 | `${XRAY_REALITY_PUBLIC_KEY}` | VPS Reality 公钥 |
 | `${XRAY_REALITY_SHORTID}` | VPS Reality shortId |
 
-```sh
-# 测试配置是否有效
-xray run -config /etc/xray/bridge.json
-```
-
-### 1.5 设置开机自启（OpenWrt procd）
-
-创建 `/etc/init.d/xray-bridge`：
+### 2.5 设置开机自启（OpenWrt procd）
 
 ```sh
+cat > /etc/init.d/xray-bridge << 'EOF'
 #!/bin/sh /etc/rc.common
 START=99
 USE_PROCD=1
-
 start_service() {
     procd_open_instance
     procd_set_param command /usr/bin/xray run -config /etc/xray/bridge.json
@@ -97,17 +136,14 @@ start_service() {
     procd_set_param stderr 1
     procd_close_instance
 }
-```
-
-```sh
+EOF
 chmod +x /etc/init.d/xray-bridge
-/etc/init.d/xray-bridge enable
-/etc/init.d/xray-bridge start
+/etc/init.d/xray-bridge enable && /etc/init.d/xray-bridge start
 ```
 
-## 二、海外 VPS 配置
+### 2.6 VPS 配置
 
-在 `docker-compose.yml` 中启用以下环境变量（取消注释并填值）：
+在 `docker-compose.yml` 中取消注释并填值：
 
 ```yaml
 - ENABLE_REVERSE=true
@@ -116,64 +152,61 @@ chmod +x /etc/init.d/xray-bridge
 - REVERSE_CN_EXIT=true
 ```
 
-`REVERSE_CN_EXIT=true` 会在容器启动时自动将 `xr.json` 里的 `cn-ip` 规则从 `block` 改为 `r-tunnel`，并插入 `geosite:cn → r-tunnel` 规则。
-
-重启容器使配置生效：
+重启容器后验证：
 
 ```sh
-docker compose down && docker compose up -d
+docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
 ```
 
-验证生效：
+---
 
-```sh
-docker compose exec sb-xray cat /sb-xray/xray/xr.json | grep -A3 '"cn-ip"\|"cn-geosite"'
-# 预期：outboundTag 为 "r-tunnel"，且存在 cn-geosite 规则
-```
+## 客户端配置
 
-## 三、客户端订阅更新
+重新拉取订阅后，所有支持的客户端（Mihomo / Stash / Surge）会自动出现 **🇨🇳 回国** 策略组。
 
-重新拉取订阅后，所有支持的客户端（mihomo / Stash / Surge）会自动出现 **🇨🇳 回国** 策略组。
-
-该策略组默认指向 DIRECT（bypass），在 `include-all: true` 模式下列出所有节点。**要启用回国功能，需手动将其切换至海外 VPS 对应的节点**（即运行 sb-xray 的 VPS 节点），这样爱奇艺、优酷等流量才会经由 reverse bridge 从大陆出。
+该策略组在 `include-all: true` 模式下列出所有节点。**将其切换至对应 VPS 节点**，国内流量即从该 VPS 出口经大陆落地。
 
 已路由到 🇨🇳 回国 的规则：
 - `geosite:iqiyi` — 爱奇艺
 - `geosite:youku` — 优酷
 - `geosite:bilibili` — 哔哩哔哩
 - `geosite:category-bank-cn` — 国内银行
-- `geosite:category-payment-cn` — 支付宝、微信支付等
+- `geosite:category-payment-cn` — 支付宝、微信支付
 
-`geosite:cn` 和 `geoip:cn` 仍然路由到 **国内流量**（DIRECT），不影响已有行为。
+---
 
-## 四、排查
+## 排查
 
-### bridge 连接不上 VPS
+### SOCKS5 模式：cn-exit outbound 未注入
+
+检查容器启动日志：
 
 ```sh
-# 在 OpenWrt 上检查 xray 日志
-logread | grep xray
-# 或直接运行查看错误
-xray run -config /etc/xray/bridge.json
+docker compose logs sb-xray | grep "CN-exit"
+# 预期：CN-exit(socks5): 100.x.x.x:7891
+```
+
+若无，检查 `CN_EXIT_SOCKS5_HOST` 是否已取消注释且无拼写错误。
+
+### SOCKS5 模式：连接失败
+
+```sh
+# 在 VPS 上测试 Tailscale 连通性
+tailscale ping <OpenWrt Tailscale IP>
+# 在 VPS 上测试 SOCKS5 端口
+curl --socks5 <OpenWrt Tailscale IP>:7891 https://www.baidu.com -o /dev/null -w "%{http_code}"
 ```
 
 常见原因：
-- UUID 不一致（VPS 与 bridge 必须相同）
-- Reality 公钥或 shortId 填写有误
-- VPS 防火墙未放行 443/TCP
+- Tailscale 未加入同一账号
+- OpenWrt 防火墙未开放 7891 端口给 tailscale0
+- OpenClash 未启动或 SOCKS5 端口配置有误
 
-### 回国流量仍被 block（outboundTag 未改变）
-
-检查 VPS 容器启动日志中是否有 `CN-exit:` 字样：
+### reverse bridge：连接不上 VPS
 
 ```sh
-docker compose logs sb-xray | grep -E "CN-exit|REVERSE_CN_EXIT"
+# 在 OpenWrt 上检查日志
+logread | grep xray
 ```
 
-若无，说明 `REVERSE_CN_EXIT=true` 未生效，检查 docker-compose.yml 中该行是否被注释。
-
-### 访问爱奇艺仍显示"您所在地区无法观看"
-
-1. 确认 🇨🇳 回国 策略组已切换到 VPS 节点（非 DIRECT）
-2. 在 VPS 上确认 bridge 已连接：`docker compose logs sb-xray | grep "r-tunnel"`
-3. 检查 OpenWrt bridge 进程是否在运行
+常见原因：UUID 不一致、Reality 公钥或 shortId 有误、VPS 防火墙未放行 443/TCP。

@@ -53,6 +53,9 @@ services:
       # - XRAY_REVERSE_UUID=      # bridge 客户端专用 UUID（与用户 UUID 不同）
       # - REVERSE_DOMAINS=        # 通过 bridge 出的域名，逗号分隔（例：my.home.domain）
       # - REVERSE_CN_EXIT=false   # true: 国内流量（geoip/geosite:cn）经由 bridge 出（需 ENABLE_REVERSE=true）
+      # 回国代理 - Tailscale/OpenClash 模式（推荐，无需公网 IP）
+      # - CN_EXIT_SOCKS5_HOST=100.x.x.x   # OpenWrt 的 Tailscale IP（tailscale ip 命令获取）
+      # - CN_EXIT_SOCKS5_PORT=7891         # OpenClash SOCKS5 端口（默认 7891）
       # shoutrrr 事件总线（完整说明见 docs/07-event-bus-shoutrrr.md）
       # 留空 = dry-run，仅写日志不外推；多通道追加 ";discord://..." 或 ";slack://..."（详见文档 §6）
       # ⚠ BOT_TOKEN 中的 ":" 必须 URL-encode 为 "%3A"；chat.id 私有为负数(-100...), 公开频道用 "name"(不带 @)

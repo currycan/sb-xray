@@ -251,8 +251,16 @@ def _inject_reverse_route(xr_file: Path, domains: list[str]) -> None:
 
 
 def _apply_cn_exit(xr_file: Path) -> None:
-    if os.environ.get("REVERSE_CN_EXIT", "false") != "true":
-        return
+    """调度器：SOCKS5 模式优先，回退到 r-tunnel 模式（向后兼容）。"""
+    socks5_host = os.environ.get("CN_EXIT_SOCKS5_HOST", "").strip()
+    if socks5_host:
+        port = int(os.environ.get("CN_EXIT_SOCKS5_PORT", "7891"))
+        _apply_cn_exit_socks5(xr_file, socks5_host, port)
+    elif os.environ.get("REVERSE_CN_EXIT", "false") == "true":
+        _apply_cn_exit_rtunnel(xr_file)
+
+
+def _apply_cn_exit_rtunnel(xr_file: Path) -> None:
     data = json.loads(xr_file.read_text(encoding="utf-8"))
     rules = data["routing"]["rules"]
     for i, rule in enumerate(rules):
@@ -268,6 +276,33 @@ def _apply_cn_exit(xr_file: Path) -> None:
                 },
             )
             logger.info("CN-exit: cn-ip 规则改为 r-tunnel，并插入 geosite:cn 规则")
+            break
+    xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _apply_cn_exit_socks5(xr_file: Path, host: str, port: int) -> None:
+    data = json.loads(xr_file.read_text(encoding="utf-8"))
+    data["outbounds"].append(
+        {
+            "tag": "cn-exit",
+            "protocol": "socks",
+            "settings": {"servers": [{"address": host, "port": port}]},
+        }
+    )
+    rules = data["routing"]["rules"]
+    for i, rule in enumerate(rules):
+        if rule.get("ruleTag") == "cn-ip":
+            rules[i] = {**rule, "outboundTag": "cn-exit"}
+            rules.insert(
+                i,
+                {
+                    "type": "field",
+                    "ruleTag": "cn-geosite",
+                    "domain": ["geosite:cn"],
+                    "outboundTag": "cn-exit",
+                },
+            )
+            logger.info("CN-exit(socks5): %s:%d", host, port)
             break
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
@@ -293,8 +328,6 @@ def _apply_reverse_proxy(workdir: Path) -> None:
     xr = workdir / "xray" / "xr.json"
     if domains and xr.is_file():
         _inject_reverse_route(xr, domains)
-    if xr.is_file():
-        _apply_cn_exit(xr)
 
 
 def trim_runtime_configs(
@@ -336,5 +369,8 @@ def create_config(*, workdir: Path | None = None) -> None:
     _render_sing_box_templates(workdir)
 
     _apply_reverse_proxy(workdir)
+    xr = workdir / "xray" / "xr.json"
+    if xr.is_file():
+        _apply_cn_exit(xr)
 
     logger.info("所有模板渲染完成")
