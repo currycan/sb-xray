@@ -381,3 +381,63 @@ def test_trim_runtime_configs_filters_existing_daemon_ini(env: Path, tmp_path: P
 def test_trim_runtime_configs_silent_when_daemon_missing(env: Path, tmp_path: Path) -> None:
     """No daemon.ini present → must not raise."""
     cb.trim_runtime_configs(daemon_ini=tmp_path / "missing.ini")
+
+
+# ---------------------------------------------------------------------------
+# CN exit (REVERSE_CN_EXIT)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_cn_exit_noop_when_disabled(env: Path, tmp_path: Path) -> None:
+    os.environ["REVERSE_CN_EXIT"] = "false"
+    xr = tmp_path / "xr.json"
+    xr.write_text(
+        json.dumps({"routing": {"rules": [{"ruleTag": "cn-ip", "outboundTag": "block"}]}}),
+        encoding="utf-8",
+    )
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert data["routing"]["rules"][0]["outboundTag"] == "block"
+
+
+def test_apply_cn_exit_redirects_cn_ip_to_r_tunnel(env: Path, tmp_path: Path) -> None:
+    os.environ["REVERSE_CN_EXIT"] = "true"
+    xr = tmp_path / "xr.json"
+    xr.write_text(
+        json.dumps(
+            {
+                "routing": {
+                    "rules": [
+                        {"ruleTag": "bt", "outboundTag": "block"},
+                        {"ruleTag": "cn-ip", "ip": ["geoip:cn"], "outboundTag": "block"},
+                        {"ruleTag": "ad-domain", "outboundTag": "block"},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    rules = data["routing"]["rules"]
+    assert len(rules) == 4
+    # geosite:cn rule inserted before cn-ip
+    assert rules[1]["ruleTag"] == "cn-geosite"
+    assert rules[1]["domain"] == ["geosite:cn"]
+    assert rules[1]["outboundTag"] == "r-tunnel"
+    # original cn-ip rule now routes to r-tunnel
+    assert rules[2]["ruleTag"] == "cn-ip"
+    assert rules[2]["outboundTag"] == "r-tunnel"
+    # surrounding rules untouched
+    assert rules[0]["ruleTag"] == "bt"
+    assert rules[3]["ruleTag"] == "ad-domain"
+
+
+def test_apply_cn_exit_noop_when_cn_ip_rule_absent(env: Path, tmp_path: Path) -> None:
+    os.environ["REVERSE_CN_EXIT"] = "true"
+    xr = tmp_path / "xr.json"
+    original = {"routing": {"rules": [{"ruleTag": "other", "outboundTag": "block"}]}}
+    xr.write_text(json.dumps(original), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert len(data["routing"]["rules"]) == 1

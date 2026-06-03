@@ -250,6 +250,28 @@ def _inject_reverse_route(xr_file: Path, domains: list[str]) -> None:
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+def _apply_cn_exit(xr_file: Path) -> None:
+    if os.environ.get("REVERSE_CN_EXIT", "false") != "true":
+        return
+    data = json.loads(xr_file.read_text(encoding="utf-8"))
+    rules = data["routing"]["rules"]
+    for i, rule in enumerate(rules):
+        if rule.get("ruleTag") == "cn-ip":
+            rules[i] = {**rule, "outboundTag": "r-tunnel"}
+            rules.insert(
+                i,
+                {
+                    "type": "field",
+                    "ruleTag": "cn-geosite",
+                    "domain": ["geosite:cn"],
+                    "outboundTag": "r-tunnel",
+                },
+            )
+            logger.info("CN-exit: cn-ip 规则改为 r-tunnel，并插入 geosite:cn 规则")
+            break
+    xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
 def _apply_reverse_proxy(workdir: Path) -> None:
     if os.environ.get("ENABLE_REVERSE", "false") != "true":
         return
@@ -271,6 +293,8 @@ def _apply_reverse_proxy(workdir: Path) -> None:
     xr = workdir / "xray" / "xr.json"
     if domains and xr.is_file():
         _inject_reverse_route(xr, domains)
+    if xr.is_file():
+        _apply_cn_exit(xr)
 
 
 def trim_runtime_configs(
