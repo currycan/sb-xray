@@ -124,6 +124,8 @@ proxy-groups:
 
 # ==================== 规则路由 ====================
 rules:
+  # 内网代理（所有 .lan 域名走反向隧道）
+  - DOMAIN-SUFFIX,lan,人工智能
   # Tailscale 组网 IP 段
   - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
   # ZeroTier 虚拟内网 IP 段

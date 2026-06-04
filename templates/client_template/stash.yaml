@@ -97,12 +97,13 @@ proxy-groups:
   # ── 通用与兜底 ────────────────────────────────────────────
   - {name: 国外流量, <<: *FallBack, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Global.png}
   - {name: 国内流量, type: select, proxies: [DIRECT, 自动选择], icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/China.png}
-  - {name: 🇨🇳 回国, type: select, include-all: true, filter: *FilterALL, proxies: [DIRECT], icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/China_Map.png}
   - {name: 兜底流量, <<: *FallBack, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Final.png}
   - {name: 直接连接, type: select, proxies: [DIRECT], hidden: true, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Direct.png}
 
 # ==================== 规则路由 ====================
 rules:
+  # 内网代理（所有 .lan 域名走反向隧道）
+  - DOMAIN-SUFFIX,lan,人工智能
   # Tailscale 组网 IP 段
   - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
   # ZeroTier 虚拟内网 IP 段
