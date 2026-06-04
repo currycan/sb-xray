@@ -90,7 +90,6 @@ proxy-groups:
   - {name: 全球手动,    <<: *BaseFB,     include-all: true, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Static.png}
   - {name: 国外流量,    <<: *FallBack,   icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Global.png}
   - {name: 国内流量,    <<: *SelectDC,   icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/China.png}
-  - {name: 🇨🇳 回国,    type: select,    include-all: true, filter: *FilterALL, proxies: [DIRECT], icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/China_Map.png}
   - {name: 兜底流量,    <<: *FallBack,   icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Final.png}
 
   # ==================== 香港策略组 ====================
@@ -225,12 +224,6 @@ rules:
   - RULE-SET,GateFireWall / Domain,国外流量
   # GeoIP / GeoSite
   - GEOIP,private,DIRECT,no-resolve
-  # 回国服务
-  - GEOSITE,iqiyi,🇨🇳 回国
-  - GEOSITE,youku,🇨🇳 回国
-  - GEOSITE,bilibili,🇨🇳 回国
-  - GEOSITE,category-bank-cn,🇨🇳 回国
-  - GEOSITE,category-payment-cn,🇨🇳 回国
   - GEOSITE,CN,国内流量
   - GEOIP,CN,国内流量
   # Final

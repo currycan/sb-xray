@@ -88,7 +88,6 @@ proxy-providers:
 # ==================== 策略组 ====================
 # Icon URLs reference a private repo; replace with your own icon hosting if needed
 proxy-groups:
-proxy-groups:
   # ==================== 网络测试 ====================
   - {name: 网络测试,    <<: *OneSmart,     include-all: true,   filter: *FilterALL, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Speedtest.png}
   # ==================== 线路节点策略组 ====================
@@ -226,12 +225,6 @@ rules:
   - RULE-SET,GateFireWall / Domain,国外流量
   # GeoIP / GeoSite
   - GEOIP,private,DIRECT,no-resolve
-  # 回国服务
-  - GEOSITE,iqiyi,🇨🇳 回国
-  - GEOSITE,youku,🇨🇳 回国
-  - GEOSITE,bilibili,🇨🇳 回国
-  - GEOSITE,category-bank-cn,🇨🇳 回国
-  - GEOSITE,category-payment-cn,🇨🇳 回国
   - GEOSITE,CN,国内流量
   - GEOIP,CN,国内流量
   # Final
