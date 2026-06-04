@@ -63,7 +63,7 @@
         "rules": [
             {
                 "type": "field",
-                "inboundTag": ["reverse-bridge"],
+                "inboundTag": ["r-tunnel"],
                 "outboundTag": "direct"
             }
         ]
