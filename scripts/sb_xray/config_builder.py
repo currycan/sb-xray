@@ -261,28 +261,64 @@ def _apply_cn_exit(xr_file: Path) -> None:
         _apply_cn_exit_rtunnel(xr_file)
 
 
+def _rewire_cn_rules(data: dict, outbound_tag: str) -> bool:
+    """把 cn-ip 封禁规则改造为回国出站规则，返回是否找到 cn-ip。
+
+    三个要点（缺一会导致客户端节点全挂或误报）：
+
+    1. 下移到 ``private-ip`` 锚点之前 —— 原 cn-ip 位置在所有服务直连
+       例外规则（geosite:google → direct 等）之前，``geosite:cn`` 会抢先
+       吞掉这些域名。
+    2. 豁免 ``www.gstatic.com`` —— mihomo/OpenClash 默认健康检查 URL，
+       Loyalsoldier geosite:cn 收录了 ``full:www.gstatic.com``；若被吸进
+       回国隧道，隧道一断所有节点健康检查全部失败。
+    3. 剥离 ban ``marktag``/``webhook`` —— cn-ip 已不再是封禁规则，保留
+       会对正常回国流量持续误报 ban_geoip_cn 事件。
+    """
+    rules = data["routing"]["rules"]
+    cn_ip = next((r for r in rules if r.get("ruleTag") == "cn-ip"), None)
+    if cn_ip is None:
+        return False
+    remaining = [r for r in rules if r.get("ruleTag") != "cn-ip"]
+    anchor = next(
+        (i for i, r in enumerate(remaining) if r.get("ruleTag") == "private-ip"),
+        len(remaining),
+    )
+    remaining[anchor:anchor] = [
+        {
+            "type": "field",
+            "ruleTag": "cn-exit-probe-bypass",
+            "domain": ["full:www.gstatic.com"],
+            "outboundTag": "direct",
+        },
+        {
+            "type": "field",
+            "ruleTag": "cn-geosite",
+            "domain": ["geosite:cn"],
+            "outboundTag": outbound_tag,
+        },
+        {
+            "type": "field",
+            "ruleTag": "cn-ip",
+            "ip": cn_ip.get("ip", ["geoip:cn"]),
+            "outboundTag": outbound_tag,
+        },
+    ]
+    data["routing"]["rules"] = remaining
+    return True
+
+
 def _apply_cn_exit_rtunnel(xr_file: Path) -> None:
     data = json.loads(xr_file.read_text(encoding="utf-8"))
-    rules = data["routing"]["rules"]
-    for i, rule in enumerate(rules):
-        if rule.get("ruleTag") == "cn-ip":
-            rules[i] = {**rule, "outboundTag": "r-tunnel"}
-            rules.insert(
-                i,
-                {
-                    "type": "field",
-                    "ruleTag": "cn-geosite",
-                    "domain": ["geosite:cn"],
-                    "outboundTag": "r-tunnel",
-                },
-            )
-            logger.info("CN-exit: cn-ip 规则改为 r-tunnel，并插入 geosite:cn 规则")
-            break
+    if _rewire_cn_rules(data, "r-tunnel"):
+        logger.info("CN-exit: cn-ip/geosite:cn 规则改为 r-tunnel")
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _apply_cn_exit_socks5(xr_file: Path, host: str, port: int) -> None:
     data = json.loads(xr_file.read_text(encoding="utf-8"))
+    if not _rewire_cn_rules(data, "cn-exit"):
+        return
     data["outbounds"].append(
         {
             "tag": "cn-exit",
@@ -290,21 +326,7 @@ def _apply_cn_exit_socks5(xr_file: Path, host: str, port: int) -> None:
             "settings": {"servers": [{"address": host, "port": port}]},
         }
     )
-    rules = data["routing"]["rules"]
-    for i, rule in enumerate(rules):
-        if rule.get("ruleTag") == "cn-ip":
-            rules[i] = {**rule, "outboundTag": "cn-exit"}
-            rules.insert(
-                i,
-                {
-                    "type": "field",
-                    "ruleTag": "cn-geosite",
-                    "domain": ["geosite:cn"],
-                    "outboundTag": "cn-exit",
-                },
-            )
-            logger.info("CN-exit(socks5): %s:%d", host, port)
-            break
+    logger.info("CN-exit(socks5): %s:%d", host, port)
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 

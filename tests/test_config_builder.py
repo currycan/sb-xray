@@ -415,6 +415,7 @@ def test_apply_cn_exit_redirects_cn_ip_to_r_tunnel(env: Path, tmp_path: Path) ->
                         {"ruleTag": "bt", "outboundTag": "block"},
                         {"ruleTag": "cn-ip", "ip": ["geoip:cn"], "outboundTag": "block"},
                         {"ruleTag": "ad-domain", "outboundTag": "block"},
+                        {"ruleTag": "private-ip", "ip": ["geoip:private"], "outboundTag": "block"},
                     ]
                 }
             }
@@ -424,17 +425,16 @@ def test_apply_cn_exit_redirects_cn_ip_to_r_tunnel(env: Path, tmp_path: Path) ->
     cb._apply_cn_exit(xr)
     data = json.loads(xr.read_text(encoding="utf-8"))
     rules = data["routing"]["rules"]
-    assert len(rules) == 4
-    # geosite:cn rule inserted before cn-ip
-    assert rules[1]["ruleTag"] == "cn-geosite"
-    assert rules[1]["domain"] == ["geosite:cn"]
-    assert rules[1]["outboundTag"] == "r-tunnel"
-    # original cn-ip rule now routes to r-tunnel
-    assert rules[2]["ruleTag"] == "cn-ip"
-    assert rules[2]["outboundTag"] == "r-tunnel"
-    # surrounding rules untouched
-    assert rules[0]["ruleTag"] == "bt"
-    assert rules[3]["ruleTag"] == "ad-domain"
+    tags = [r["ruleTag"] for r in rules]
+    # cn 规则下移到 private-ip 之前，前置健康检查豁免
+    assert tags == ["bt", "ad-domain", "cn-exit-probe-bypass", "cn-geosite", "cn-ip", "private-ip"]
+    probe = rules[2]
+    assert probe["domain"] == ["full:www.gstatic.com"]
+    assert probe["outboundTag"] == "direct"
+    assert rules[3]["domain"] == ["geosite:cn"]
+    assert rules[3]["outboundTag"] == "r-tunnel"
+    assert rules[4]["ip"] == ["geoip:cn"]
+    assert rules[4]["outboundTag"] == "r-tunnel"
 
 
 def test_apply_cn_exit_noop_when_cn_ip_rule_absent(env: Path, tmp_path: Path) -> None:
@@ -456,8 +456,15 @@ _SOCKS5_XR_BASE = {
     "routing": {
         "rules": [
             {"ruleTag": "bt", "outboundTag": "block"},
-            {"ruleTag": "cn-ip", "ip": ["geoip:cn"], "outboundTag": "block"},
+            {
+                "ruleTag": "cn-ip",
+                "ip": ["geoip:cn"],
+                "marktag": "ban_geoip_cn",
+                "outboundTag": "block",
+                "webhook": {"url": "http://127.0.0.1:18085/ban_geoip_cn"},
+            },
             {"ruleTag": "ad-domain", "outboundTag": "block"},
+            {"ruleTag": "private-ip", "ip": ["geoip:private"], "outboundTag": "block"},
         ]
     },
 }
@@ -485,14 +492,47 @@ def test_apply_cn_exit_socks5_rewires_rules(env: Path, tmp_path: Path) -> None:
     cb._apply_cn_exit(xr)
     data = json.loads(xr.read_text(encoding="utf-8"))
     rules = data["routing"]["rules"]
-    assert len(rules) == 4
-    assert rules[0]["ruleTag"] == "bt"
-    assert rules[1]["ruleTag"] == "cn-geosite"
-    assert rules[1]["domain"] == ["geosite:cn"]
-    assert rules[1]["outboundTag"] == "cn-exit"
-    assert rules[2]["ruleTag"] == "cn-ip"
-    assert rules[2]["outboundTag"] == "cn-exit"
-    assert rules[3]["ruleTag"] == "ad-domain"
+    tags = [r["ruleTag"] for r in rules]
+    # cn 规则下移到 private-ip 之前，让服务直连例外规则优先匹配
+    assert tags == ["bt", "ad-domain", "cn-exit-probe-bypass", "cn-geosite", "cn-ip", "private-ip"]
+    assert rules[2]["domain"] == ["full:www.gstatic.com"]
+    assert rules[2]["outboundTag"] == "direct"
+    assert rules[3]["domain"] == ["geosite:cn"]
+    assert rules[3]["outboundTag"] == "cn-exit"
+    assert rules[4]["ip"] == ["geoip:cn"]
+    assert rules[4]["outboundTag"] == "cn-exit"
+
+
+def test_apply_cn_exit_socks5_strips_ban_marktag_and_webhook(env: Path, tmp_path: Path) -> None:
+    """cn-ip 由封禁改为回国出站后，不得再携带 ban marktag/webhook（否则误报封禁事件）。"""
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    cn_ip_rule = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert "marktag" not in cn_ip_rule
+    assert "webhook" not in cn_ip_rule
+
+
+def test_apply_cn_exit_socks5_appends_when_private_ip_absent(env: Path, tmp_path: Path) -> None:
+    """没有 private-ip 锚点时，cn 规则追加到规则表末尾。"""
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    base = {
+        "outbounds": [{"tag": "direct"}],
+        "routing": {
+            "rules": [
+                {"ruleTag": "bt", "outboundTag": "block"},
+                {"ruleTag": "cn-ip", "ip": ["geoip:cn"], "outboundTag": "block"},
+            ]
+        },
+    }
+    xr.write_text(json.dumps(base), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    tags = [r["ruleTag"] for r in data["routing"]["rules"]]
+    assert tags == ["bt", "cn-exit-probe-bypass", "cn-geosite", "cn-ip"]
 
 
 def test_apply_cn_exit_socks5_takes_priority_over_rtunnel(env: Path, tmp_path: Path) -> None:
