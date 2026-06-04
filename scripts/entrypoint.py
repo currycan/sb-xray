@@ -456,10 +456,13 @@ def run_show_pipeline(env_file: Path) -> int:
     """End-to-end ``show`` subcommand pipeline (show-config.sh ``main``)."""
     import shutil
 
+    from sb_xray.routing import providers as sbprov
+
     bootstrap(env_file)
     _load_env_file(_status_file())
     _load_env_file(_secret_file())
     sbnode.derive_and_export()
+    sbprov.generate_and_export()
 
     workdir = Path(os.environ.get("WORKDIR", "/tmp/sb-xray"))
     subscribe_dir = workdir / "subscribe"
