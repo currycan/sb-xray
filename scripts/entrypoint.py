@@ -64,6 +64,7 @@ def _secret_file() -> Path:
 
 _CLIENT_TEMPLATE_DIR = Path("/templates/client_template")
 _SOURCES_DIR = Path("/sources")
+_REVERSE_BRIDGE_TEMPLATE = Path("/templates/reverse_bridge/client.json")
 
 _SUMMARY_KEYS = (
     "DOMAIN",
@@ -474,6 +475,9 @@ def run_show_pipeline(env_file: Path) -> int:
         for tpl in sorted(_CLIENT_TEMPLATE_DIR.iterdir()):
             if tpl.suffix == ".yaml" or tpl.name == "surge.conf":
                 _envsubst_render(tpl, subscribe_dir / tpl.name)
+
+    if os.environ.get("ENABLE_REVERSE", "false") == "true" and _REVERSE_BRIDGE_TEMPLATE.is_file():
+        _envsubst_render(_REVERSE_BRIDGE_TEMPLATE, subscribe_dir / "reverse_bridge_client.json")
 
     if _SOURCES_DIR.is_dir():
         for item in _SOURCES_DIR.iterdir():

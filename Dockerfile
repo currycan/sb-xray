@@ -294,9 +294,15 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 # VLESS Reverse Proxy（M3，默认关闭）
 # ENABLE_REVERSE=true 时 entrypoint 往 REALITY 入站追加 reverse client UUID，
 # 并按 REVERSE_DOMAINS（逗号分隔，例如 "domain:home.lan,domain:nas.lan"）生成 routing 规则
-# 落地机（bridge）配置：见 templates/xray/reverse_bridge_client.json
+# 落地机（bridge）配置：模板见 templates/reverse_bridge/client.json；
+# ENABLE_REVERSE=true 时 show 命令会渲染并输出占位符已填充的 reverse_bridge_client.json 下载链接
 ENV ENABLE_REVERSE="false"
-ENV REVERSE_DOMAINS=""
+ENV REVERSE_DOMAINS="domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan"
+
+# true: 启用 SOCKS5 代理（需同时设置 CN_EXIT_SOCKS5_HOST/PORT）
+ENV ENABLE_SOCKS5_PROXY="true"
+ENV CN_EXIT_SOCKS5_HOST=""
+ENV CN_EXIT_SOCKS5_PORT="7891"
 
 # 新入站 feature flag（Xray v26.3.27）
 #   Hy2 / XHTTP-H3 已永久启用（无开关，见 templates/xray/04_hy2_inbounds.json 与 02_xhttp_h3_inbounds.json）

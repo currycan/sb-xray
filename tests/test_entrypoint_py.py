@@ -524,3 +524,73 @@ def test_issue_bundle_certificate_passes_when_files_present(
         lambda **_kw: sbcert.CertStatus.SKIPPED,
     )
     ep.issue_bundle_certificate()  # no raise
+
+
+# ---------------------------------------------------------------------------
+# run_show_pipeline: reverse bridge client.json rendering
+# ---------------------------------------------------------------------------
+
+_REVERSE_TPL = (
+    '{"id": "${XRAY_REVERSE_UUID}", "addr": "${DOMAIN}", "sni": "${DEST_HOST}"}'
+)
+
+
+def _stub_show_deps(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sb_xray.display as sbdisplay
+    import sb_xray.node_meta as sbnode
+    import sb_xray.subscription as sbsub
+    from sb_xray.routing import providers as sbprov
+
+    monkeypatch.setattr(sbnode, "derive_and_export", lambda: None)
+    monkeypatch.setattr(sbprov, "generate_and_export", lambda **_: {})
+    monkeypatch.setattr(sbsub, "write_subscriptions", lambda **_: None)
+    monkeypatch.setattr(sbdisplay, "show_info_links", lambda **_: None)
+
+
+def _prep_show_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    """Stub heavy deps, isolate template dirs, return (env_file, subscribe_dir)."""
+    _stub_show_deps(monkeypatch)
+    workdir = tmp_path / "wd"
+    monkeypatch.setenv("WORKDIR", str(workdir))
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.setenv("DEST_HOST", "speed.cloudflare.com")
+    monkeypatch.setenv("XRAY_REVERSE_UUID", "rev-123")
+    tpl = tmp_path / "bridge_client.json"
+    tpl.write_text(_REVERSE_TPL, encoding="utf-8")
+    monkeypatch.setattr(ep, "_REVERSE_BRIDGE_TEMPLATE", tpl)
+    monkeypatch.setattr(ep, "_CLIENT_TEMPLATE_DIR", tmp_path / "no_client_tpl")
+    monkeypatch.setattr(ep, "_SOURCES_DIR", tmp_path / "no_sources")
+    env_file = tmp_path / "envfile"
+    env_file.write_text("", encoding="utf-8")
+    return env_file, workdir / "subscribe"
+
+
+def test_show_pipeline_renders_reverse_bridge_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ENABLE_REVERSE", "true")
+    env_file, subscribe_dir = _prep_show_pipeline(tmp_path, monkeypatch)
+
+    rc = ep.run_show_pipeline(env_file)
+
+    assert rc == 0
+    out = subscribe_dir / "reverse_bridge_client.json"
+    assert out.is_file()
+    text = out.read_text(encoding="utf-8")
+    assert "rev-123" in text
+    assert "vpn.example.com" in text
+    assert "${" not in text  # no unresolved placeholders
+
+
+def test_show_pipeline_skips_reverse_bridge_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ENABLE_REVERSE", raising=False)
+    env_file, subscribe_dir = _prep_show_pipeline(tmp_path, monkeypatch)
+
+    rc = ep.run_show_pipeline(env_file)
+
+    assert rc == 0
+    assert not (subscribe_dir / "reverse_bridge_client.json").exists()

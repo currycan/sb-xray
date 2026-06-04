@@ -125,3 +125,27 @@ def test_show_info_links_writes_ansi_stripped_archive(
     assert "\x1b[" not in content
     assert "📋 Index" in content
     assert "cdn.example.com" in content
+
+
+def test_show_info_links_reverse_bridge_link_when_enabled(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.setenv("ENABLE_REVERSE", "true")
+    monkeypatch.delenv("SUBSCRIBE_TOKEN", raising=False)
+    display.show_info_links()
+    out = capsys.readouterr().out
+    assert "🔁 Reverse Bridge 落地机配置" in out
+    assert "https://cdn.example.com/sb-xray/reverse_bridge_client.json" in out
+
+
+def test_show_info_links_no_reverse_bridge_link_when_disabled(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CDNDOMAIN", "cdn.example.com")
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.delenv("ENABLE_REVERSE", raising=False)
+    display.show_info_links()
+    out = capsys.readouterr().out
+    assert "reverse_bridge_client.json" not in out

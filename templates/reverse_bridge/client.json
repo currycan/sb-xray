@@ -2,13 +2,14 @@
     "_comment": "VLESS Reverse Proxy bridge（落地机）配置 — 在家宽内网机器上跑，反向连接公网 sb-xray 构建隧道。",
     "_usage": [
         "1. 公网端 sb-xray 必须设置: ENABLE_REVERSE=true（docker-compose environment）",
-        "2. 在公网端 sb-xray 容器运行 show-config 脚本，获取 XRAY_REVERSE_UUID / DOMAIN / DEST_HOST / XRAY_REALITY_PUBLIC_KEY / XRAY_REALITY_SHORTID",
-        "3. 替换本文件的占位符：${XRAY_REVERSE_UUID} ${DOMAIN} ${LISTENING_PORT} ${DEST_HOST} ${XRAY_REALITY_PUBLIC_KEY} ${XRAY_REALITY_SHORTID}",
+        "2. 在公网端 sb-xray 容器运行 show 脚本，输出里有一行 “🔁 Reverse Bridge 落地机配置” 下载链接（占位符已自动填充）",
+        "3. 落地机直接 wget 该链接得到 reverse_bridge_client.json，无需手动替换占位符",
+        "   备选（无 token / 离线场景）：手动替换本文件占位符 ${XRAY_REVERSE_UUID} ${DOMAIN} ${LISTENING_PORT} ${DEST_HOST} ${XRAY_REALITY_PUBLIC_KEY} ${XRAY_REALITY_SHORTID}",
         "4. 落地机执行 xray -c reverse_bridge_client.json 跑作为长驻进程（推荐用 systemd unit）",
         "5. 落地机端需要能访问公网 sb-xray（出站 443/TCP）；无需落地机开端口",
         "6. 公网端 routing.rules 里把 REVERSE_DOMAINS 匹配的流量 outboundTag 指向 r-tunnel，流量即反向穿透到落地机 freedom 出口",
         "",
-        "详见 docs/08-reverse-proxy-guide.md"
+        "详见 docs/06-reverse-proxy-guide.md"
     ],
     "log": {
         "loglevel": "warning"

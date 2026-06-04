@@ -64,50 +64,38 @@ entrypoint 自动：
 3. 用 `jq` 往 `/sb-xray/xray/xr.json` 的 `routing.rules` 顶部插入 `outboundTag: r-tunnel` 规则
 4. xray 重启加载新配置
 
-### 2.3 获取 bridge 端所需参数
+### 2.3 拿落地机配置的下载链接
+
+容器已把 6 个参数全部填好，渲染出一份完整的落地机配置。运行 `show` 查看下载链接：
 
 ```bash
-docker exec sb-xray bash -c '. /.env/sb-xray; cat <<EOF
-DOMAIN=$DOMAIN
-LISTENING_PORT=$LISTENING_PORT
-DEST_HOST=$DEST_HOST
-XRAY_REVERSE_UUID=$XRAY_REVERSE_UUID
-XRAY_REALITY_PUBLIC_KEY=$XRAY_REALITY_PUBLIC_KEY
-XRAY_REALITY_SHORTID=$XRAY_REALITY_SHORTID
-EOF'
+docker exec sb-xray show
 ```
 
-六个值要原样给到落地机。
+输出里有一行 `🔁 Reverse Bridge 落地机配置`，下面就是带 token 的下载地址，形如：
+
+```
+https://<你的域名>/sb-xray/reverse_bridge_client.json?token=<SUBSCRIBE_TOKEN>
+```
+
+把这个链接复制给落地机即可，无需手动抄参数。
 
 ---
 
 ## 3. 家宽落地机部署（bridge）
 
-### 3.1 拉模板
+### 3.1 下载已渲染好的配置
+
+落地机直接 wget §2.3 的链接，占位符已全部填充：
 
 ```bash
-wget https://raw.githubusercontent.com/currycan/sb-xray/main/templates/reverse_bridge/client.json \
+wget "https://<你的域名>/sb-xray/reverse_bridge_client.json?token=<SUBSCRIBE_TOKEN>" \
      -O /etc/xray/client.json
 ```
 
-或从仓库 `templates/reverse_bridge/client.json` 复制。
+> 备选（离线 / 不想用 token）：从仓库 `templates/reverse_bridge/client.json` 复制原始模板，再用 `docker exec sb-xray bash -c '. /.env/sb-xray; env | grep -E "DOMAIN|LISTENING_PORT|DEST_HOST|XRAY_REVERSE_UUID|XRAY_REALITY_PUBLIC_KEY|XRAY_REALITY_SHORTID"'` 导出 6 个值，用 `sed` 把 `${...}` 占位符逐个替换。
 
-### 3.2 填参数
-
-编辑 `/etc/xray/client.json`，把 6 个 `${...}` 占位符替换成上一步拿到的真值（脚本示例）：
-
-```bash
-sed -i \
-  -e "s|\${DOMAIN}|vpn.example.com|g" \
-  -e "s|\${LISTENING_PORT}|443|g" \
-  -e "s|\${DEST_HOST}|speed.cloudflare.com|g" \
-  -e "s|\${XRAY_REVERSE_UUID}|<你的 UUID>|g" \
-  -e "s|\${XRAY_REALITY_PUBLIC_KEY}|<你的 pubkey>|g" \
-  -e "s|\${XRAY_REALITY_SHORTID}|<你的 shortid>|g" \
-  /etc/xray/client.json
-```
-
-### 3.3 跑 xray
+### 3.2 跑 xray
 
 最简单：前台测试
 

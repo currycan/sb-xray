@@ -212,6 +212,15 @@ def render_info_links(out: io.TextIOBase) -> None:
                 out=out,
             )
 
+    if os.environ.get("ENABLE_REVERSE", "false") == "true":
+        _print_colored(
+            BRIGHT_CYAN,
+            f"🔁 Reverse Bridge 落地机配置  {DIM}[家宽侧 xray -c 直接可用 · "
+            f"占位符已填充]{RESET}{BRIGHT_CYAN}\n{base}/reverse_bridge_client.json"
+            f"{token_param}",
+            out=out,
+        )
+
     if token_param:
         user = os.environ.get("PUBLIC_USER", "未设置")
         pwd = os.environ.get("PUBLIC_PASSWORD", "未设置")

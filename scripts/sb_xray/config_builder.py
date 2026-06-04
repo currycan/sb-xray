@@ -253,7 +253,8 @@ def _inject_reverse_route(xr_file: Path, domains: list[str]) -> None:
 def _apply_cn_exit(xr_file: Path) -> None:
     """调度器：SOCKS5 模式优先，回退到 r-tunnel 模式（向后兼容）。"""
     socks5_host = os.environ.get("CN_EXIT_SOCKS5_HOST", "").strip()
-    if socks5_host:
+    socks5_enabled = os.environ.get("ENABLE_SOCKS5_PROXY", "true") == "true"
+    if socks5_enabled and socks5_host:
         port = int(os.environ.get("CN_EXIT_SOCKS5_PORT", "7891"))
         _apply_cn_exit_socks5(xr_file, socks5_host, port)
     elif os.environ.get("REVERSE_CN_EXIT", "false") == "true":

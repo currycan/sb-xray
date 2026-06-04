@@ -19,6 +19,10 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "ENABLE_REVERSE",
         "REVERSE_DOMAINS",
         "XRAY_REVERSE_UUID",
+        "REVERSE_CN_EXIT",
+        "ENABLE_SOCKS5_PROXY",
+        "CN_EXIT_SOCKS5_HOST",
+        "CN_EXIT_SOCKS5_PORT",
         "RANDOM_NUM",
         "ENABLE_SUBSTORE",
         "ENABLE_XUI",
@@ -501,3 +505,40 @@ def test_apply_cn_exit_socks5_takes_priority_over_rtunnel(env: Path, tmp_path: P
     rules = data["routing"]["rules"]
     cn_ip_rule = next(r for r in rules if r["ruleTag"] == "cn-ip")
     assert cn_ip_rule["outboundTag"] == "cn-exit"
+
+
+def test_apply_cn_exit_socks5_disabled_by_switch(env: Path, tmp_path: Path) -> None:
+    """ENABLE_SOCKS5_PROXY=false 时即使 HOST 有值也不注入 SOCKS5 出站。"""
+    os.environ["ENABLE_SOCKS5_PROXY"] = "false"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert not [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
+    cn_ip_rule = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert cn_ip_rule["outboundTag"] == "block"
+
+
+def test_apply_cn_exit_switch_off_falls_back_to_rtunnel(env: Path, tmp_path: Path) -> None:
+    """开关关闭且 REVERSE_CN_EXIT=true 时回退 r-tunnel 模式。"""
+    os.environ["ENABLE_SOCKS5_PROXY"] = "false"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    os.environ["REVERSE_CN_EXIT"] = "true"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert not [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
+    cn_ip_rule = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert cn_ip_rule["outboundTag"] == "r-tunnel"
+
+
+def test_apply_cn_exit_socks5_default_enabled_when_unset(env: Path, tmp_path: Path) -> None:
+    """ENABLE_SOCKS5_PROXY 未设置时默认 true（向后兼容）。"""
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
