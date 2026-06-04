@@ -6,11 +6,7 @@ proxy-providers:
 
   优速通:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/YouSuTong", override: {additional-prefix: "[优速通] ", additional-suffix: " super"}}
 
-  SsrDog:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/ssrdog", override: {additional-prefix: "[SsrDog] ", additional-suffix: " super"}}
-
   NiceCloud: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/NiceCloud", override: {additional-prefix: "[NiceCloud] ", additional-suffix: " super"}}
-
-  星链:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/XingLian", override: {additional-prefix: "[星链] "}}
 
   牛逼:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/NiuBi", override: {additional-prefix: "[牛逼] "}}
 

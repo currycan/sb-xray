@@ -26,18 +26,87 @@
 ### 1.1 OpenWrt 安装 Tailscale
 
 ```sh
-opkg update && opkg install tailscale kmod-tun
-/etc/init.d/tailscale enable && /etc/init.d/tailscale start
-tailscale up --auth-key=<tskey> --hostname=home-openwrt
-tailscale ip   # 记录此 IP，后面填入 CN_EXIT_SOCKS5_HOST
+VERSION=1.98.4
+ARCH=amd64
+# ARCH=arm64
+
+wget https://pkgs.tailscale.com/stable/tailscale_${VERSION}_${ARCH}.tgz
+tar -zxvf tailscale_${VERSION}_${ARCH}.tgz
+mv tailscale_${VERSION}_${ARCH}/tailscale /usr/sbin/
+mv tailscale_${VERSION}_${ARCH}/tailscaled /usr/sbin/
+
+cat > /etc/init.d/tailscale << EOF
+#!/bin/sh /etc/rc.common
+
+# START=95
+# STOP=10
+
+USE_PROCD=0
+
+start_service() {
+    procd_set_param pidfile /var/run/tailscaled.pid
+    procd_set_param file /etc/config/tailscale # procd 需要一个文件来监控，此处可指向任意相关文件
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+
+    # 定义 tailscaled 启动命令
+    # --state: 状态文件路径，重要！用于持久化认证信息和网络状态。
+    # --socket: socket 文件路径，tailscale 客户端通过此与守护进程通信。
+    # --tun=userspace-networking: 使用用户空间网络模式，在 OpenWrt 上兼容性更好。
+    procd_open_instance
+    procd_set_param command /usr/sbin/tailscaled \
+        --state=/var/lib/tailscale/tailscaled.state \
+        --socket=/var/run/tailscale/tailscaled.sock \
+        --tun=userspace-networking
+    # 崩溃自动拉起
+    procd_set_param respawn
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+
+stop_service() {
+    /usr/sbin/tailscale down # 优雅地关闭 Tailscale 连接
+    killall tailscaled     # 确保守护进程完全停止
+}
+EOF
+chmod +x /etc/init.d/tailscale
+/etc/init.d/tailscale enable && /etc/init.d/tailscale restart
+
+tailscale up --accept-dns=false --accept-routes --advertise-exit-node --advertise-routes=172.18.18.0/23 --hostname=E3845-op
 ```
 
 ### 1.2 防火墙：允许 Tailscale 接口访问 OpenClash SOCKS5
 
 ```sh
-iptables -I INPUT -i tailscale0 -p tcp --dport 7891 -j ACCEPT
-# 持久化（写入 /etc/firewall.user）
-echo 'iptables -I INPUT -i tailscale0 -p tcp --dport 7891 -j ACCEPT' >> /etc/firewall.user
+# 1. 创建名为 tailscale 的网络接口，绑定虚拟网卡 tailscale0
+uci set network.tailscale=interface
+uci set network.tailscale.proto='none'
+uci set network.tailscale.device='tailscale0'
+uci commit network
+
+# 2. 新建 tailscale 防火墙区域，并开启 IP 动态伪装 (masq)
+uci add firewall zone
+uci set firewall.@zone[-1].name='tailscale'
+uci set firewall.@zone[-1].input='ACCEPT'
+uci set firewall.@zone[-1].output='ACCEPT'
+uci set firewall.@zone[-1].forward='ACCEPT'
+uci set firewall.@zone[-1].masq='1'
+uci add_list firewall.@zone[-1].network='tailscale'
+uci commit firewall
+
+# 3. 允许 tailscale 区域与 lan 区域的双向转发
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='tailscale'
+uci set firewall.@forwarding[-1].dest='lan'
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='lan'
+uci set firewall.@forwarding[-1].dest='tailscale'
+uci commit firewall
+
+# 4. 重启网络与防火墙服务使配置生效
+/etc/init.d/network restart
+/etc/init.d/firewall restart
 ```
 
 ### 1.3 VPS：安装 Tailscale 并加入同一账号
@@ -45,6 +114,9 @@ echo 'iptables -I INPUT -i tailscale0 -p tcp --dport 7891 -j ACCEPT' >> /etc/fir
 ```sh
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up --auth-key=<tskey>
+
+tailscale up --auth-key=<tskey> --hostname=home-openwrt
+tailscale ip   # 记录此 IP，后面填入 CN_EXIT_SOCKS5_HOST
 ```
 
 同一账号下所有 VPS（JP/US/SG 等）均可访问同一个 OpenWrt Tailscale IP，无需额外配置。
