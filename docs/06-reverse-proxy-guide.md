@@ -1,6 +1,6 @@
 # 06. VLESS Reverse Proxy 内网穿透指南
 
-> 本文面向熟悉 Docker / Xray 配置的读者；零基础请先看手把手版 [09. 外网访问家里 NAS 小白教程](./09-nas-remote-access.md)。
+> 本文面向熟悉 Docker / Xray 配置的读者；零基础请先看手把手版 [08. 回国代理部署指南 · 方案二](./08-cn-exit-guide.md#方案二备用xray-reverse-bridge)。
 
 > 把你家里的路由器 / NAS / 本地 Web 服务通过 sb-xray 公网节点**反向暴露**出来，零公网 IP、零端口映射、复用已有 REALITY 通道。
 >

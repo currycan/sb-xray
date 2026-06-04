@@ -12,7 +12,7 @@
 
 ```
 [ClashMi / Karing / 任何 Clash 客户端]
-  规则: iqiyi / youku / bilibili / 银行 → 🇨🇳 回国组 → 选择 VPS 节点
+  规则: GEOSITE,CN / GEOIP,CN → 国内流量组 → 选择 VPS 节点
 
 [VPS · xray 路由]
   geosite:cn / geoip:cn → cn-exit outbound (SOCKS5)
@@ -109,19 +109,39 @@ uci commit firewall
 /etc/init.d/firewall restart
 ```
 
-### 1.3 VPS：安装 Tailscale 并加入同一账号
+### 1.3 OpenClash 配置确认
+
+CN exit 依赖 OpenClash 将国内目标流量放行为 DIRECT，通常无需额外操作。
+
+**确认 CN→DIRECT 规则存在（默认已有）**
+
+OpenClash 默认规则包含 `GEOSITE,CN,DIRECT` 和 `GEOIP,CN,DIRECT`，覆盖绝大部分国内域名和 IP。
+若自定义过规则导致 CN 流量走代理节点，CN exit 将失效（出口 IP 变成代理节点 IP 而非家宽 IP）。
+
+**可选：加 Tailscale 网段直连规则**
+
+在 OpenClash → 覆写设置 → 规则（Rules）最顶部添加：
+
+```yaml
+- IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+```
+
+此规则让访问 Tailscale 节点自身（100.64.x.x）的流量直连，防止健康检查等场景形成环路。
+
+> **注意**：直接在 OpenWrt 上执行 `curl ip.sb` 会显示代理节点 IP，这是**正常现象**——`ip.sb` 是非国内域名，OpenClash 代理它是预期行为。CN exit 仅对 `geosite:cn` + `geoip:cn` 目标生效。
+
+### 1.4 VPS：安装 Tailscale 并加入同一账号
 
 ```sh
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up --auth-key=<tskey>
 
-tailscale up --auth-key=<tskey> --hostname=home-openwrt
-tailscale ip   # 记录此 IP，后面填入 CN_EXIT_SOCKS5_HOST
+tailscale ip E3845-op   # 查询 OpenWrt 节点（1.1 中设置的 hostname）的 Tailscale IP，填入 CN_EXIT_SOCKS5_HOST
 ```
 
 同一账号下所有 VPS（JP/US/SG 等）均可访问同一个 OpenWrt Tailscale IP，无需额外配置。
 
-### 1.4 VPS：配置 docker-compose.yml
+### 1.5 VPS：配置 docker-compose.yml
 
 在 `docker-compose.yml` 中取消注释并填值：
 
@@ -136,7 +156,7 @@ tailscale ip   # 记录此 IP，后面填入 CN_EXIT_SOCKS5_HOST
 docker compose down && docker compose up -d
 ```
 
-### 1.5 验证
+### 1.6 验证
 
 ```sh
 # 确认 SOCKS5 outbound 已注入
@@ -161,38 +181,91 @@ curl --socks5 100.x.x.x:7891 https://www.iqiyi.com -o /dev/null -w "%{http_code}
 ### 2.1 OpenWrt 安装 xray
 
 ```sh
-# arm64（大多数 OpenWrt 路由器）
-wget -O /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip
+# arm64（大多数 OpenWrt 路由器，uname -m 显示 aarch64）
+wget -O /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-arm64-v8a.zip
+# x86 软路由（uname -m 显示 x86_64）改用：
+# wget -O /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip
+
+opkg update && opkg install unzip   # OpenWrt 默认没有 unzip
 unzip /tmp/xray.zip xray -d /usr/bin/
 chmod +x /usr/bin/xray
 ```
 
-### 2.2 生成 bridge 专用 UUID
+### 2.2 VPS 开启 reverse
 
-```sh
-cat /proc/sys/kernel/random/uuid
+在 `docker-compose.yml` 中取消注释并填值：
+
+```yaml
+- ENABLE_REVERSE=true
+- REVERSE_DOMAINS=domain:lan       # 通过 bridge 访问的内网域名（覆盖所有 .lan）；只做回国可留空
+- REVERSE_CN_EXIT=true             # 国内流量（geosite/geoip:cn）经 bridge 回家宽出口
 ```
 
-### 2.3 获取 VPS Reality 公钥
+> ⚠️ **关键**：`CN_EXIT_SOCKS5_HOST` 的优先级高于 `REVERSE_CN_EXIT`——只要它有值，国内流量就走 SOCKS5（方案一）而不进 reverse 隧道。用方案二回国时，请把 `CN_EXIT_SOCKS5_HOST` / `CN_EXIT_SOCKS5_PORT` 注释掉。
+
+`XRAY_REVERSE_UUID` 无需手填：容器首次启动会自动生成并持久化（也可以自己指定一个）。
+
+重启容器并验证：
 
 ```sh
-docker compose logs sb-xray | grep "public key"
+docker compose down && docker compose up -d
+docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
 ```
 
-### 2.4 创建 bridge 配置
+### 2.3 获取 bridge 参数
 
-将 `templates/reverse_bridge/client.json` 复制到 OpenWrt，填入以下值并保存为 `/etc/xray/bridge.json`：
+运行下面的命令，把配置变量输出**完整抄下来**，下一步要用：
 
-| 占位符 | 说明 |
-|--------|------|
-| `${XRAY_REVERSE_UUID}` | 上面生成的 UUID |
-| `${DOMAIN}` | VPS 域名 |
-| `${LISTENING_PORT}` | 443 |
-| `${DEST_HOST}` | Reality 伪装域名 |
-| `${XRAY_REALITY_PUBLIC_KEY}` | VPS Reality 公钥 |
-| `${XRAY_REALITY_SHORTID}` | VPS Reality shortId |
+```bash
+docker exec sb-xray bash -c '. /.env/sb-xray; cat <<EOF
+DOMAIN=$DOMAIN
+LISTENING_PORT=$LISTENING_PORT
+DEST_HOST=$DEST_HOST
+XRAY_REVERSE_UUID=$XRAY_REVERSE_UUID
+XRAY_REALITY_PUBLIC_KEY=$XRAY_REALITY_PUBLIC_KEY
+XRAY_REALITY_SHORTID=$XRAY_REALITY_SHORTID
+EOF'
+```
 
-### 2.5 设置开机自启（OpenWrt procd）
+| 参数 | 它是什么 |
+|------|---------|
+| `DOMAIN` | 你 VPS 的域名，例如 `vpn.example.com` |
+| `LISTENING_PORT` | VPS 对外端口，一般是 `443` |
+| `DEST_HOST` | Reality 伪装目标网站（照抄即可，不用懂） |
+| `XRAY_REVERSE_UUID` | 隧道专用身份证，**只给隧道用**，和你平时翻墙的 UUID 不是同一个 |
+| `XRAY_REALITY_PUBLIC_KEY` | Reality 公钥（照抄即可） |
+| `XRAY_REALITY_SHORTID` | Reality Short ID（照抄即可） |
+
+### 2.4 配置 OpenWrt bridge
+
+#### 2.4.1 下载配置文件模板并填入参数
+
+```sh
+mkdir -p /etc/xray
+wget https://raw.githubusercontent.com/currycan/sb-xray/main/templates/reverse_bridge/client.json -O /etc/xray/client.json
+```
+
+先把 2.3 抄下来的那几行（`DOMAIN=...`、`XRAY_REVERSE_UUID=...` 等）**原样粘贴到 OpenWrt 的命令行里回车**（这样它们就变成了 shell 变量），然后直接执行：
+
+```sh
+sed -i \
+  -e "s|\${DOMAIN}|${DOMAIN}|g" \
+  -e "s|\${XRAY_REVERSE_UUID}|${XRAY_REVERSE_UUID}|g" \
+  -e "s|\${XRAY_REALITY_PUBLIC_KEY}|${XRAY_REALITY_PUBLIC_KEY}|g" \
+  -e "s|\${XRAY_REALITY_SHORTID}|${XRAY_REALITY_SHORTID}|g" \
+  -e "s|\${DEST_HOST}|${DEST_HOST}|g" \
+  /etc/xray/client.json
+```
+
+确认没有占位符残留（无输出即正确）：
+
+```sh
+grep '\${' /etc/xray/client.json
+```
+
+> 模板里出站端口固定写的 `443`。如果你的 `LISTENING_PORT` 不是 443，再手动编辑 `/etc/xray/client.json`，把 `"port": 443` 改成你的端口。
+
+#### 2.4.2 设置开机自启（OpenWrt procd）
 
 ```sh
 cat > /etc/init.d/xray-bridge << 'EOF'
@@ -201,7 +274,7 @@ START=99
 USE_PROCD=1
 start_service() {
     procd_open_instance
-    procd_set_param command /usr/bin/xray run -config /etc/xray/bridge.json
+    procd_set_param command /usr/bin/xray run -config /etc/xray/client.json
     procd_set_param respawn
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -212,37 +285,76 @@ chmod +x /etc/init.d/xray-bridge
 /etc/init.d/xray-bridge enable && /etc/init.d/xray-bridge start
 ```
 
-### 2.6 VPS 配置
+#### 2.4.3 配置需要外网访问的内网站点/服务（如 NAS）
 
-在 `docker-compose.yml` 中取消注释并填值：
-
-```yaml
-- ENABLE_REVERSE=true
-- XRAY_REVERSE_UUID=<与 bridge 相同的 UUID>
-- REVERSE_DOMAINS=<bridge 的访问域名，可留空>
-- REVERSE_CN_EXIT=true
-```
-
-重启容器后验证：
+举例来说：我们约定外网用 `nas.lan` 访问 NAS，现在要让路由器知道 `nas.lan` 指的是谁。把下面命令里的 `192.168.1.10` 换成你 NAS 的真实内网 IP：
 
 ```sh
-docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
+echo "192.168.1.10 nas.lan" >> /etc/hosts
 ```
+
+（喜欢图形界面的话，LuCI → 网络 → 主机名 → 添加，效果相同。）
+
+```sh
+ping -c 1 nas.lan
+```
+
+> ✅ **检查点**：ping 通，且显示的是 NAS 的内网 IP。
+
+### 2.5 路由器上跑了 OpenClash？注意
+
+隧道客户端是路由器**自己发出**的流量（目标是你的 VPS 443 端口）。OpenClash 默认只接管局域网设备的流量、不动路由器自身的连接，所以两者通常相安无事。
+
+只有当你在 OpenClash 里开启了「代理路由器本机流量」之类的选项时，隧道流量可能被它截走、出现反复重连。处理办法任选其一：
+
+- 在 OpenClash 的绕过列表（访问控制/黑名单）中加入你的 VPS 域名或 IP；
+- 关闭「代理路由器本机流量」选项。
+
+### 2.6 在外面用手机 / 电脑访问内网服务（如 NAS）
+
+回到你的手机或电脑（连手机流量或其他网络，**不要连家里 WiFi**，否则测不出效果）。
+
+#### 2.6.1 核心概念：`nas.lan` 必须"走代理"
+
+平时我们让国内流量直连、国外流量走代理；而 `nas.lan` 恰恰相反——它**必须走 sb-xray 节点**，因为只有 VPS 知道怎么把它送进回家的隧道。
+
+好消息是：sb-xray 自带的订阅模板里，所有没被规则匹配的"陌生域名"默认都交给 **`兜底流量`** 这个策略组，`nas.lan` 正属于此类。所以你只需要做一件事：**确保 `兜底流量` 组选中的是 sb-xray 节点**（而不是 DIRECT 或别家机场的节点）。
+
+#### 2.6.2 手机（ClashMi / Karing）
+
+1. 打开 App，确认 sb-xray 的订阅是当前生效配置，启动代理；
+2. 在策略组列表里找到 **`兜底流量`**，把它切换到你的 sb-xray 节点（或指向 sb-xray 的自动选择组）;
+3. 浏览器打开 `http://nas.lan/`（NAS 网页端口不是 80 的话带上端口，如 `http://nas.lan:5000/`）。
+
+#### 2.6.3 电脑（Clash Verge / mihomo）
+
+操作与手机相同：导入订阅 → 开启系统代理 → `兜底流量` 组选中 sb-xray 节点 → 浏览器访问 `http://nas.lan/`。
+
+想要"一劳永逸"、不依赖兜底组的选择，可以在客户端的覆写/自定义规则里**置顶**加一条（`节点选择` 换成你实际指向 sb-xray 的策略组名）：
+
+```yaml
+rules:
+  - DOMAIN-SUFFIX,lan,节点选择
+```
+
+> ✅ **检查点**：浏览器成功打开 NAS 登录页。
 
 ---
 
-## 客户端配置
+## 客户端配置：让国内流量走回国链路
 
-重新拉取订阅后，所有支持的客户端（Mihomo / Stash / Surge）会自动出现 **🇨🇳 回国** 策略组。
+方案一 / 方案二的客户端操作相同。重新拉取订阅后，模板已把 `GEOSITE,CN` / `GEOIP,CN` 等规则指向 **`国内流量`** 策略组（默认选中「直接连接」）。
 
-该策略组在 `include-all: true` 模式下列出所有节点。**将其切换至对应 VPS 节点**，国内流量即从该 VPS 出口经大陆落地。
+身在境外想用爱奇艺、网银、支付宝等大陆限定服务时，把 **`国内流量`** 组切换到你的 sb-xray VPS 节点：
 
-已路由到 🇨🇳 回国 的规则：
-- `geosite:iqiyi` — 爱奇艺
-- `geosite:youku` — 优酷
-- `geosite:bilibili` — 哔哩哔哩
-- `geosite:category-bank-cn` — 国内银行
-- `geosite:category-payment-cn` — 支付宝、微信支付
+1. 客户端策略组列表里找到 **`国内流量`**；
+2. 从「直接连接」切换为 sb-xray 节点（或指向它的自动选择组）。
+
+之后国内流量先到 VPS，再由 VPS 端 xray 按 `geosite:cn` / `geoip:cn` 规则转入回国链路——方案一经 SOCKS5 到 OpenClash 直连出去，方案二经 r-tunnel 由 bridge 直连出去——最终从大陆家宽 IP 访问目标服务。
+
+验证：切换后浏览器访问 `https://ip.cn` 等国内 IP 查询站，显示的应是你家宽的 IP。
+
+> 人在国内时记得把该组切回「直接连接」，否则国内流量会白白绕道 VPS。
 
 ---
 
@@ -269,15 +381,11 @@ curl --socks5 <OpenWrt Tailscale IP>:7891 https://www.baidu.com -o /dev/null -w 
 ```
 
 常见原因：
+
 - Tailscale 未加入同一账号
 - OpenWrt 防火墙未开放 7891 端口给 tailscale0
 - OpenClash 未启动或 SOCKS5 端口配置有误
 
 ### reverse bridge：连接不上 VPS
-
-```sh
-# 在 OpenWrt 上检查日志
-logread | grep xray
-```
 
 常见原因：UUID 不一致、Reality 公钥或 shortId 有误、VPS 防火墙未放行 443/TCP。
