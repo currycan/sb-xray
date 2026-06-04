@@ -145,7 +145,6 @@ docker compose exec sb-xray cat /sb-xray/xray/xr.json | python3 -m json.tool | g
 
 # 通过 OpenWrt SOCKS5 访问国内内容
 curl --socks5 100.x.x.x:7891 https://www.iqiyi.com -o /dev/null -w "%{http_code}"
-# 预期：200
 ```
 
 ---
