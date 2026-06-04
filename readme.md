@@ -118,6 +118,8 @@ flowchart TD
 | ⚙️ **构建部署指南**     | [**👉 05. 构建部署指南**](./docs/05-build-release.md)                          | 详解 `build.sh` 自动构建脚本、四阶段 Dockerfile 架构、11 个组件的版本管理策略与常见构建问题 FAQ。                      |
 | 🔄 **内网穿透专题**     | [**👉 06. VLESS Reverse Proxy 部署指南**](./docs/06-reverse-proxy-guide.md)    | 家宽落地机反向挂载到 VPS 的端到端部署：portal 侧 `ENABLE_REVERSE` 开关、bridge 侧 simplified outbound 模板、双 UUID 隔离、故障排查与撤销流程。 |
 | ✨ **新特性使用指南**   | [**👉 07. 新特性使用指南**](./docs/07-new-features-guide.md)          | 事件总线 / adv 抗审查订阅 / 反向穿透 / Xray 原生 Hy2 / XHTTP-H3 / XICMP / XDNS 共 8 个特性的五段式操作手册 + Env 速查表 + 通用故障排查。 |
+| 🏠 **回国代理专题**     | [**👉 08. 回国代理部署指南**](./docs/08-cn-exit-guide.md)                      | 让境外设备经大陆家宽出口访问大陆限定服务：Tailscale + OpenClash SOCKS5 方案与 reverse 隧道方案的部署、客户端配置与排错。 |
+| 🧭 **NAS 远程访问教程** | [**👉 09. 外网访问家里 NAS 小白教程**](./docs/09-nas-remote-access.md)         | 零基础手把手版内网穿透：公网开关两行配置、OpenWrt 部署 bridge（含 OpenClash 共存提示）、手机/电脑客户端访问与小白排错表。 |
 | 📜 **版本发布日志**     | [**👉 CHANGELOG（Keep a Changelog 格式）**](./CHANGELOG.md)                    | Added / Changed / Fixed / Removed / Security / Migration notes 全分类列表，附生产 E2E 验证证据与 30 秒回滚命令。|
 
 ---
