@@ -250,19 +250,57 @@ def _inject_reverse_route(xr_file: Path, domains: list[str]) -> None:
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _apply_cn_exit(xr_file: Path) -> None:
-    """调度器：SOCKS5 模式优先，回退到 r-tunnel 模式（向后兼容）。"""
-    socks5_host = os.environ.get("CN_EXIT_SOCKS5_HOST", "").strip()
+# 回国出口健康探测默认 URL：中国大陆可达、返回 204，且不被 cn-exit-probe-bypass
+# 影响（observatory 直连出站探测，不经路由规则）。可用 CN_EXIT_PROBE_URL 覆盖。
+_DEFAULT_CN_EXIT_PROBE_URL = "http://connect.rom.miui.com/generate_204"
+
+_CN_EXIT_MODES = frozenset({"socks5", "reverse", "balance", "off"})
+
+
+def _resolve_cn_exit_mode() -> str:
+    """解析回国出口模式。
+
+    显式 ``CN_EXIT_MODE``（socks5|reverse|balance|off）优先级最高；未设置或
+    无法识别时，按既有变量派生（向后兼容）：``ENABLE_SOCKS5_PROXY`` 开启且
+    ``CN_EXIT_SOCKS5_HOST`` 有值 → socks5；否则 ``REVERSE_CN_EXIT=true`` →
+    reverse；否则 off。
+    """
+    explicit = os.environ.get("CN_EXIT_MODE", "").strip().lower()
+    if explicit in _CN_EXIT_MODES:
+        return explicit
+    if explicit:
+        logger.warning("CN-exit: CN_EXIT_MODE=%r 无法识别,按既有变量派生", explicit)
+
     socks5_enabled = os.environ.get("ENABLE_SOCKS5_PROXY", "true") == "true"
+    socks5_host = os.environ.get("CN_EXIT_SOCKS5_HOST", "").strip()
     if socks5_enabled and socks5_host:
-        port = int(os.environ.get("CN_EXIT_SOCKS5_PORT", "7891"))
-        _apply_cn_exit_socks5(xr_file, socks5_host, port)
+        derived = "socks5"
     elif os.environ.get("REVERSE_CN_EXIT", "false") == "true":
+        derived = "reverse"
+    else:
+        derived = "off"
+    if derived != "off":
+        logger.info("CN-exit: 由既有变量派生 mode=%s(建议显式设置 CN_EXIT_MODE)", derived)
+    return derived
+
+
+def _apply_cn_exit(xr_file: Path) -> None:
+    """调度器：按 CN_EXIT_MODE 选择回国出口模式。"""
+    mode = _resolve_cn_exit_mode()
+    if mode == "socks5":
+        _apply_cn_exit_socks5(xr_file)
+    elif mode == "reverse":
         _apply_cn_exit_rtunnel(xr_file)
+    elif mode == "balance":
+        _apply_cn_exit_balance(xr_file)
+    # off → 不改写，CN 流量保持 base 模板的 block
 
 
-def _rewire_cn_rules(data: dict, outbound_tag: str) -> bool:
+def _rewire_cn_rules(data: dict, route_tag: str, *, use_balancer: bool = False) -> bool:
     """把 cn-ip 封禁规则改造为回国出站规则，返回是否找到 cn-ip。
+
+    ``use_balancer=True`` 时 cn 流量规则写 ``balancerTag``（balance 模式），
+    否则写 ``outboundTag``。probe 豁免规则始终走 ``outboundTag: direct``。
 
     三个要点（缺一会导致客户端节点全挂或误报）：
 
@@ -279,6 +317,11 @@ def _rewire_cn_rules(data: dict, outbound_tag: str) -> bool:
     cn_ip = next((r for r in rules if r.get("ruleTag") == "cn-ip"), None)
     if cn_ip is None:
         return False
+    route_key = "balancerTag" if use_balancer else "outboundTag"
+    cn_geosite = {"type": "field", "ruleTag": "cn-geosite", "domain": ["geosite:cn"]}
+    cn_geosite[route_key] = route_tag
+    cn_ip_rule = {"type": "field", "ruleTag": "cn-ip", "ip": cn_ip.get("ip", ["geoip:cn"])}
+    cn_ip_rule[route_key] = route_tag
     remaining = [r for r in rules if r.get("ruleTag") != "cn-ip"]
     anchor = next(
         (i for i, r in enumerate(remaining) if r.get("ruleTag") == "private-ip"),
@@ -291,18 +334,8 @@ def _rewire_cn_rules(data: dict, outbound_tag: str) -> bool:
             "domain": ["full:www.gstatic.com"],
             "outboundTag": "direct",
         },
-        {
-            "type": "field",
-            "ruleTag": "cn-geosite",
-            "domain": ["geosite:cn"],
-            "outboundTag": outbound_tag,
-        },
-        {
-            "type": "field",
-            "ruleTag": "cn-ip",
-            "ip": cn_ip.get("ip", ["geoip:cn"]),
-            "outboundTag": outbound_tag,
-        },
+        cn_geosite,
+        cn_ip_rule,
     ]
     data["routing"]["rules"] = remaining
     return True
@@ -315,18 +348,75 @@ def _apply_cn_exit_rtunnel(xr_file: Path) -> None:
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _apply_cn_exit_socks5(xr_file: Path, host: str, port: int) -> None:
+def _cn_exit_socks5_outbound() -> dict | None:
+    """构造 cn-exit socks outbound；缺少 host 时返回 None。"""
+    host = os.environ.get("CN_EXIT_SOCKS5_HOST", "").strip()
+    if not host:
+        return None
+    port = int(os.environ.get("CN_EXIT_SOCKS5_PORT", "7891"))
+    return {
+        "tag": "cn-exit",
+        "protocol": "socks",
+        "settings": {"servers": [{"address": host, "port": port}]},
+    }
+
+
+def _apply_cn_exit_socks5(xr_file: Path) -> None:
+    outbound = _cn_exit_socks5_outbound()
+    if outbound is None:
+        logger.warning("CN-exit(socks5): CN_EXIT_SOCKS5_HOST 未设置,跳过")
+        return
     data = json.loads(xr_file.read_text(encoding="utf-8"))
     if not _rewire_cn_rules(data, "cn-exit"):
         return
-    data["outbounds"].append(
+    data["outbounds"].append(outbound)
+    server = outbound["settings"]["servers"][0]
+    logger.info("CN-exit(socks5): %s:%d", server["address"], server["port"])
+    xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _merge_observatory(data: dict, selector: list[str]) -> None:
+    """把 selector 合并进全局 observatory（xray 仅支持单个 observatory）。"""
+    obs = data.get("observatory")
+    if obs is None:
+        data["observatory"] = {
+            "subjectSelector": list(selector),
+            "probeUrl": os.environ.get("CN_EXIT_PROBE_URL", _DEFAULT_CN_EXIT_PROBE_URL),
+            "probeInterval": os.environ.get("CN_EXIT_PROBE_INTERVAL", "30s"),
+            "enableConcurrency": True,
+        }
+        return
+    existing = obs.setdefault("subjectSelector", [])
+    for tag in selector:
+        if tag not in existing:
+            existing.append(tag)
+
+
+def _apply_cn_exit_balance(xr_file: Path) -> None:
+    """balance 模式：socks5 + r-tunnel 主备，leastPing + observatory 故障转移。"""
+    outbound = _cn_exit_socks5_outbound()
+    if outbound is None:
+        logger.warning("CN-exit(balance): CN_EXIT_SOCKS5_HOST 未设置,跳过")
+        return
+    if os.environ.get("ENABLE_REVERSE", "false") != "true":
+        logger.warning(
+            "CN-exit(balance): ENABLE_REVERSE!=true,r-tunnel 不可用,balance 退化为仅 socks5"
+        )
+    data = json.loads(xr_file.read_text(encoding="utf-8"))
+    if not _rewire_cn_rules(data, "cn-exit-balance", use_balancer=True):
+        return
+    data["outbounds"].append(outbound)
+    selector = ["cn-exit", "r-tunnel"]
+    _merge_observatory(data, selector)
+    data["routing"].setdefault("balancers", []).append(
         {
-            "tag": "cn-exit",
-            "protocol": "socks",
-            "settings": {"servers": [{"address": host, "port": port}]},
+            "tag": "cn-exit-balance",
+            "selector": selector,
+            "fallbackTag": "direct",
+            "strategy": {"type": "leastPing"},
         }
     )
-    logger.info("CN-exit(socks5): %s:%d", host, port)
+    logger.info("CN-exit(balance): selector=%s leastPing", selector)
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 

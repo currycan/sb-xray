@@ -120,6 +120,7 @@ flowchart TD
 | ✨ **新特性使用指南**   | [**👉 07. 新特性使用指南**](./docs/07-new-features-guide.md)          | 事件总线 / adv 抗审查订阅 / 反向穿透 / Xray 原生 Hy2 / XHTTP-H3 / XICMP / XDNS 共 8 个特性的五段式操作手册 + Env 速查表 + 通用故障排查。 |
 | 🏠 **回国代理专题**     | [**👉 08. 回国代理部署指南**](./docs/08-cn-exit-guide.md)                      | 让境外设备经大陆家宽出口访问大陆限定服务：Tailscale + OpenClash SOCKS5 方案与 reverse 隧道方案的部署、客户端配置与排错；含外网访问家里 NAS 的手把手步骤。 |
 | 🛰️ **Tailscale 架构**  | [**👉 09. Tailscale 代理架构设计与配置**](./docs/09-tailscale-proxy-architecture.md) | 一台 OpenWrt 四个角色（cn-exit 回国 / exit node 出国分流 / subnet router 内网穿透 / 本机直连）的架构原理、流量图解、kernel TUN 与 OpenClash/fake-ip 配置详解，以及路由黑洞等真实踩坑实录。 |
+| 🔁 **Reverse Bridge 架构** | [**👉 10. Xray Reverse Bridge 回国架构设计与配置**](./docs/10-xray-reverse-bridge.md) | 用 Xray 反向代理做海外回国：portal/bridge 角色、`r-tunnel` 虚拟出站、`CN_EXIT_MODE` 四档开关与 socks5+r-tunnel 主备故障转移（balance）的架构原理、流量图解与踩坑实录。 |
 | 📜 **版本发布日志**     | [**👉 CHANGELOG（Keep a Changelog 格式）**](./CHANGELOG.md)                    | Added / Changed / Fixed / Removed / Security / Migration notes 全分类列表，附生产 E2E 验证证据与 30 秒回滚命令。|
 
 ---

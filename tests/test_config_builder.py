@@ -23,6 +23,9 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "ENABLE_SOCKS5_PROXY",
         "CN_EXIT_SOCKS5_HOST",
         "CN_EXIT_SOCKS5_PORT",
+        "CN_EXIT_MODE",
+        "CN_EXIT_PROBE_URL",
+        "CN_EXIT_PROBE_INTERVAL",
         "RANDOM_NUM",
         "ENABLE_SUBSTORE",
         "ENABLE_XUI",
@@ -582,3 +585,194 @@ def test_apply_cn_exit_socks5_default_enabled_when_unset(env: Path, tmp_path: Pa
     cb._apply_cn_exit(xr)
     data = json.loads(xr.read_text(encoding="utf-8"))
     assert [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
+
+
+# ---------------------------------------------------------------------------
+# CN exit - 显式开关 CN_EXIT_MODE (socks5 | reverse | balance | off)
+# ---------------------------------------------------------------------------
+
+
+def test_cn_exit_mode_explicit_socks5(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_MODE"] = "socks5"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
+    cn_ip = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert cn_ip["outboundTag"] == "cn-exit"
+
+
+def test_cn_exit_mode_explicit_reverse_overrides_socks5(env: Path, tmp_path: Path) -> None:
+    """显式 reverse 覆盖既有 socks5 隐式优先级（即使 HOST 有值且 SOCKS5 开启）。"""
+    os.environ["CN_EXIT_MODE"] = "reverse"
+    os.environ["ENABLE_SOCKS5_PROXY"] = "true"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert not [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
+    cn_ip = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert cn_ip["outboundTag"] == "r-tunnel"
+
+
+def test_cn_exit_mode_explicit_off_overrides_host(env: Path, tmp_path: Path) -> None:
+    """显式 off：即使 HOST 有值，CN 流量也保持 block（不回国）。"""
+    os.environ["CN_EXIT_MODE"] = "off"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert not [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
+    cn_ip = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert cn_ip["outboundTag"] == "block"
+
+
+def test_cn_exit_mode_unrecognised_falls_back_to_derivation(env: Path, tmp_path: Path) -> None:
+    """无法识别的值按既有变量派生（此处 HOST 有值 → socks5）。"""
+    os.environ["CN_EXIT_MODE"] = "bogus"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    cn_ip = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert cn_ip["outboundTag"] == "cn-exit"
+
+
+# ---------------------------------------------------------------------------
+# CN exit - balance 模式（socks5 + r-tunnel 主备故障转移）
+# ---------------------------------------------------------------------------
+
+
+def _balance_xr_base() -> dict:
+    return {
+        "outbounds": [{"tag": "direct"}, {"tag": "block"}],
+        "routing": {
+            "rules": [
+                {"ruleTag": "bt", "outboundTag": "block"},
+                {
+                    "ruleTag": "cn-ip",
+                    "ip": ["geoip:cn"],
+                    "marktag": "ban_geoip_cn",
+                    "outboundTag": "block",
+                    "webhook": {"url": "http://127.0.0.1:18085/ban_geoip_cn"},
+                },
+                {"ruleTag": "ad-domain", "outboundTag": "block"},
+                {"ruleTag": "private-ip", "ip": ["geoip:private"], "outboundTag": "block"},
+            ]
+        },
+    }
+
+
+def test_cn_exit_mode_balance_rewires_with_balancer_tag(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_MODE"] = "balance"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_balance_xr_base()), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    rules = data["routing"]["rules"]
+    tags = [r["ruleTag"] for r in rules]
+    assert tags == ["bt", "ad-domain", "cn-exit-probe-bypass", "cn-geosite", "cn-ip", "private-ip"]
+    # probe 豁免仍走 outboundTag direct
+    assert rules[2]["outboundTag"] == "direct"
+    # cn 流量改用 balancerTag，而非 outboundTag
+    assert rules[3]["balancerTag"] == "cn-exit-balance"
+    assert "outboundTag" not in rules[3]
+    assert rules[4]["balancerTag"] == "cn-exit-balance"
+    assert "outboundTag" not in rules[4]
+    # ban marktag/webhook 必须剥离
+    assert "marktag" not in rules[4]
+    assert "webhook" not in rules[4]
+
+
+def test_cn_exit_mode_balance_injects_socks_outbound(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_MODE"] = "balance"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    os.environ["CN_EXIT_SOCKS5_PORT"] = "7891"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_balance_xr_base()), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    cn_exit = [o for o in data["outbounds"] if o.get("tag") == "cn-exit"]
+    assert len(cn_exit) == 1
+    assert cn_exit[0]["protocol"] == "socks"
+    assert cn_exit[0]["settings"]["servers"][0]["address"] == "100.99.99.1"
+    assert cn_exit[0]["settings"]["servers"][0]["port"] == 7891
+
+
+def test_cn_exit_mode_balance_appends_balancer_and_observatory(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_MODE"] = "balance"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_balance_xr_base()), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    balancers = data["routing"]["balancers"]
+    bal = next(b for b in balancers if b["tag"] == "cn-exit-balance")
+    assert bal["selector"] == ["cn-exit", "r-tunnel"]
+    assert bal["fallbackTag"] == "direct"
+    assert bal["strategy"]["type"] == "leastPing"
+    obs = data["observatory"]
+    assert "cn-exit" in obs["subjectSelector"]
+    assert "r-tunnel" in obs["subjectSelector"]
+    assert obs["probeUrl"] == cb._DEFAULT_CN_EXIT_PROBE_URL
+    assert obs["probeInterval"] == "30s"
+    assert obs["enableConcurrency"] is True
+
+
+def test_cn_exit_mode_balance_honours_probe_env(env: Path, tmp_path: Path) -> None:
+    os.environ["CN_EXIT_MODE"] = "balance"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    os.environ["CN_EXIT_PROBE_URL"] = "http://probe.example/generate_204"
+    os.environ["CN_EXIT_PROBE_INTERVAL"] = "15s"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_balance_xr_base()), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    obs = data["observatory"]
+    assert obs["probeUrl"] == "http://probe.example/generate_204"
+    assert obs["probeInterval"] == "15s"
+
+
+def test_cn_exit_mode_balance_merges_existing_observatory(env: Path, tmp_path: Path) -> None:
+    """已有 ISP observatory 时，合并 cn-exit/r-tunnel 而不丢弃既有 subject。"""
+    os.environ["CN_EXIT_MODE"] = "balance"
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    base = _balance_xr_base()
+    base["observatory"] = {
+        "subjectSelector": ["proxy-hk"],
+        "probeUrl": "https://existing.example/probe",
+        "probeInterval": "1m",
+        "enableConcurrency": True,
+    }
+    base["routing"]["balancers"] = [
+        {"tag": "isp-auto", "selector": ["proxy-hk"], "strategy": {"type": "leastPing"}}
+    ]
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(base), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    obs = data["observatory"]
+    assert obs["subjectSelector"] == ["proxy-hk", "cn-exit", "r-tunnel"]
+    # 既有 ISP observatory 探测配置不被覆盖
+    assert obs["probeUrl"] == "https://existing.example/probe"
+    # 既有 balancer 保留，cn-exit-balance 追加
+    bal_tags = [b["tag"] for b in data["routing"]["balancers"]]
+    assert bal_tags == ["isp-auto", "cn-exit-balance"]
+
+
+def test_cn_exit_mode_balance_noop_without_host(env: Path, tmp_path: Path) -> None:
+    """balance 但缺 CN_EXIT_SOCKS5_HOST：不改写、不注入（避免半成品配置）。"""
+    os.environ["CN_EXIT_MODE"] = "balance"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_balance_xr_base()), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    data = json.loads(xr.read_text(encoding="utf-8"))
+    assert "balancers" not in data["routing"]
+    cn_ip = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
+    assert cn_ip["outboundTag"] == "block"
