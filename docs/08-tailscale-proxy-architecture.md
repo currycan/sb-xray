@@ -485,6 +485,8 @@ ethtool -K <wan-netdev> rx-udp-gro-forwarding on rx-gro-list off
 
    📘 临时停用本方案不必清空 HOST：把 `ENABLE_SOCKS5_PROXY` 设为 `false`（或 `CN_EXIT_MODE` 设为 `off`）即可，改回来同样一键恢复。
 
+   > ℹ️ `CN_EXIT_PROBE_URL` / `CN_EXIT_PROBE_INTERVAL` 仅在 `balance`（SOCKS5 + r-tunnel 主备）模式生效，单链路 `socks5` 不需要。回国相关变量完整速查见 [04. 运维 §2.7](./04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选)。
+
 ---
 
 ## 5. 验证：每个角色怎么自测

@@ -103,6 +103,10 @@ flowchart TD
     ISP --> Internet
     DirectFB --> Internet
 
+    ProxyOut1 -. "命中 geosite:cn<br/>CN_EXIT_MODE≠off（可选）" .-> CNExit["回国出站<br/>r-tunnel / cn-exit / balance"]:::outbound
+    ProxyOut2 -.-> CNExit
+    CNExit -. "经大陆家宽" .-> CNHome(["国内服务"]):::external
+
     subgraph Apps ["内部应用与服务"]
         AppXHTTP["Xray XHTTP 协议"]:::xray
         AppVMess["Xray VMess 协议"]:::xray
@@ -119,6 +123,8 @@ flowchart TD
     NginxWeb -- "/myfiles" --> AppFiles
     NginxWeb -- "其他路径" --> AppWeb
 ```
+
+> 图中虚线的「回国出站」为可选能力（`CN_EXIT_MODE`，默认关闭）：海外节点把命中 `geosite:cn` / `geoip:cn` 的流量经家宽回送国内，用于访问地区限定应用。开关与变量见 [04. 运维 §2.7](./04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选)，架构原理见 [09. Xray Reverse Bridge](./09-xray-reverse-bridge.md)。
 
 ### 2.2 视角一：边缘网关入口层
 

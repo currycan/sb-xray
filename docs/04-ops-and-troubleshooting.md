@@ -310,6 +310,44 @@ docker exec sb-xray crontab -l | grep isp-retest
 - `isp.retest.noop` — 周期重测结果无变化
 - `isp.retest.error` / `isp.speed_test.error` — 失败路径
 
+### 2.7 回国出站（`CN_EXIT_MODE` 家族，可选）
+
+海外节点除了承担「国内用户经节点访问外网」（出境，由 `isp-auto` 分流），还可把**判定为国内的流量回送到国内出站**，让海外环境正常访问 Bilibili / 网易云 / 各银行等地区限定应用。这两条方向正交：出境走 `isp-auto` / `direct`，回国由本节的 `CN_EXIT_MODE` 控制。
+
+**四档模式**（`CN_EXIT_MODE`，值落在集合内时直接生效；留空则按 `ENABLE_SOCKS5_PROXY` / `REVERSE_CN_EXIT` 派生）：
+
+| 取值 | 行为 | 就绪条件 | 国内流量出站 |
+|:---|:---|:---|:---|
+| `socks5` | 国内流量经 SOCKS5 回国（Tailscale / OpenClash 家宽） | `CN_EXIT_SOCKS5_HOST` 非空 | `cn-exit` |
+| `reverse` | 国内流量经 `r-tunnel` 反向隧道回国（家宽 bridge 挂载） | `ENABLE_REVERSE=true` | `r-tunnel` |
+| `balance` | SOCKS5 + `r-tunnel` 主备，`leastPing` 探测自动故障转移 | 两条均就绪 | `cn-exit-balance` |
+| `off` | 不回国，国内流量直接封禁 | — | `block` |
+
+> `docker-compose.yml` 生产默认 `CN_EXIT_MODE=balance`（两条回国链路互为主备，任一失效自动切换，全断则 fallback 直连）。
+
+**相关环境变量**：
+
+| 变量 | 默认 | 作用 |
+|:---|:---|:---|
+| `CN_EXIT_MODE` | _空（派生）_ | 回国模式总开关；取值 `socks5` / `reverse` / `balance` / `off` |
+| `CN_EXIT_SOCKS5_HOST` | _空_ | 回国 SOCKS5 地址（通常为 Tailscale IP）；`socks5` / `balance` 必填 |
+| `CN_EXIT_SOCKS5_PORT` | `7891` | 回国 SOCKS5 端口 |
+| `CN_EXIT_PROBE_URL` | `http://connect.rom.miui.com/generate_204` | `balance` 模式健康探测 URL（国内可达的 204 端点） |
+| `CN_EXIT_PROBE_INTERVAL` | `30s` | `balance` 模式探测周期；`CN_EXIT_PROBE_*` 仅在 `balance` 下生效 |
+| `ENABLE_REVERSE` | `false` | 启用 `r-tunnel` 反向隧道（`reverse` / `balance` 前置开关） |
+| `REVERSE_DOMAINS` | `domain:home.lan` 等 4 个内网域名 | 经 `r-tunnel` 穿透的域名列表（逗号分隔）；与 §2.4 VLESS Reverse 为**同一变量**，`reverse` / `balance` 复用，纯回国可留空 |
+
+**回国路由分层**（自上而下首条命中，由 `config_builder.py` 的 `_rewire_cn_rules` 注入）：
+
+| 顺序 | ruleTag | 匹配 | 出站 | 用途 |
+|:---:|:---|:---|:---|:---|
+| 1 | `cn-exit-probe-bypass` | `full:www.gstatic.com` | `direct` | 放行客户端健康探测域名，不卷进隧道 |
+| 2 | `cn-exit-overseas` | `geosite:geolocation-!cn` | `direct` | **海外护栏**：已知海外服务（Google Play 等）始终走海外出口，不被回国规则误吞 |
+| 3 | `cn-geosite` | `geosite:cn` | 回国出站 | 国内域名回国 |
+| 4 | `cn-ip` | `geoip:cn` | 回国出站 | 国内 IP 兜底回国 |
+
+> 第 2 层护栏配合 §5.5 的 MetaCubeX `geosite.dat`（其 `geosite:cn` 不含 `@cn` 标记的海外 CDN）双重确保 `dl.google.com` / `*.gvt1.com` 等不会被误送回国。架构原理与流量图解见 [09. Xray Reverse Bridge](./09-xray-reverse-bridge.md)；Tailscale 半边（`socks5` 链路）见 [08. Tailscale 代理架构](./08-tailscale-proxy-architecture.md)。
+
 ---
 
 ## 3. 订阅端点安全体系
@@ -464,9 +502,12 @@ docker compose restart sb-xray
 
 | 文件 | 用途 | 来源 |
 |:---|:---|:---|
-| `geoip.dat` / `geosite.dat` | IP/域名分类库 (Xray, Sing-box) | Loyalsoldier/v2ray-rules-dat |
+| `geosite.dat` | 域名分类库 (Xray, Sing-box) | MetaCubeX/meta-rules-dat |
+| `geoip.dat` | IP 分类库 (Xray, Sing-box) | Loyalsoldier/v2ray-rules-dat |
 | `geoip_IR.dat` / `geosite_IR.dat` | 伊朗区域规则 | chocolate4u/Iran-v2ray-rules |
 | `geoip_RU.dat` / `geosite_RU.dat` | 俄罗斯区域规则 | runetfreedom/russia-v2ray-rules-dat |
+
+> `geosite.dat` 取自 **MetaCubeX**：其 `geosite:cn` 不含被上游 `@cn` 标记的海外 CDN（`dl.google.com` / `*.gvt1.com` / `*.googleapis.com` 等），避免回国规则（见 §2.7）把 Google Play 等地区敏感服务误送回国。`geoip.dat` 仍取自 Loyalsoldier（IP 库无此问题，独立文件可混用）。
 
 ---
 

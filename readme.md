@@ -74,9 +74,11 @@ flowchart TD
 
     RoutingEngine -->|"命中流媒体 / AI 规则"| ISP["ISP 住宅节点<br/>SOCKS5 链式代理"]:::outbound
     RoutingEngine -->|"普通海外流量"| Direct["本机直连 (Freedom)"]:::outbound
+    RoutingEngine -.->|"命中 geosite:cn<br/>CN_EXIT_MODE 回国（可选）"| CNExit["🏠 回国出站<br/>r-tunnel / cn-exit / balance"]:::outbound
 
     ISP --> WebOut(["全球互联网"]):::terminal
     Direct --> WebOut
+    CNExit -.->|"经大陆家宽出口"| CNHome(["国内应用"]):::terminal
 ```
 
 ## 🌟 核心企业级特性 (Enterprise Features)
@@ -184,8 +186,9 @@ docker compose up -d
 | **资源** | `GOMEMLIMIT` / `GOGC` | `320MiB` / `50` | Go 四件套共享 GC 上限 |
 | **事件总线** | `SHOUTRRR_URLS` | 空 | 留空 = 仅写本地日志；填 Telegram / Discord URL 推送 |
 | **`isp-auto` 优化** | `ISP_PROBE_URL` / `ISP_PER_SERVICE_SB` / `ISP_FALLBACK_STRATEGY` / `ISP_RETEST_INTERVAL_HOURS` 等 | 有默认 | 开箱即用，按需调优见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选) |
+| **回国出站** | `CN_EXIT_MODE` / `CN_EXIT_SOCKS5_HOST` / `CN_EXIT_PROBE_URL` 等 | `balance`（compose 默认） | 海外节点把国内流量回送国内（访问 B 站 / 网易云 / 银行等）；四档开关与变量见 [04. 运维 §2.7](./docs/04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选) |
 
-> Provider 订阅、Hysteria2 / TUIC / AnyTLS 端口覆盖、实验性 feature flag（`ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE`）等非日常调整项也都在 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量与状态文件) 内列出。
+> Provider 订阅、Hysteria2 / TUIC / AnyTLS 端口覆盖、实验性 feature flag（`ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE`）等非日常调整项也都在 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量与状态文件) 内列出；海外节点回国出站（`CN_EXIT_MODE` 四档）见 [04. 运维 §2.7](./docs/04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选)。
 
 ### 目录结构说明
 
@@ -223,9 +226,12 @@ sb-xray/
 │   ├── 01-architecture-and-traffic.md        # 系统架构与全流量链路
 │   ├── 02-protocols-and-security.md          # 协议详解与安全加密
 │   ├── 03-routing-and-clients.md             # 路由决策与客户端分发
-│   ├── 04-ops-and-troubleshooting.md         # 运维与排障（含 env 全集）
+│   ├── 04-ops-and-troubleshooting.md         # 运维与排障（含 env 全集、回国 CN_EXIT_MODE）
 │   ├── 05-build-release.md                   # 构建部署与版本发布
-│   └── 07-event-bus-shoutrrr.md              # shoutrrr 事件总线指南
+│   ├── 06-reverse-proxy-guide.md             # VLESS Reverse Proxy 内网穿透部署
+│   ├── 07-event-bus-shoutrrr.md              # shoutrrr 事件总线指南
+│   ├── 08-tailscale-proxy-architecture.md    # Tailscale 代理架构（含 socks5 回国半边）
+│   └── 09-xray-reverse-bridge.md             # Xray Reverse Bridge 回国架构与 CN_EXIT_MODE
 ├── tests/                    # pytest 单元/集成测试（~380 用例）
 └── sources/                  # 静态资源与伪装站点素材
 ```

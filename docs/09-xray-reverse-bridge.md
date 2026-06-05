@@ -119,6 +119,8 @@ flowchart TB
 
 > 留空 `CN_EXIT_MODE` 时按既有变量派生（向后兼容）：`CN_EXIT_SOCKS5_HOST` 有值且 `ENABLE_SOCKS5_PROXY=true` → `socks5`；否则 `REVERSE_CN_EXIT=true` → `reverse`；否则 `off`。**建议显式设置** `CN_EXIT_MODE`，不要再依赖「有没有值」的隐式判断。
 
+> 📋 `CN_EXIT_*` / `REVERSE_DOMAINS` 等回国相关变量的完整默认值速查见 [04. 运维 §2.7](./04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选)。
+
 🔬 **portal 侧路由改写**（`scripts/sb_xray/config_builder.py`）：容器启动渲染 `xr.json` 时，把 `cn-ip`（默认封禁）规则下移到 `private-ip` 之前、剥离 ban 标记，并前置 `geosite:cn`、`geoip:cn` 两条回国规则（`reverse` 写 `outboundTag: r-tunnel`，`balance` 写 `balancerTag: cn-exit-balance`），同时前置两条豁免：`full:www.gstatic.com → direct`（健康检查豁免，防止 mihomo/OpenClash 默认探测域名被卷进回国隧道，隧道一断全节点健康检查崩）、`geosite:geolocation-!cn → direct`（海外直出护栏，见 §2.3）。
 
 ### 2.3 回国路由策略（哪些流量回国，哪些海外直出）
