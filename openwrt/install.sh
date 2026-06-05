@@ -97,6 +97,7 @@ validate_config() {
         http://*|https://*) die "VPS_DOMAIN 不要带 http(s):// 前缀，只填域名" ;;
     esac
     case "$PEER_TS_IP" in
+        100.0.0.0) die "PEER_TS_IP 仍是示例占位符 100.0.0.0 —— 请填 VPS 的 tailscale ip -4 输出" ;;
         100.*) : ;;
         *) warn "PEER_TS_IP=$PEER_TS_IP 不像 Tailscale IP（应为 100.x 网段）" ;;
     esac
@@ -163,21 +164,23 @@ install_tailscale() {
         log "Tailscale $TS_VERSION 安装完成"
     fi
 
-    mkdir -p /var/lib/tailscale /var/run/tailscale
+    # state 必须放持久化路径：OpenWrt 的 /var 是 tmpfs，放那里重启即丢登录态、
+    # 每次重启都会注册成新节点（踩坑固化）。
+    mkdir -p /etc/tailscale /var/run/tailscale
     backup_file /etc/init.d/tailscale
     # 关键固化：--port 固定端口、kernel TUN 模式（默认 tailscale0）、显式 state/socket 路径
     cat > /etc/init.d/tailscale <<EOF
 #!/bin/sh /etc/rc.common
 
-# START=95
-# STOP=10
+START=95
+STOP=10
 
 USE_PROCD=0
 
 start_service() {
     procd_open_instance
     procd_set_param command /usr/sbin/tailscaled \\
-        --state=/var/lib/tailscale/tailscaled.state \\
+        --state=/etc/tailscale/tailscaled.state \\
         --socket=/var/run/tailscale/tailscaled.sock \\
         --port=${TS_PORT}
     procd_set_param respawn
@@ -268,10 +271,15 @@ setup_tailscale() {
     sleep 4
     # 踩坑固化：手写 init restart 后 daemon 常停在 Stopped，必须显式 up。
     # --reset：up 是全量替换 prefs 的语义，清掉历史残留再应用本次 flag（登录态不受影响）。
+    # --timeout：up 默认无限等 backend 进入 Running，挂住会卡死整个安装流程。
+    # 严禁加 --accept-routes：kernel 模式下它会把其他节点（含已下线旧路由器）
+    # 被批准的本 LAN 网段路由装进内核 → 发往 LAN 的回包全进隧道黑洞 → 整机失联，
+    # 表现与死机无异（2026-06-05 实测三次"死机"均由此引起）。本机是 subnet
+    # router 本体，不需要接受任何对端路由。
     log "运行 tailscale up —— 若打印登录 URL，请在浏览器打开授权（仅首次需要）"
     tailscale up --reset \
+        --timeout=120s \
         --accept-dns=false \
-        --accept-routes \
         --advertise-routes="$TS_ADVERTISE_ROUTES" \
         --advertise-exit-node \
         --hostname="$TS_HOSTNAME" || \

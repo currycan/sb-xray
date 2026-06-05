@@ -16,9 +16,10 @@
 
 ## 目标架构
 
-- tailscaled：保留 `--state/--socket/--port=$TS_PORT`，删除 `--tun=userspace-networking` → 内核创建 tailscale0（依赖 kmod-tun）
-- `tailscale up --reset --accept-dns=false --accept-routes --advertise-routes=$TS_ADVERTISE_ROUTES --advertise-exit-node --hostname=$TS_HOSTNAME`
-  - `--reset` 清掉 userspace 时代旧 prefs（登录态不受影响）
+- tailscaled：保留 `--socket/--port=$TS_PORT`，删除 `--tun=userspace-networking` → 内核创建 tailscale0（依赖 kmod-tun）；state 路径移至 `/etc/tailscale/`（/var 是 tmpfs，重启丢登录态）；init.d 的 `START=95/STOP=10` 取消注释（否则 enable 无效，无开机自启）
+- `tailscale up --reset --timeout=120s --accept-dns=false --advertise-routes=$TS_ADVERTISE_ROUTES --advertise-exit-node --hostname=$TS_HOSTNAME`
+  - `--reset` 清掉旧 prefs（登录态不受影响）；`--timeout` 防 up 无限挂起
+  - **不带 `--accept-routes`**：kernel 模式下它会把其他节点已批准的本 LAN 网段路由装进内核，LAN 回包进隧道黑洞、整机失联（实机三次"死机"的根因）。本机是 subnet router 本体，无需接受对端路由
   - 顺带修复现存 bug：`--tun` 不是 `tailscale up` 的合法 flag，此前被 `|| warn` 吞掉
 
 ### 四条数据流

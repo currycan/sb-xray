@@ -41,8 +41,8 @@ mv tailscale_${VERSION}_${ARCH}/tailscaled /usr/sbin/
 cat > /etc/init.d/tailscale << EOF
 #!/bin/sh /etc/rc.common
 
-# START=95
-# STOP=10
+START=95
+STOP=10
 
 USE_PROCD=0
 
@@ -53,13 +53,14 @@ start_service() {
     procd_set_param stderr 1
 
     # 定义 tailscaled 启动命令
-    # --state: 状态文件路径，重要！用于持久化认证信息和网络状态。
+    # --state: 状态文件路径，重要！必须放持久化目录（/etc/...）——
+    #          OpenWrt 的 /var 是 tmpfs，放那里重启即丢登录态、每次重启注册新节点。
     # --socket: socket 文件路径，tailscale 客户端通过此与守护进程通信。
     # 默认 kernel TUN 模式（创建 tailscale0 网卡）：内核转发吞吐高，
     # 且 subnet router / exit node / 本机直连 tailnet 均可用；防火墙配置见 1.2。
     procd_open_instance
     procd_set_param command /usr/sbin/tailscaled \
-        --state=/var/lib/tailscale/tailscaled.state \
+        --state=/etc/tailscale/tailscaled.state \
         --socket=/var/run/tailscale/tailscaled.sock
     # 崩溃自动拉起
     procd_set_param respawn
@@ -76,10 +77,12 @@ EOF
 chmod +x /etc/init.d/tailscale
 /etc/init.d/tailscale enable && /etc/init.d/tailscale restart
 
-tailscale up --accept-dns=false --accept-routes --advertise-exit-node --advertise-routes=172.18.18.0/23 --hostname=E3845-op
+tailscale up --accept-dns=false --advertise-exit-node --advertise-routes=172.18.18.0/23 --hostname=E3845-op
 ```
 
 > **注意**：`--advertise-routes` 与 `--advertise-exit-node` 需到 [Tailscale 管理后台](https://login.tailscale.com/admin/machines) 找到该节点 → Edit route settings 手动批准后才生效。
+
+> ⚠️ **严禁在本机加 `--accept-routes`**：kernel TUN 模式下，若 tailnet 中任何其他节点（包括早已下线的旧设备）持有已批准的、与本机 LAN 网段重叠的子网路由，accept-routes 会把这条路由装进内核策略路由——发往 LAN 的所有回包被丢进隧道黑洞，整机失联，表现与死机无异。本机自己就是 subnet router，无需接受任何对端路由。排查方法见故障排查节。
 
 ### 1.2 防火墙：允许 Tailscale 接口访问 OpenClash SOCKS5
 
@@ -376,6 +379,18 @@ rules:
 ---
 
 ## 排查
+
+### OpenWrt 整机失联（疑似死机）
+
+`tailscale up` 后路由器 LAN/SSH/LuCI 全部失联、看似死机——通常**不是死机，而是路由黑洞**：`--accept-routes` 把 tailnet 中其他节点（含已下线旧设备）已批准的、与本机 LAN 重叠的子网路由装进了内核（`ip rule 5270` → `table 52`），发往 LAN 的回包全部进了隧道。
+
+特征与确认方法：
+
+- LAN ping 不通，但 `ssh root@<本机 Tailscale IP>` 会返回 connection refused（活体反应——tailscaled 自己的包带 fwmark 走 `rule 5210` 逃逸黑洞）
+- 无需断电。可经 LuCI（监听 Tailscale IP）的 ubus 接口远程 `rc init tailscale stop`，或物理重启
+- 恢复后 `ip route show table 52 | grep <LAN网段>` 应为空；用 `tailscale set --accept-routes=false` 永久关闭
+
+根治：本机 up 参数不带 `--accept-routes`（见 1.1 警告），并到管理后台删除下线旧节点及其已批准路由。
 
 ### SOCKS5 模式：cn-exit outbound 未注入
 
