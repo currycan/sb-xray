@@ -194,7 +194,9 @@ flowchart LR
 
 🔬 **机制**：portal 生成一个 `cn-exit-balance` balancer（`selector: ["cn-exit","r-tunnel"]`，策略 `leastPing`，`fallbackTag: direct`），并把 `cn-exit`、`r-tunnel` 加入 observatory 的 `subjectSelector`。国内流量改用 `balancerTag` 引用它。探测地址由 `CN_EXIT_PROBE_URL`（默认 `http://connect.rom.miui.com/generate_204`，大陆可达返回 204）、`CN_EXIT_PROBE_INTERVAL`（默认 `30s`）控制，探测**直接经各出站发起、不经路由规则**。
 
-> ⚠️ **能力边界（务必实测确认）**：`r-tunnel` 是运行时动态注册的**虚拟出站**，能否被 observatory 的 `subjectSelector` 纳入探测，取决于具体 Xray 版本的实现。若实测发现 balancer 始终只走 `cn-exit`（即 `r-tunnel` 未被探测到），请退回 `CN_EXIT_MODE=reverse` 或 `socks5` 单链路模式。部署后按 §6.4 确认两条链路都被选中过，再宣称「主备生效」。
+> ℹ️ **observatory 为全局单例**：若已启用 ISP balancer（已存在 observatory），balance 模式只把 `cn-exit`、`r-tunnel` 合并进其 `subjectSelector`，探测地址/间隔沿用既有 observatory 的设置，`CN_EXIT_PROBE_URL`/`CN_EXIT_PROBE_INTERVAL` 不生效。两条回国腿对外网探测地址均可达，故障判定不受影响。
+
+> ✅ **能力确认（Xray 26.3.27 实测）**：`r-tunnel` 是运行时动态注册的**虚拟出站**，实测可被 observatory 纳入探测：bridge 在线时 balancer 选 `r-tunnel`；停掉 bridge 后约一个探测周期内自动切换 `cn-exit`，回国不中断；bridge 恢复后回切 `r-tunnel`。若你的 Xray 版本实测发现 balancer 始终只走 `cn-exit`（即 `r-tunnel` 未被探测到），请退回 `CN_EXIT_MODE=reverse` 或 `socks5` 单链路模式。部署后按 §6.4 确认两条链路都被选中过，再宣称「主备生效」。
 
 ---
 
