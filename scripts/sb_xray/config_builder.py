@@ -302,15 +302,20 @@ def _rewire_cn_rules(data: dict, route_tag: str, *, use_balancer: bool = False) 
     ``use_balancer=True`` 时 cn 流量规则写 ``balancerTag``（balance 模式），
     否则写 ``outboundTag``。probe 豁免规则始终走 ``outboundTag: direct``。
 
-    三个要点（缺一会导致客户端节点全挂或误报）：
+    四个要点（缺一会导致客户端节点全挂、海外应用失效或误报）：
 
     1. 下移到 ``private-ip`` 锚点之前 —— 原 cn-ip 位置在所有服务直连
        例外规则（geosite:google → direct 等）之前，``geosite:cn`` 会抢先
        吞掉这些域名。
-    2. 豁免 ``www.gstatic.com`` —— mihomo/OpenClash 默认健康检查 URL，
+    2. 前置 ``geosite:geolocation-!cn → direct`` 海外直出护栏 —— Loyalsoldier
+       geosite:cn 收录了 dl.google.com / *.gvt1.com / *.googleapis.com 等
+       Google Play CDN 子域（国内可直连清单）。若不挡，这些海外服务会被
+       cn-geosite 送回国内出口，导致 Google Play 等地区敏感应用从国内 IP
+       访问而失效。护栏排在 cn-geosite 之前，让明确属于海外的域名走 direct。
+    3. 豁免 ``www.gstatic.com`` —— mihomo/OpenClash 默认健康检查 URL，
        Loyalsoldier geosite:cn 收录了 ``full:www.gstatic.com``；若被吸进
        回国隧道，隧道一断所有节点健康检查全部失败。
-    3. 剥离 ban ``marktag``/``webhook`` —— cn-ip 已不再是封禁规则，保留
+    4. 剥离 ban ``marktag``/``webhook`` —— cn-ip 已不再是封禁规则，保留
        会对正常回国流量持续误报 ban_geoip_cn 事件。
     """
     rules = data["routing"]["rules"]
@@ -332,6 +337,12 @@ def _rewire_cn_rules(data: dict, route_tag: str, *, use_balancer: bool = False) 
             "type": "field",
             "ruleTag": "cn-exit-probe-bypass",
             "domain": ["full:www.gstatic.com"],
+            "outboundTag": "direct",
+        },
+        {
+            "type": "field",
+            "ruleTag": "cn-exit-overseas",
+            "domain": ["geosite:geolocation-!cn"],
             "outboundTag": "direct",
         },
         cn_geosite,

@@ -429,15 +429,26 @@ def test_apply_cn_exit_redirects_cn_ip_to_r_tunnel(env: Path, tmp_path: Path) ->
     data = json.loads(xr.read_text(encoding="utf-8"))
     rules = data["routing"]["rules"]
     tags = [r["ruleTag"] for r in rules]
-    # cn 规则下移到 private-ip 之前，前置健康检查豁免
-    assert tags == ["bt", "ad-domain", "cn-exit-probe-bypass", "cn-geosite", "cn-ip", "private-ip"]
+    # cn 规则下移到 private-ip 之前，前置健康检查豁免 + 海外直出护栏
+    assert tags == [
+        "bt",
+        "ad-domain",
+        "cn-exit-probe-bypass",
+        "cn-exit-overseas",
+        "cn-geosite",
+        "cn-ip",
+        "private-ip",
+    ]
     probe = rules[2]
     assert probe["domain"] == ["full:www.gstatic.com"]
     assert probe["outboundTag"] == "direct"
-    assert rules[3]["domain"] == ["geosite:cn"]
-    assert rules[3]["outboundTag"] == "r-tunnel"
-    assert rules[4]["ip"] == ["geoip:cn"]
+    overseas = rules[3]
+    assert overseas["domain"] == ["geosite:geolocation-!cn"]
+    assert overseas["outboundTag"] == "direct"
+    assert rules[4]["domain"] == ["geosite:cn"]
     assert rules[4]["outboundTag"] == "r-tunnel"
+    assert rules[5]["ip"] == ["geoip:cn"]
+    assert rules[5]["outboundTag"] == "r-tunnel"
 
 
 def test_apply_cn_exit_noop_when_cn_ip_rule_absent(env: Path, tmp_path: Path) -> None:
@@ -497,13 +508,45 @@ def test_apply_cn_exit_socks5_rewires_rules(env: Path, tmp_path: Path) -> None:
     rules = data["routing"]["rules"]
     tags = [r["ruleTag"] for r in rules]
     # cn 规则下移到 private-ip 之前，让服务直连例外规则优先匹配
-    assert tags == ["bt", "ad-domain", "cn-exit-probe-bypass", "cn-geosite", "cn-ip", "private-ip"]
+    assert tags == [
+        "bt",
+        "ad-domain",
+        "cn-exit-probe-bypass",
+        "cn-exit-overseas",
+        "cn-geosite",
+        "cn-ip",
+        "private-ip",
+    ]
     assert rules[2]["domain"] == ["full:www.gstatic.com"]
     assert rules[2]["outboundTag"] == "direct"
-    assert rules[3]["domain"] == ["geosite:cn"]
-    assert rules[3]["outboundTag"] == "cn-exit"
-    assert rules[4]["ip"] == ["geoip:cn"]
+    assert rules[3]["domain"] == ["geosite:geolocation-!cn"]
+    assert rules[3]["outboundTag"] == "direct"
+    assert rules[4]["domain"] == ["geosite:cn"]
     assert rules[4]["outboundTag"] == "cn-exit"
+    assert rules[5]["ip"] == ["geoip:cn"]
+    assert rules[5]["outboundTag"] == "cn-exit"
+
+
+def test_apply_cn_exit_overseas_guard_precedes_cn_geosite(env: Path, tmp_path: Path) -> None:
+    """geosite:geolocation-!cn → direct 护栏必须排在 cn-geosite 回国规则之前。
+
+    Loyalsoldier geosite:cn 收录了 dl.google.com / *.gvt1.com 等 Google Play
+    CDN 子域（国内可直连清单）。若 cn-geosite 抢先匹配，这些海外服务会被送回
+    国内出口，导致 Google Play 等地区敏感应用从国内 IP 访问而失效。护栏让所有
+    明确属于海外的域名先走 direct（海外 VPS 直出）。
+    """
+    os.environ["CN_EXIT_SOCKS5_HOST"] = "100.99.99.1"
+    xr = tmp_path / "xr.json"
+    xr.write_text(json.dumps(_SOCKS5_XR_BASE), encoding="utf-8")
+    cb._apply_cn_exit(xr)
+    rules = json.loads(xr.read_text(encoding="utf-8"))["routing"]["rules"]
+    tags = [r["ruleTag"] for r in rules]
+    overseas_idx = tags.index("cn-exit-overseas")
+    cn_geosite_idx = tags.index("cn-geosite")
+    assert overseas_idx < cn_geosite_idx
+    overseas = rules[overseas_idx]
+    assert overseas["domain"] == ["geosite:geolocation-!cn"]
+    assert overseas["outboundTag"] == "direct"
 
 
 def test_apply_cn_exit_socks5_strips_ban_marktag_and_webhook(env: Path, tmp_path: Path) -> None:
@@ -535,7 +578,7 @@ def test_apply_cn_exit_socks5_appends_when_private_ip_absent(env: Path, tmp_path
     cb._apply_cn_exit(xr)
     data = json.loads(xr.read_text(encoding="utf-8"))
     tags = [r["ruleTag"] for r in data["routing"]["rules"]]
-    assert tags == ["bt", "cn-exit-probe-bypass", "cn-geosite", "cn-ip"]
+    assert tags == ["bt", "cn-exit-probe-bypass", "cn-exit-overseas", "cn-geosite", "cn-ip"]
 
 
 def test_apply_cn_exit_socks5_takes_priority_over_rtunnel(env: Path, tmp_path: Path) -> None:
@@ -677,17 +720,27 @@ def test_cn_exit_mode_balance_rewires_with_balancer_tag(env: Path, tmp_path: Pat
     data = json.loads(xr.read_text(encoding="utf-8"))
     rules = data["routing"]["rules"]
     tags = [r["ruleTag"] for r in rules]
-    assert tags == ["bt", "ad-domain", "cn-exit-probe-bypass", "cn-geosite", "cn-ip", "private-ip"]
-    # probe 豁免仍走 outboundTag direct
+    assert tags == [
+        "bt",
+        "ad-domain",
+        "cn-exit-probe-bypass",
+        "cn-exit-overseas",
+        "cn-geosite",
+        "cn-ip",
+        "private-ip",
+    ]
+    # probe 豁免与海外护栏仍走 outboundTag direct（不进 balancer）
     assert rules[2]["outboundTag"] == "direct"
+    assert rules[3]["domain"] == ["geosite:geolocation-!cn"]
+    assert rules[3]["outboundTag"] == "direct"
     # cn 流量改用 balancerTag，而非 outboundTag
-    assert rules[3]["balancerTag"] == "cn-exit-balance"
-    assert "outboundTag" not in rules[3]
     assert rules[4]["balancerTag"] == "cn-exit-balance"
     assert "outboundTag" not in rules[4]
+    assert rules[5]["balancerTag"] == "cn-exit-balance"
+    assert "outboundTag" not in rules[5]
     # ban marktag/webhook 必须剥离
-    assert "marktag" not in rules[4]
-    assert "webhook" not in rules[4]
+    assert "marktag" not in rules[5]
+    assert "webhook" not in rules[5]
 
 
 def test_cn_exit_mode_balance_injects_socks_outbound(env: Path, tmp_path: Path) -> None:
