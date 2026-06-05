@@ -417,6 +417,9 @@ curl --socks5 <OpenWrt Tailscale IP>:7891 https://www.baidu.com -o /dev/null -w 
 - Tailscale 未加入同一账号
 - OpenWrt 防火墙未开放 7891 端口给 tailscale0
 - OpenClash 未启动或 SOCKS5 端口配置有误
+- **mihomo SOCKS 入站开了 authentication，但 `skip-auth-prefixes` 不含 Tailscale 段**：VPS 经 Tailscale 来的源 IP 是 `100.64.0.0/10`（CGNAT），若不在 skip-auth 豁免内，SOCKS 握手会被要求认证而失败（现象：本机经 `127.0.0.1:7891` curl 正常，但经本机 Tailscale IP 或从 VPS 测就失败）。`install.sh` 已用 OpenClash overwrite 钩子幂等注入此段；手动修则在钩子里 `Value['skip-auth-prefixes'].unshift('100.64.0.0/10')` 后 `openclash restart`（reload 不触发 overwrite）
+
+> **测试陷阱**：经 SOCKS5 `curl myip.ipip.net` / `ip.sb` 可能显示代理节点 IP（如日本）而非家宽——因为这些域名不在 `geosite:cn`，被 mihomo 当国外流量又代理出去了，是**正常现象**。验证家宽出口请用确定命中 `geosite:cn` 的国内回显，如 `cip.cc`。
 
 ### reverse bridge：连接不上 VPS
 

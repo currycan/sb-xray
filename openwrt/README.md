@@ -9,6 +9,7 @@
 | 1. Tailscale | 下载二进制 + 写 `/etc/init.d/tailscale`，**固定 UDP 端口 41641** + kernel TUN 模式；配置 tailscale 防火墙 zone 与转发（lan 双向 + wan 出口）；`tailscale up` 上线并通告 subnet routes + exit node |
 | 2. 防火墙放行 | 写 OpenClash 原生钩子，把 Tailscale UDP 在 nftables mangle 链顶 `return`，绕过 tproxy；OpenClash 每次重启自动重跑 |
 | 3. 解耦 | 给 OpenClash 加 `DOMAIN,<VPS>,DIRECT` + fake-ip 过滤，让 reverse bridge 直连 VPS 真实 IP，不依赖 OpenClash 在线 |
+| 3b. skip-auth | 经 overwrite 钩子把 `100.64.0.0/10` 注入 mihomo `skip-auth-prefixes`，让 VPS 经 Tailscale 访问本机 SOCKS5(7891) 免认证（机场开了 SOCKS 认证时 cn-exit 的必要条件）|
 | 4. xray bridge | 下载 xray + 带 token 拉取已渲染的落地机 `client.json` + 写 `/etc/init.d/xray-bridge` |
 | 5. keepalive | 每分钟 ping 对端 Tailscale IP，缓解双重 NAT 空闲掉线 |
 | 6. 自检 | 12 项端到端验证 |

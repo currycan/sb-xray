@@ -348,6 +348,42 @@ EOF
 
 # ── reverse bridge 与 OpenClash 解耦 ──────────────────────────────
 
+# ── mihomo SOCKS 入站放行 Tailscale 免认证 ───────────────────────
+
+setup_socks_skip_auth() {
+    # 机场订阅可能给 mihomo 的 SOCKS/HTTP 入站开了 authentication，且下发的
+    # skip-auth-prefixes 通常只含 RFC1918。kernel TUN 模式下 VPS 经 Tailscale
+    # 访问本机 7891(cn-exit SOCKS5) 的源 IP 落在 100.64.0.0/10（CGNAT），不在
+    # 豁免内 → SOCKS 握手被要求认证而失败、cn-exit 整体不通。
+    # 用 OpenClash 官方覆写钩子（restart 时对生成配置生效，订阅更新后自动重补）
+    # 幂等注入该网段。机场未开认证时多一个豁免段也无害。
+    _hook=/etc/openclash/custom/openclash_custom_overwrite.sh
+    [ -f "$_hook" ] || { warn "未找到 $_hook，跳过 skip-auth 注入"; return 0; }
+    if grep -q "skip-auth-prefixes.*100.64" "$_hook"; then
+        log "overwrite 钩子已含 Tailscale 免认证注入，跳过"
+        return 0
+    fi
+    backup_file "$_hook"
+    sed -i '/^exit 0$/d' "$_hook"
+    # quoted here-doc：$CONFIG_FILE/$LOG_FILE 保持字面，留给 overwrite.sh 运行时展开
+    cat >> "$_hook" <<'RUBYEOF'
+
+# 放行 Tailscale CGNAT 段(100.64.0.0/10)免 SOCKS/HTTP 入站认证（sb-xray install.sh 注入）。
+# 幂等：include? 去重；订阅更新后由本钩子自动重补。
+ruby -ryaml -rYAML -I "/usr/share/openclash" -E UTF-8 -e "
+   begin
+      Value = YAML.load_file('$CONFIG_FILE');
+      Value['skip-auth-prefixes'] ||= [];
+      Value['skip-auth-prefixes'].unshift('100.64.0.0/10') unless Value['skip-auth-prefixes'].include?('100.64.0.0/10');
+      File.open('$CONFIG_FILE','w') {|f| YAML.dump(Value, f)};
+   rescue Exception => e
+      puts '[skip-auth-prefixes inject] ' + e.message;
+   end" 2>/dev/null >> "$LOG_FILE"
+RUBYEOF
+    echo "exit 0" >> "$_hook"
+    log "已注入 Tailscale 免认证到 OpenClash overwrite 钩子（需 restart 生效）"
+}
+
 setup_openclash_decouple() {
     _rules=/etc/openclash/custom/openclash_custom_rules.list
     _filter=/etc/openclash/custom/openclash_custom_fake_filter.list
@@ -378,10 +414,12 @@ setup_openclash_decouple() {
     fi
 
     if [ "$RELOAD_OPENCLASH" = "1" ]; then
-        log "reload OpenClash 使解耦规则生效..."
-        /etc/init.d/openclash reload 2>/dev/null || /etc/init.d/openclash restart 2>/dev/null
+        # 必须 restart 而非 reload：skip-auth 的 overwrite 钩子只在 restart 的
+        # 配置生成流程里跑，reload 仅热载规则、不触发 overwrite。
+        log "restart OpenClash 使解耦规则 + skip-auth 注入生效..."
+        /etc/init.d/openclash restart 2>/dev/null
     else
-        warn "解耦规则需 OpenClash 重载才进 mihomo 配置 —— 请手动重启 OpenClash，或设 RELOAD_OPENCLASH=1 重跑"
+        warn "解耦规则与 skip-auth 注入需 OpenClash restart 才生效（reload 不触发 overwrite 钩子）—— 请手动 /etc/init.d/openclash restart，或设 RELOAD_OPENCLASH=1 重跑"
     fi
 }
 
@@ -484,6 +522,7 @@ main() {
     setup_tailscale
     install_keepalive_cron
     setup_tailscale_firewall_bypass
+    setup_socks_skip_auth
     setup_openclash_decouple
     install_xray_bridge
     verify
