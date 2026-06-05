@@ -6,12 +6,12 @@
 
 | 步骤 | 内容 |
 |------|------|
-| 1. Tailscale | 下载二进制 + 写 `/etc/init.d/tailscale`，**固定 UDP 端口 41641** + userspace 模式，`tailscale up` 上线 |
+| 1. Tailscale | 下载二进制 + 写 `/etc/init.d/tailscale`，**固定 UDP 端口 41641** + kernel TUN 模式；配置 tailscale 防火墙 zone 与转发（lan 双向 + wan 出口）；`tailscale up` 上线并通告 subnet routes + exit node |
 | 2. 防火墙放行 | 写 OpenClash 原生钩子，把 Tailscale UDP 在 nftables mangle 链顶 `return`，绕过 tproxy；OpenClash 每次重启自动重跑 |
 | 3. 解耦 | 给 OpenClash 加 `DOMAIN,<VPS>,DIRECT` + fake-ip 过滤，让 reverse bridge 直连 VPS 真实 IP，不依赖 OpenClash 在线 |
 | 4. xray bridge | 下载 xray + 带 token 拉取已渲染的落地机 `client.json` + 写 `/etc/init.d/xray-bridge` |
 | 5. keepalive | 每分钟 ping 对端 Tailscale IP，缓解双重 NAT 空闲掉线 |
-| 6. 自检 | 8 项端到端验证 |
+| 6. 自检 | 12 项端到端验证 |
 
 ## 前置条件
 
@@ -40,12 +40,17 @@ sh install.sh
 
 ### Tailscale 授权（仅首次）
 
-脚本跑到 `tailscale up` 时，若本机未登录会**打印一个登录 URL 并停下等待**。用浏览器打开它、授权一次即可，脚本随后继续。这是唯一需要人工介入的步骤。
+脚本跑到 `tailscale up` 时，若本机未登录会**打印一个登录 URL 并停下等待**。用浏览器打开它、授权一次即可，脚本随后继续。
+
+### 批准 subnet routes 与 exit node（仅首次）
+
+脚本通告的内网网段（`TS_ADVERTISE_ROUTES`）和 exit node 需要手动批准才生效：
+[Tailscale 管理后台](https://login.tailscale.com/admin/machines) → 找到本机 → Edit route settings → 勾选 subnet routes 和 Use as exit node。
 
 ## 配置项
 
 见 `config.env.example`。必填：`VPS_DOMAIN`、`SUBSCRIBE_TOKEN`、`PEER_TS_IP`、`TS_HOSTNAME`、`TS_VERSION`、`XRAY_VERSION`。
-常用可选：`RELOAD_OPENCLASH=1`（安装末尾自动重载 OpenClash 使解耦规则生效）、`ARCH_OVERRIDE`、`TS_PORT`。
+常用可选：`RELOAD_OPENCLASH=1`（安装末尾自动重载 OpenClash 使解耦规则生效）、`ARCH_OVERRIDE`、`TS_PORT`、`TS_ADVERTISE_ROUTES`（subnet router 通告网段，默认 `172.18.18.0/23`）。
 
 ## 幂等
 
@@ -58,7 +63,7 @@ sh install.sh
 
 ## 验证
 
-脚本结尾自动跑 8 项自检。也可手动复测：
+脚本结尾自动跑 12 项自检。也可手动复测：
 
 ```sh
 # 重启鲁棒性：OpenClash 重启后链路应快速恢复
@@ -83,6 +88,20 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 ls -t /etc/init.d/tailscale.bak.*        # 找最近备份
 cp /etc/init.d/tailscale.bak.<ts> /etc/init.d/tailscale
 /etc/init.d/tailscale restart
+```
+
+回退到 userspace-networking 模式（不需要 TUN / 防火墙 zone 的旧形态）：
+
+```sh
+# 仓库侧取回旧版脚本重跑
+git checkout 10ce8f9 -- openwrt/install.sh
+# 重新 scp 到路由器后 sh install.sh
+
+# （可选）清理 kernel TUN 模式遗留的防火墙配置——留着也无害
+uci delete network.tailscale
+# 按 uci show firewall | grep tailscale 输出的索引逐个删除 zone/forwarding 后：
+uci commit network && uci commit firewall
+/etc/init.d/network reload && /etc/init.d/firewall reload
 ```
 
 停用整套：

@@ -30,6 +30,9 @@ VERSION=1.98.4
 ARCH=amd64
 # ARCH=arm64
 
+# kernel TUN 模式依赖 /dev/net/tun（无则安装 kmod-tun）
+[ -c /dev/net/tun ] || { opkg update && opkg install kmod-tun; }
+
 wget https://pkgs.tailscale.com/stable/tailscale_${VERSION}_${ARCH}.tgz
 tar -zxvf tailscale_${VERSION}_${ARCH}.tgz
 mv tailscale_${VERSION}_${ARCH}/tailscale /usr/sbin/
@@ -52,12 +55,12 @@ start_service() {
     # 定义 tailscaled 启动命令
     # --state: 状态文件路径，重要！用于持久化认证信息和网络状态。
     # --socket: socket 文件路径，tailscale 客户端通过此与守护进程通信。
-    # --tun=userspace-networking: 使用用户空间网络模式，在 OpenWrt 上兼容性更好。
+    # 默认 kernel TUN 模式（创建 tailscale0 网卡）：内核转发吞吐高，
+    # 且 subnet router / exit node / 本机直连 tailnet 均可用；防火墙配置见 1.2。
     procd_open_instance
     procd_set_param command /usr/sbin/tailscaled \
         --state=/var/lib/tailscale/tailscaled.state \
-        --socket=/var/run/tailscale/tailscaled.sock \
-        --tun=userspace-networking
+        --socket=/var/run/tailscale/tailscaled.sock
     # 崩溃自动拉起
     procd_set_param respawn
     procd_set_param stdout 1
@@ -75,6 +78,8 @@ chmod +x /etc/init.d/tailscale
 
 tailscale up --accept-dns=false --accept-routes --advertise-exit-node --advertise-routes=172.18.18.0/23 --hostname=E3845-op
 ```
+
+> **注意**：`--advertise-routes` 与 `--advertise-exit-node` 需到 [Tailscale 管理后台](https://login.tailscale.com/admin/machines) 找到该节点 → Edit route settings 手动批准后才生效。
 
 ### 1.2 防火墙：允许 Tailscale 接口访问 OpenClash SOCKS5
 
@@ -95,19 +100,26 @@ uci set firewall.@zone[-1].masq='1'
 uci add_list firewall.@zone[-1].network='tailscale'
 uci commit firewall
 
-# 3. 允许 tailscale 区域与 lan 区域的双向转发
+# 3. 允许 tailscale 区域与 lan 区域的双向转发（subnet router 用）
 uci add firewall forwarding
 uci set firewall.@forwarding[-1].src='tailscale'
 uci set firewall.@forwarding[-1].dest='lan'
 uci add firewall forwarding
 uci set firewall.@forwarding[-1].src='lan'
 uci set firewall.@forwarding[-1].dest='tailscale'
+
+# 4. 允许 tailscale 区域转发到 wan（exit node 流量出公网用）
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='tailscale'
+uci set firewall.@forwarding[-1].dest='wan'
 uci commit firewall
 
-# 4. 重启网络与防火墙服务使配置生效
-/etc/init.d/network restart
-/etc/init.d/firewall restart
+# 5. 重载网络与防火墙服务使配置生效
+/etc/init.d/network reload
+/etc/init.d/firewall reload
 ```
+
+> **注意**：`uci add` 不幂等——以上命令重复执行会叠加出重复的 zone/forwarding。`openwrt/install.sh` 已将本节固化为带探测守卫的幂等步骤，推荐用脚本执行；手动执行前先 `uci show firewall | grep tailscale` 确认不存在旧配置。
 
 ### 1.3 OpenClash 配置确认
 

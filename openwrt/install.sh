@@ -2,7 +2,8 @@
 # sb-xray OpenWrt 客户端一键安装脚本
 #
 # 把回国代理客户端的全部配置固化成幂等脚本：
-#   1. 安装 + 配置 Tailscale（固定 UDP 端口，userspace 模式）
+#   1. 安装 + 配置 Tailscale（固定 UDP 端口，kernel TUN 模式，
+#      subnet router + exit node + 防火墙 zone/转发）
 #   2. OpenClash 防火墙放行 Tailscale（重启自动重跑的原生钩子）
 #   3. reverse bridge 与 OpenClash 解耦（DIRECT 规则 + fake-ip 过滤）
 #   4. 安装 + 配置 xray reverse bridge 落地机
@@ -77,6 +78,7 @@ load_config() {
     . "$CONFIG"
     # 默认值
     TS_PORT="${TS_PORT:-41641}"
+    TS_ADVERTISE_ROUTES="${TS_ADVERTISE_ROUTES:-172.18.18.0/23}"
     RELOAD_OPENCLASH="${RELOAD_OPENCLASH:-0}"
     DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
     log "已加载配置: $CONFIG"
@@ -126,6 +128,21 @@ detect_arch() {
     log "架构: $_m -> tailscale=$TS_ARCH xray=$XRAY_ZIP"
 }
 
+# ── TUN 前置 ──────────────────────────────────────────────────────
+
+ensure_tun() {
+    # kernel TUN 模式必需 /dev/net/tun；x86_64 + OpenClash 的设备通常已有
+    if [ -c /dev/net/tun ]; then
+        log "/dev/net/tun 已存在"
+        return 0
+    fi
+    log "缺少 /dev/net/tun，尝试安装 kmod-tun..."
+    opkg update >/dev/null 2>&1
+    opkg install kmod-tun >/dev/null 2>&1
+    [ -c /dev/net/tun ] || die "无法获得 /dev/net/tun（kmod-tun 安装失败）—— kernel TUN 模式必需"
+    log "kmod-tun 安装完成"
+}
+
 # ── Tailscale ─────────────────────────────────────────────────────
 
 install_tailscale() {
@@ -148,7 +165,7 @@ install_tailscale() {
 
     mkdir -p /var/lib/tailscale /var/run/tailscale
     backup_file /etc/init.d/tailscale
-    # 关键固化：--port 固定端口、userspace 模式、显式 state/socket 路径
+    # 关键固化：--port 固定端口、kernel TUN 模式（默认 tailscale0）、显式 state/socket 路径
     cat > /etc/init.d/tailscale <<EOF
 #!/bin/sh /etc/rc.common
 
@@ -162,7 +179,6 @@ start_service() {
     procd_set_param command /usr/sbin/tailscaled \\
         --state=/var/lib/tailscale/tailscaled.state \\
         --socket=/var/run/tailscale/tailscaled.sock \\
-        --tun=userspace-networking \\
         --port=${TS_PORT}
     procd_set_param respawn
     procd_set_param stdout 1
@@ -179,14 +195,89 @@ EOF
     log "已写入 /etc/init.d/tailscale (port=${TS_PORT})"
 }
 
+has_forwarding() {
+    # has_forwarding <src> <dest>：探测 uci forwarding 对是否已存在
+    _i=0
+    while uci -q get "firewall.@forwarding[$_i]" >/dev/null 2>&1; do
+        _s=$(uci -q get "firewall.@forwarding[$_i].src")
+        _d=$(uci -q get "firewall.@forwarding[$_i].dest")
+        [ "$_s" = "$1" ] && [ "$_d" = "$2" ] && return 0
+        _i=$((_i + 1))
+    done
+    return 1
+}
+
+add_forwarding() {
+    # add_forwarding <src> <dest>，幂等
+    if has_forwarding "$1" "$2"; then
+        log "forwarding $1->$2 已存在，跳过"
+        return 0
+    fi
+    uci add firewall forwarding >/dev/null || die "uci add forwarding 失败"
+    uci set firewall.@forwarding[-1].src="$1"
+    uci set firewall.@forwarding[-1].dest="$2"
+    uci commit firewall || die "uci commit firewall 失败"
+    log "已添加 forwarding $1->$2"
+}
+
+setup_tun_network() {
+    # kernel TUN 模式下 tailscale0 的流量真正经过 netfilter：
+    #   input  链：VPS 经 Tailscale 访问 OpenClash SOCKS5(7891) 需 zone input ACCEPT
+    #   forward链：subnet router(tailscale<->lan) 与 exit node(tailscale->wan) 需放行
+    # 全部 uci 操作带探测守卫，重复执行不叠加。
+
+    # 1. network 接口：注册 tailscale0 供防火墙 zone 匹配
+    if uci -q get network.tailscale >/dev/null 2>&1; then
+        log "network.tailscale 接口已存在，跳过"
+    else
+        uci set network.tailscale=interface
+        uci set network.tailscale.proto='none'
+        uci set network.tailscale.device='tailscale0'
+        uci commit network || die "uci commit network 失败"
+        log "已创建 network.tailscale 接口"
+    fi
+
+    # 2. tailscale 防火墙 zone：input/output/forward ACCEPT + masq
+    if uci show firewall 2>/dev/null | grep -q "name='tailscale'"; then
+        log "tailscale 防火墙 zone 已存在，跳过"
+    else
+        uci add firewall zone >/dev/null || die "uci add zone 失败"
+        uci set firewall.@zone[-1].name='tailscale'
+        uci set firewall.@zone[-1].input='ACCEPT'
+        uci set firewall.@zone[-1].output='ACCEPT'
+        uci set firewall.@zone[-1].forward='ACCEPT'
+        uci set firewall.@zone[-1].masq='1'
+        uci add_list firewall.@zone[-1].network='tailscale'
+        uci commit firewall || die "uci commit firewall 失败"
+        log "已创建 tailscale 防火墙 zone"
+    fi
+
+    # 3. 转发：tailscale<->lan（subnet router）、tailscale->wan（exit node 出公网）
+    add_forwarding tailscale lan
+    add_forwarding lan tailscale
+    add_forwarding tailscale wan
+
+    /etc/init.d/network reload 2>/dev/null
+    /etc/init.d/firewall reload 2>/dev/null
+    log "network/firewall 已 reload"
+}
+
 setup_tailscale() {
     /etc/init.d/tailscale enable 2>/dev/null
     /etc/init.d/tailscale restart 2>/dev/null
     sleep 4
     # 踩坑固化：手写 init restart 后 daemon 常停在 Stopped，必须显式 up。
+    # --reset：up 是全量替换 prefs 的语义，清掉历史残留再应用本次 flag（登录态不受影响）。
     log "运行 tailscale up —— 若打印登录 URL，请在浏览器打开授权（仅首次需要）"
-    tailscale up --tun=userspace-networking --hostname="$TS_HOSTNAME" || \
+    tailscale up --reset \
+        --accept-dns=false \
+        --accept-routes \
+        --advertise-routes="$TS_ADVERTISE_ROUTES" \
+        --advertise-exit-node \
+        --hostname="$TS_HOSTNAME" || \
         warn "tailscale up 返回非零（可能已在线 / 需手动授权后重跑本脚本）"
+    log "提示：subnet routes(${TS_ADVERTISE_ROUTES}) 与 exit node 需到 Tailscale 管理后台批准"
+    log "      https://login.tailscale.com/admin/machines -> ${TS_HOSTNAME} -> Edit route settings"
     sleep 2
     if netstat -lnup 2>/dev/null | grep -q ":${TS_PORT} "; then
         log "tailscaled 已监听 UDP ${TS_PORT}"
@@ -351,6 +442,9 @@ EOF
 verify() {
     log "── 自检 ──"
     check "tailscaled 监听 UDP ${TS_PORT}" sh -c "netstat -lnup 2>/dev/null | grep -q ':${TS_PORT} '"
+    check "tailscale0 网卡存在" ip link show tailscale0
+    check "tailscale 防火墙 zone 已配置" sh -c "uci show firewall 2>/dev/null | grep -q \"name='tailscale'\""
+    check "已通告 routes ${TS_ADVERTISE_ROUTES}" sh -c "tailscale debug prefs 2>/dev/null | grep -q '${TS_ADVERTISE_ROUTES}'"
     check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
     check "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
     check "防火墙 bypass 规则已注入" sh -c "test \$(nft list ruleset 2>/dev/null | grep -c tailscale-bypass) -ge 1"
@@ -376,7 +470,9 @@ main() {
     load_config
     validate_config
     detect_arch
+    ensure_tun
     install_tailscale
+    setup_tun_network
     setup_tailscale
     install_keepalive_cron
     setup_tailscale_firewall_bypass
