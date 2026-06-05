@@ -187,6 +187,14 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
+
+    # 开机确保 up：tailscaled 仅在 prefs 的 WantRunning=true 时自动连接，而该位
+    # 可能被历史操作置 false（排障/误操作），导致 daemon 起来却 stopped、回国服务
+    # 不恢复。后台显式 up（与安装同源 flags、已登录无需 auth-key）兜底，让断电重启
+    # 无条件回到声明状态。flags 与 prefs 一致时 up 幂等。
+    (sleep 8; /usr/sbin/tailscale up --timeout=60s --accept-dns=false \\
+        --advertise-routes=${TS_ADVERTISE_ROUTES} --advertise-exit-node \\
+        --hostname=${TS_HOSTNAME} >/dev/null 2>&1) &
 }
 
 stop_service() {
