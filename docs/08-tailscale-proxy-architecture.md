@@ -2,7 +2,7 @@
 
 本文把 OpenWrt 上 Tailscale 这套「一机多用」的代理网关讲透：它**同时**承担回国出口、出国分流、内网穿透三类流量，外加把路由器自己接进 Tailscale 私有网络。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
-> **本文与 [10. Xray Reverse Bridge 回国架构设计与配置](./10-xray-reverse-bridge.md) 的分工**：本文讲 Tailscale + OpenClash SOCKS5 这条回国链路（`CN_EXIT_MODE=socks5`）；10 讲 Xray 反向隧道那条链路（`CN_EXIT_MODE=reverse`）及两者主备的 balance 模式。两套方案怎么选见 10 的附录。
+> **本文与 [09. Xray Reverse Bridge 回国架构设计与配置](./09-xray-reverse-bridge.md) 的分工**：本文讲 Tailscale + OpenClash SOCKS5 这条回国链路（`CN_EXIT_MODE=socks5`）；09 讲 Xray 反向隧道那条链路（`CN_EXIT_MODE=reverse`）及两者主备的 balance 模式。两套方案怎么选见 09 的附录。
 
 ---
 
@@ -605,4 +605,4 @@ sh openwrt/install.sh
 
 ---
 
-> **相关文档**：[10. Xray Reverse Bridge 回国架构设计与配置](./10-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [06. VLESS Reverse Proxy（出境代理另一方案）](./06-reverse-proxy-guide.md)
+> **相关文档**：[09. Xray Reverse Bridge 回国架构设计与配置](./09-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [06. VLESS Reverse Proxy（出境代理另一方案）](./06-reverse-proxy-guide.md)

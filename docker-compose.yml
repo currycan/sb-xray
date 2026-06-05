@@ -48,7 +48,7 @@ services:
       - ENABLE_XUI=false # false: 关掉 x-ui 面板（省 ~35–55 MB）
       # - ENABLE_SUI=false  # s-ui removed
       - ENABLE_SHOUTRRR=true # false: 关掉 shoutrrr-forwarder（省 ~20–30 MB）
-      # ── 回国代理（socks5 见 docs/09-tailscale-proxy-architecture.md；reverse/balance 见 docs/10-xray-reverse-bridge.md）──
+      # ── 回国代理（socks5 见 docs/08-tailscale-proxy-architecture.md；reverse/balance 见 docs/09-xray-reverse-bridge.md）──
       # 回国出口主开关：显式选择 CN 流量（geoip/geosite:cn）走哪条回国链路
       #   socks5   经 SOCKS5（Tailscale/OpenClash）—— 需下方 CN_EXIT_SOCKS5_HOST
       #   reverse  经 r-tunnel（VLESS reverse bridge）—— 需 ENABLE_REVERSE=true + 国内 bridge

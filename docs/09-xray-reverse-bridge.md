@@ -4,8 +4,8 @@
 
 > **本文与相邻文档的分工**：
 > - [06. VLESS Reverse Proxy 部署指南](./06-reverse-proxy-guide.md) 讲 reverse 这套机制本身（portal/bridge、双 UUID、内网穿透）。
-> - [09. Tailscale 代理架构设计与配置](./09-tailscale-proxy-architecture.md) 讲**另一套**回国方案（Tailscale + OpenClash SOCKS5）。
-> - 本文 10 专讲**用 reverse bridge 回国**：架构、流量图解、`CN_EXIT_MODE` 开关与主备故障转移、完整踩坑。两套回国方案怎么选见 §7.2。
+> - [08. Tailscale 代理架构设计与配置](./08-tailscale-proxy-architecture.md) 讲**另一套**回国方案（Tailscale + OpenClash SOCKS5）。
+> - 本文 09 专讲**用 reverse bridge 回国**：架构、流量图解、`CN_EXIT_MODE` 开关与主备故障转移、完整踩坑。两套回国方案怎么选见 §7.2。
 
 ---
 
@@ -112,7 +112,7 @@ flowchart TB
 
 | `CN_EXIT_MODE` | 国内流量出口 | 说明 | 本文相关 |
 |---|---|---|---|
-| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [09](./09-tailscale-proxy-architecture.md)） | 否 |
+| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [08](./08-tailscale-proxy-architecture.md)） | 否 |
 | `reverse` | `r-tunnel` 反向隧道 | **本方案** | ✅ §3.1 / §4 |
 | `balance` | `cn-exit` + `r-tunnel` 主备 | 两条链路并挂、自动故障转移 | ✅ §3.2 |
 | `off` | 封禁（不回国） | — | — |
@@ -228,7 +228,7 @@ flowchart LR
 # - REVERSE_DOMAINS=domain:lan   # 顺带做内网穿透时填；纯回国可留空
 ```
 
-🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [09](./09-tailscale-proxy-architecture.md)）：
+🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [08](./08-tailscale-proxy-architecture.md)）：
 
 ```yaml
 - CN_EXIT_MODE=balance
@@ -372,7 +372,7 @@ curl -x <本地客户端代理> http://cip.cc
 
 ### 7.2 两套回国方案怎么选
 
-| 维度 | 方案一 Tailscale SOCKS5（[09](./09-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
+| 维度 | 方案一 Tailscale SOCKS5（[08](./08-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
 |---|---|---|
 | 大陆侧依赖 | OpenWrt + OpenClash + kmod-tun（kernel TUN） | OpenWrt 能跑 xray、能出站 443 即可 |
 | 公网 IP | 不需要 | 不需要 |
