@@ -117,8 +117,7 @@ flowchart TD
 | 🔴 **系统运维与监控**   | [**👉 04. 运维管理与故障排查手册**](./docs/04-ops-and-troubleshooting.md)      | 包含多面板入口导航、订阅端点双重认证安全防扫描策略、证书运维以及应对 502/404/证书失效等故障的汇总排错指南。            |
 | ⚙️ **构建部署指南**     | [**👉 05. 构建部署指南**](./docs/05-build-release.md)                          | 详解 `build.sh` 自动构建脚本、四阶段 Dockerfile 架构、11 个组件的版本管理策略与常见构建问题 FAQ。                      |
 | 🔄 **内网穿透专题**     | [**👉 06. VLESS Reverse Proxy 部署指南**](./docs/06-reverse-proxy-guide.md)    | 家宽落地机反向挂载到 VPS 的端到端部署：portal 侧 `ENABLE_REVERSE` 开关、bridge 侧 simplified outbound 模板、双 UUID 隔离、故障排查与撤销流程。 |
-| ✨ **新特性使用指南**   | [**👉 07. 新特性使用指南**](./docs/07-new-features-guide.md)          | 事件总线 / adv 抗审查订阅 / 反向穿透 / Xray 原生 Hy2 / XHTTP-H3 / XICMP / XDNS 共 8 个特性的五段式操作手册 + Env 速查表 + 通用故障排查。 |
-| 🏠 **回国代理专题**     | [**👉 08. 回国代理部署指南**](./docs/08-cn-exit-guide.md)                      | 让境外设备经大陆家宽出口访问大陆限定服务：Tailscale + OpenClash SOCKS5 方案与 reverse 隧道方案的部署、客户端配置与排错；含外网访问家里 NAS 的手把手步骤。 |
+| 📣 **事件通知专题**     | [**👉 07. 事件总线：Xray webhook → shoutrrr**](./docs/07-event-bus-shoutrrr.md)          | 把"谁被 ban / 谁踩 BT / 谁走私网 IP"等 Xray 事件经 shoutrrr 实时推送到 Telegram / Discord / Slack / Gotify 的部署配置与排错指南。 |
 | 🛰️ **Tailscale 架构**  | [**👉 09. Tailscale 代理架构设计与配置**](./docs/09-tailscale-proxy-architecture.md) | 一台 OpenWrt 四个角色（cn-exit 回国 / exit node 出国分流 / subnet router 内网穿透 / 本机直连）的架构原理、流量图解、kernel TUN 与 OpenClash/fake-ip 配置详解，以及路由黑洞等真实踩坑实录。 |
 | 🔁 **Reverse Bridge 架构** | [**👉 10. Xray Reverse Bridge 回国架构设计与配置**](./docs/10-xray-reverse-bridge.md) | 用 Xray 反向代理做海外回国：portal/bridge 角色、`r-tunnel` 虚拟出站、`CN_EXIT_MODE` 四档开关与 socks5+r-tunnel 主备故障转移（balance）的架构原理、流量图解与踩坑实录。 |
 | 📜 **版本发布日志**     | [**👉 CHANGELOG（Keep a Changelog 格式）**](./CHANGELOG.md)                    | Added / Changed / Fixed / Removed / Security / Migration notes 全分类列表，附生产 E2E 验证证据与 30 秒回滚命令。|

@@ -1,6 +1,6 @@
 # 06. VLESS Reverse Proxy 内网穿透指南
 
-> 本文面向熟悉 Docker / Xray 配置的读者；零基础请先看手把手版 [08. 回国代理部署指南 · 方案二](./08-cn-exit-guide.md#方案二备用xray-reverse-bridge)。
+> 本文面向熟悉 Docker / Xray 配置的读者；零基础或回国出口场景请先看 [10. Xray Reverse Bridge 回国架构设计与配置](./10-xray-reverse-bridge.md)（含手把手部署步骤与 `show` 配置下载）。
 
 > 把你家里的路由器 / NAS / 本地 Web 服务通过 sb-xray 公网节点**反向暴露**出来，零公网 IP、零端口映射、复用已有 REALITY 通道。
 >

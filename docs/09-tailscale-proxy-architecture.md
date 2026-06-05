@@ -2,7 +2,7 @@
 
 本文把 OpenWrt 上 Tailscale 这套「一机多用」的代理网关讲透：它**同时**承担回国出口、出国分流、内网穿透三类流量，外加把路由器自己接进 Tailscale 私有网络。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
-> **本文与 [08. 回国代理部署指南](./08-cn-exit-guide.md) 的分工**：08 是「照着抄就能跑」的部署速查手册；本文 09 是「架构原理 + 流量图解 + 完整踩坑」的深度专题。只想快速部署看 08，想理解系统、排查疑难看本文。
+> **本文与 [10. Xray Reverse Bridge 回国架构设计与配置](./10-xray-reverse-bridge.md) 的分工**：本文讲 Tailscale + OpenClash SOCKS5 这条回国链路（`CN_EXIT_MODE=socks5`）；10 讲 Xray 反向隧道那条链路（`CN_EXIT_MODE=reverse`）及两者主备的 balance 模式。两套方案怎么选见 10 的附录。
 
 ---
 
@@ -474,7 +474,16 @@ ethtool -K <wan-netdev> rx-udp-gro-forwarding on rx-gro-list off
 🔧 VPS 侧只需两件事（SOCKS5 地址/端口由 OpenWrt 决定，VPS 配置保持不变）：
 
 1. VPS 装 Tailscale 并加入**同一账号**，拿到它的 `100.x` IP。
-2. xray 的 `cn-exit` outbound 指向 `<openwrt-ts-ip>:7891` 的 SOCKS5。docker-compose 引用方式见 [08 §1.5](./08-cn-exit-guide.md)。
+2. xray 的 `cn-exit` outbound 指向 `<openwrt-ts-ip>:7891` 的 SOCKS5。在 `docker-compose.yml` 中取消注释并填值：
+
+   ```yaml
+   - CN_EXIT_MODE=socks5              # 显式选择回国链路走 SOCKS5
+   - ENABLE_SOCKS5_PROXY=true         # SOCKS5 总开关（默认 true）
+   - CN_EXIT_SOCKS5_HOST=100.x.x.x    # tailscale ip 查到的 OpenWrt 节点 IP
+   - CN_EXIT_SOCKS5_PORT=7891         # OpenClash 默认 SOCKS5 端口
+   ```
+
+   📘 临时停用本方案不必清空 HOST：把 `ENABLE_SOCKS5_PROXY` 设为 `false`（或 `CN_EXIT_MODE` 设为 `off`）即可，改回来同样一键恢复。
 
 ---
 
@@ -596,4 +605,4 @@ sh openwrt/install.sh
 
 ---
 
-> **相关文档**：[08. 回国代理部署速查手册](./08-cn-exit-guide.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [06. VLESS Reverse Proxy（出境代理另一方案）](./06-reverse-proxy-guide.md)
+> **相关文档**：[10. Xray Reverse Bridge 回国架构设计与配置](./10-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [06. VLESS Reverse Proxy（出境代理另一方案）](./06-reverse-proxy-guide.md)
