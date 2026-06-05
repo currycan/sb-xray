@@ -119,11 +119,27 @@ flowchart TB
 
 > 留空 `CN_EXIT_MODE` 时按既有变量派生（向后兼容）：`CN_EXIT_SOCKS5_HOST` 有值且 `ENABLE_SOCKS5_PROXY=true` → `socks5`；否则 `REVERSE_CN_EXIT=true` → `reverse`；否则 `off`。**建议显式设置** `CN_EXIT_MODE`，不要再依赖「有没有值」的隐式判断。
 
-🔬 **portal 侧路由改写**（`scripts/sb_xray/config_builder.py`）：容器启动渲染 `xr.json` 时，`reverse` 模式把 `cn-ip`（默认封禁）规则下移、剥离 ban 标记，并前置 `geosite:cn → r-tunnel`、`geoip:cn → r-tunnel` 两条规则；同时前置一条 `full:www.gstatic.com → direct` 的健康检查豁免（防止 mihomo/OpenClash 默认探测域名被卷进回国隧道，隧道一断全节点健康检查崩）。
+🔬 **portal 侧路由改写**（`scripts/sb_xray/config_builder.py`）：容器启动渲染 `xr.json` 时，把 `cn-ip`（默认封禁）规则下移到 `private-ip` 之前、剥离 ban 标记，并前置 `geosite:cn`、`geoip:cn` 两条回国规则（`reverse` 写 `outboundTag: r-tunnel`，`balance` 写 `balancerTag: cn-exit-balance`），同时前置两条豁免：`full:www.gstatic.com → direct`（健康检查豁免，防止 mihomo/OpenClash 默认探测域名被卷进回国隧道，隧道一断全节点健康检查崩）、`geosite:geolocation-!cn → direct`（海外直出护栏，见 §2.4）。
 
 ### 2.3 bridge 侧路由
 
 🔬 bridge 的 `client.json` 路由只有一条：`inboundTag: ["r-tunnel"] → direct`。即「从反向隧道进来的流量，一律交给 freedom 出站直出」。bridge 不做任何分流——分流判断全在 portal 完成。
+
+### 2.4 回国路由策略（哪些流量回国，哪些海外直出）
+
+📘 一句话：**只有真·国内服务回国，已知海外服务一律海外直出**。portal 的 `xr.json` 路由按顺序匹配，下表即优先级：
+
+| 顺序 | 规则 | 命中流量 | 去向 |
+|---|---|---|---|
+| 1 | 服务级规则（`geosite:netflix` / `google` / …） | 显式海外服务 | isp-auto / direct |
+| 2 | `geosite:geolocation-!cn → direct` | **已知海外兜底**（护栏） | 海外直出（VPS 出口） |
+| 3 | `geosite:cn → 回国` | 国内服务 | `r-tunnel` / `cn-exit-balance` |
+| 4 | `geoip:cn → 回国` | 国内 IP 兜底 | `r-tunnel` / `cn-exit-balance` |
+| 5 | 默认 | 其余海外 | 海外直出 |
+
+🔬 **第 2 层护栏为什么必要**：`geosite.dat` 取自 **MetaCubeX**（`scripts/sb_xray/geo.py`），其 `geosite:cn` 干净——不含被上游 `@cn` 标记的海外 CDN（如 `dl.google.com`、`*.gvt1.com`、`*.googleapis.com`）。但为防上游将来再把 `@cn` 海外域名灌进 `cn`，第 2 层 `geolocation-!cn → direct` 作为**安全网**先把已知海外服务切走，确保 Google Play 等地区敏感应用始终走海外出口、不会从国内 IP 访问而失效。`geoip.dat` 仍取自 Loyalsoldier（geoip 无此污染问题）。
+
+> ⚠️ **广告拦截差异**：MetaCubeX 的 `category-ads-all` 域名数少于 Loyalsoldier，换源后广告拦截覆盖相应下降。若需更强广告拦截，可在客户端侧以独立 rule-provider 广告库补强（不影响回国分流）。
 
 ---
 

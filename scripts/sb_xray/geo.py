@@ -1,9 +1,11 @@
 """GeoIP / GeoSite 规则库下载器 (entrypoint.sh §10 等价实现)。
 
 完成三件事:
-1. 从 Loyalsoldier / chocolate4u / runetfreedom 并行下载 6 个 ``.dat``
-   规则库到持久化目录 ``/geo``(docker-compose 挂载为 ``./geo:/geo``),
-   避免容器每次重启重下 ~100 MB。
+1. 并行下载 6 个 ``.dat`` 规则库到持久化目录 ``/geo``(docker-compose
+   挂载为 ``./geo:/geo``),避免容器每次重启重下 ~100 MB。数据源:
+   ``geosite.dat`` 取自 MetaCubeX(其 ``geosite:cn`` 干净,不含被 ``@cn``
+   标记的海外 CDN);``geoip.dat`` 取自 Loyalsoldier;IR/RU 变体分别取自
+   chocolate4u / runetfreedom。
 2. 在 ``/usr/local/bin/*.dat`` 维护符号链接指向 ``/geo/*.dat``,
    保持 xray / sing-box 的查找路径稳定。
 3. cron 场景触发时通过 ``supervisorctl`` 重启 xray 以加载新规则;
@@ -54,7 +56,10 @@ _SUPERVISOR_SOCKET: Final[Path] = Path("/var/run/supervisor.sock")
 
 _MANIFEST: Final[dict[str, str]] = {
     "geoip.dat": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
-    "geosite.dat": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
+    # geosite 改用 MetaCubeX：其 geosite:cn 不含 @cn 标记的海外 CDN（dl.google.com /
+    # *.gvt1.com / *.googleapis.com 等），避免回国规则把 Google Play 等海外服务误送回国；
+    # Loyalsoldier 的 cn 把这些 @cn 域名混进了"国内直连"清单。geoip 仍用 Loyalsoldier。
+    "geosite.dat": "https://github.com/MetaCubeX/meta-rules-dat/releases/latest/download/geosite.dat",
     "geoip_IR.dat": "https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat",
     "geosite_IR.dat": "https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat",
     "geoip_RU.dat": "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat",

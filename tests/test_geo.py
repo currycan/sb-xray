@@ -181,6 +181,18 @@ def test_refresh_forces_download_when_not_on_startup(
         assert (target / name).read_bytes() == b"fresh"
 
 
+def test_manifest_geosite_source_is_metacubex() -> None:
+    """geosite.dat 必须取自 MetaCubeX —— 其 geosite:cn 不含被 @cn 标记的海外 CDN
+    (dl.google.com / *.gvt1.com 等)。Loyalsoldier 的 cn 会把这些海外服务混进
+    国内直连清单,导致回国规则把 Google Play 等误送回国。防误回退到 Loyalsoldier。
+    """
+    url = geo._MANIFEST["geosite.dat"]
+    assert "MetaCubeX/meta-rules-dat" in url
+    assert "Loyalsoldier" not in url
+    # geoip 仍用 Loyalsoldier(geoip 无 @cn 污染问题)
+    assert "Loyalsoldier" in geo._MANIFEST["geoip.dat"]
+
+
 def test_restart_xray_skipped_without_socket(tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
