@@ -119,13 +119,9 @@ flowchart TB
 
 > 留空 `CN_EXIT_MODE` 时按既有变量派生（向后兼容）：`CN_EXIT_SOCKS5_HOST` 有值且 `ENABLE_SOCKS5_PROXY=true` → `socks5`；否则 `REVERSE_CN_EXIT=true` → `reverse`；否则 `off`。**建议显式设置** `CN_EXIT_MODE`，不要再依赖「有没有值」的隐式判断。
 
-🔬 **portal 侧路由改写**（`scripts/sb_xray/config_builder.py`）：容器启动渲染 `xr.json` 时，把 `cn-ip`（默认封禁）规则下移到 `private-ip` 之前、剥离 ban 标记，并前置 `geosite:cn`、`geoip:cn` 两条回国规则（`reverse` 写 `outboundTag: r-tunnel`，`balance` 写 `balancerTag: cn-exit-balance`），同时前置两条豁免：`full:www.gstatic.com → direct`（健康检查豁免，防止 mihomo/OpenClash 默认探测域名被卷进回国隧道，隧道一断全节点健康检查崩）、`geosite:geolocation-!cn → direct`（海外直出护栏，见 §2.4）。
+🔬 **portal 侧路由改写**（`scripts/sb_xray/config_builder.py`）：容器启动渲染 `xr.json` 时，把 `cn-ip`（默认封禁）规则下移到 `private-ip` 之前、剥离 ban 标记，并前置 `geosite:cn`、`geoip:cn` 两条回国规则（`reverse` 写 `outboundTag: r-tunnel`，`balance` 写 `balancerTag: cn-exit-balance`），同时前置两条豁免：`full:www.gstatic.com → direct`（健康检查豁免，防止 mihomo/OpenClash 默认探测域名被卷进回国隧道，隧道一断全节点健康检查崩）、`geosite:geolocation-!cn → direct`（海外直出护栏，见 §2.3）。
 
-### 2.3 bridge 侧路由
-
-🔬 bridge 的 `client.json` 路由只有一条：`inboundTag: ["r-tunnel"] → direct`。即「从反向隧道进来的流量，一律交给 freedom 出站直出」。bridge 不做任何分流——分流判断全在 portal 完成。
-
-### 2.4 回国路由策略（哪些流量回国，哪些海外直出）
+### 2.3 回国路由策略（哪些流量回国，哪些海外直出）
 
 📘 一句话：**只有真·国内服务回国，已知海外服务一律海外直出**。portal 的 `xr.json` 路由按顺序匹配，下表即优先级：
 
@@ -137,9 +133,13 @@ flowchart TB
 | 4 | `geoip:cn → 回国` | 国内 IP 兜底 | `r-tunnel` / `cn-exit-balance` |
 | 5 | 默认 | 其余海外 | 海外直出 |
 
-🔬 **第 2 层护栏为什么必要**：`geosite.dat` 取自 **MetaCubeX**（`scripts/sb_xray/geo.py`），其 `geosite:cn` 干净——不含被上游 `@cn` 标记的海外 CDN（如 `dl.google.com`、`*.gvt1.com`、`*.googleapis.com`）。但为防上游将来再把 `@cn` 海外域名灌进 `cn`，第 2 层 `geolocation-!cn → direct` 作为**安全网**先把已知海外服务切走，确保 Google Play 等地区敏感应用始终走海外出口、不会从国内 IP 访问而失效。`geoip.dat` 仍取自 Loyalsoldier（geoip 无此污染问题）。
+🔬 **第 2 层护栏的作用**：`geosite:cn` 的语义是「在中国境内可直连」的域名，部分被上游标记 `@cn` 的海外 CDN（`dl.google.com`、`*.gvt1.com`、`*.googleapis.com` 等）也会被算作可直连而收入其中。一旦这类域名落进回国规则，Google Play 等地区敏感应用会从国内 IP 访问而失效。第 2 层 `geolocation-!cn → direct` 作为**安全网**，先把已知海外服务切走，确保海外服务始终走海外出口，不受 `geosite:cn` 数据集差异影响。规则库由 `scripts/sb_xray/geo.py` 维护：`geosite.dat` 取自 MetaCubeX，`geoip.dat` 取自 Loyalsoldier。
 
-> ⚠️ **广告拦截差异**：MetaCubeX 的 `category-ads-all` 域名数少于 Loyalsoldier，换源后广告拦截覆盖相应下降。若需更强广告拦截，可在客户端侧以独立 rule-provider 广告库补强（不影响回国分流）。
+> ⚠️ **广告拦截范围**：`category-ads-all` 覆盖主流广告域名，长尾广告可能漏网。如需更强拦截，可在客户端侧以独立 rule-provider 广告库补强（不影响回国分流）。
+
+### 2.4 bridge 侧路由
+
+🔬 bridge 的 `client.json` 路由只有一条：`inboundTag: ["r-tunnel"] → direct`。即「从反向隧道进来的流量，一律交给 freedom 出站直出」。bridge 不做任何分流——分流判断全在 portal 完成。
 
 ---
 
@@ -352,7 +352,7 @@ curl -x <本地客户端代理> http://cip.cc
 
 ### 6.3 隧道一断，所有节点健康检查全挂
 
-🔬 mihomo/OpenClash 默认拿 `www.gstatic.com` 做健康检查，而 Loyalsoldier `geosite:cn` 收录了 `full:www.gstatic.com`。若它被卷进回国隧道，隧道一断健康检查全部失败、客户端节点集体掉线。portal 已自动前置 `full:www.gstatic.com → direct` 豁免规则规避此坑（见 §2.2）。
+🔬 mihomo/OpenClash 默认拿 `www.gstatic.com` 做健康检查，而 `geosite:cn` 收录了 `full:www.gstatic.com`。若它被卷进回国隧道，隧道一断健康检查全部失败、客户端节点集体掉线。portal 已自动前置 `full:www.gstatic.com → direct` 豁免规则规避此坑（见 §2.2）。
 
 ### 6.4 balance 模式：确认 r-tunnel 真被选中过
 
