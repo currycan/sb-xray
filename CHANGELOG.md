@@ -274,7 +274,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### 配套使用文档
 
-- **新特性使用指南**：[`docs/07-new-features-guide.md`](./docs/07-new-features-guide.md) —— 按特性列出"做什么 / 何时用 / 怎么开 / 如何验证 / 故障排查"。
+- **新特性使用指南**：[`docs/features/0421-new-features-guide.md`](./docs/features/0421-new-features-guide.md) —— 按特性列出"做什么 / 何时用 / 怎么开 / 如何验证 / 故障排查"。
 - **反向代理部署指南**：[`docs/06-reverse-proxy-guide.md`](./docs/06-reverse-proxy-guide.md)
 
 ### 验证

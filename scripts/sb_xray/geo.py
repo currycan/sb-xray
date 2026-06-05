@@ -19,8 +19,8 @@
 
 历史注记: 原本此处有 MPH 缓存重建逻辑 (PR #5505 的 ``buildMphCache``
 CLI)。该特性在 2026-04-13 被 PR #5814 的 geodata refactor 整体 revert,
-新方案运行时自动生效,无需重建缓存。详见
-``docs/10-implementation-notes.md §M1-4``。
+新方案运行时自动生效,无需重建缓存。详见 ``CHANGELOG.md``
+(buildMphCache 条目)。
 """
 
 from __future__ import annotations
