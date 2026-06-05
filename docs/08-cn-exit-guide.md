@@ -30,6 +30,9 @@ VERSION=1.98.4
 ARCH=amd64
 # ARCH=arm64
 
+# kernel TUN 模式依赖 /dev/net/tun（无则安装 kmod-tun）
+[ -c /dev/net/tun ] || { opkg update && opkg install kmod-tun; }
+
 wget https://pkgs.tailscale.com/stable/tailscale_${VERSION}_${ARCH}.tgz
 tar -zxvf tailscale_${VERSION}_${ARCH}.tgz
 mv tailscale_${VERSION}_${ARCH}/tailscale /usr/sbin/
@@ -38,8 +41,8 @@ mv tailscale_${VERSION}_${ARCH}/tailscaled /usr/sbin/
 cat > /etc/init.d/tailscale << EOF
 #!/bin/sh /etc/rc.common
 
-# START=95
-# STOP=10
+START=95
+STOP=10
 
 USE_PROCD=0
 
@@ -50,14 +53,15 @@ start_service() {
     procd_set_param stderr 1
 
     # 定义 tailscaled 启动命令
-    # --state: 状态文件路径，重要！用于持久化认证信息和网络状态。
+    # --state: 状态文件路径，重要！必须放持久化目录（/etc/...）——
+    #          OpenWrt 的 /var 是 tmpfs，放那里重启即丢登录态、每次重启注册新节点。
     # --socket: socket 文件路径，tailscale 客户端通过此与守护进程通信。
-    # --tun=userspace-networking: 使用用户空间网络模式，在 OpenWrt 上兼容性更好。
+    # 默认 kernel TUN 模式（创建 tailscale0 网卡）：内核转发吞吐高，
+    # 且 subnet router / exit node / 本机直连 tailnet 均可用；防火墙配置见 1.2。
     procd_open_instance
     procd_set_param command /usr/sbin/tailscaled \
-        --state=/var/lib/tailscale/tailscaled.state \
-        --socket=/var/run/tailscale/tailscaled.sock \
-        --tun=userspace-networking
+        --state=/etc/tailscale/tailscaled.state \
+        --socket=/var/run/tailscale/tailscaled.sock
     # 崩溃自动拉起
     procd_set_param respawn
     procd_set_param stdout 1
@@ -73,8 +77,12 @@ EOF
 chmod +x /etc/init.d/tailscale
 /etc/init.d/tailscale enable && /etc/init.d/tailscale restart
 
-tailscale up --accept-dns=false --accept-routes --advertise-exit-node --advertise-routes=172.18.18.0/23 --hostname=E3845-op
+tailscale up --accept-dns=false --advertise-exit-node --advertise-routes=172.18.18.0/23 --hostname=E3845-op
 ```
+
+> **注意**：`--advertise-routes` 与 `--advertise-exit-node` 需到 [Tailscale 管理后台](https://login.tailscale.com/admin/machines) 找到该节点 → Edit route settings 手动批准后才生效。
+
+> ⚠️ **严禁在本机加 `--accept-routes`**：kernel TUN 模式下，若 tailnet 中任何其他节点（包括早已下线的旧设备）持有已批准的、与本机 LAN 网段重叠的子网路由，accept-routes 会把这条路由装进内核策略路由——发往 LAN 的所有回包被丢进隧道黑洞，整机失联，表现与死机无异。本机自己就是 subnet router，无需接受任何对端路由。排查方法见故障排查节。
 
 ### 1.2 防火墙：允许 Tailscale 接口访问 OpenClash SOCKS5
 
@@ -95,19 +103,26 @@ uci set firewall.@zone[-1].masq='1'
 uci add_list firewall.@zone[-1].network='tailscale'
 uci commit firewall
 
-# 3. 允许 tailscale 区域与 lan 区域的双向转发
+# 3. 允许 tailscale 区域与 lan 区域的双向转发（subnet router 用）
 uci add firewall forwarding
 uci set firewall.@forwarding[-1].src='tailscale'
 uci set firewall.@forwarding[-1].dest='lan'
 uci add firewall forwarding
 uci set firewall.@forwarding[-1].src='lan'
 uci set firewall.@forwarding[-1].dest='tailscale'
+
+# 4. 允许 tailscale 区域转发到 wan（exit node 流量出公网用）
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='tailscale'
+uci set firewall.@forwarding[-1].dest='wan'
 uci commit firewall
 
-# 4. 重启网络与防火墙服务使配置生效
-/etc/init.d/network restart
-/etc/init.d/firewall restart
+# 5. 重载网络与防火墙服务使配置生效
+/etc/init.d/network reload
+/etc/init.d/firewall reload
 ```
+
+> **注意**：`uci add` 不幂等——以上命令重复执行会叠加出重复的 zone/forwarding。`openwrt/install.sh` 已将本节固化为带探测守卫的幂等步骤，推荐用脚本执行；手动执行前先 `uci show firewall | grep tailscale` 确认不存在旧配置。
 
 ### 1.3 OpenClash 配置确认
 
@@ -365,6 +380,18 @@ rules:
 
 ## 排查
 
+### OpenWrt 整机失联（疑似死机）
+
+`tailscale up` 后路由器 LAN/SSH/LuCI 全部失联、看似死机——通常**不是死机，而是路由黑洞**：`--accept-routes` 把 tailnet 中其他节点（含已下线旧设备）已批准的、与本机 LAN 重叠的子网路由装进了内核（`ip rule 5270` → `table 52`），发往 LAN 的回包全部进了隧道。
+
+特征与确认方法：
+
+- LAN ping 不通，但 `ssh root@<本机 Tailscale IP>` 会返回 connection refused（活体反应——tailscaled 自己的包带 fwmark 走 `rule 5210` 逃逸黑洞）
+- 无需断电。可经 LuCI（监听 Tailscale IP）的 ubus 接口远程 `rc init tailscale stop`，或物理重启
+- 恢复后 `ip route show table 52 | grep <LAN网段>` 应为空；用 `tailscale set --accept-routes=false` 永久关闭
+
+根治：本机 up 参数不带 `--accept-routes`（见 1.1 警告），并到管理后台删除下线旧节点及其已批准路由。
+
 ### SOCKS5 模式：cn-exit outbound 未注入
 
 检查容器启动日志：
@@ -390,6 +417,9 @@ curl --socks5 <OpenWrt Tailscale IP>:7891 https://www.baidu.com -o /dev/null -w 
 - Tailscale 未加入同一账号
 - OpenWrt 防火墙未开放 7891 端口给 tailscale0
 - OpenClash 未启动或 SOCKS5 端口配置有误
+- **mihomo SOCKS 入站开了 authentication，但 `skip-auth-prefixes` 不含 Tailscale 段**：VPS 经 Tailscale 来的源 IP 是 `100.64.0.0/10`（CGNAT），若不在 skip-auth 豁免内，SOCKS 握手会被要求认证而失败（现象：本机经 `127.0.0.1:7891` curl 正常，但经本机 Tailscale IP 或从 VPS 测就失败）。`install.sh` 已用 OpenClash overwrite 钩子幂等注入此段；手动修则在钩子里 `Value['skip-auth-prefixes'].unshift('100.64.0.0/10')` 后 `openclash restart`（reload 不触发 overwrite）
+
+> **测试陷阱**：经 SOCKS5 `curl myip.ipip.net` / `ip.sb` 可能显示代理节点 IP（如日本）而非家宽——因为这些域名不在 `geosite:cn`，被 mihomo 当国外流量又代理出去了，是**正常现象**。验证家宽出口请用确定命中 `geosite:cn` 的国内回显，如 `cip.cc`。
 
 ### reverse bridge：连接不上 VPS
 
