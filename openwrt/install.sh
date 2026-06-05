@@ -3,7 +3,7 @@
 #
 # 把回国代理客户端的全部配置固化成幂等脚本：
 #   1. 安装 + 配置 Tailscale（固定 UDP 端口，kernel TUN 模式，
-#      subnet router + exit node + 防火墙 zone/转发）
+#      subnet router + exit node + 防火墙 zone/转发 + WAN UDP GRO 优化）
 #   2. OpenClash 防火墙放行 Tailscale（重启自动重跑的原生钩子）
 #   3. reverse bridge 与 OpenClash 解耦（DIRECT 规则 + fake-ip 过滤）
 #   4. 安装 + 配置 xray reverse bridge 落地机
@@ -265,6 +265,42 @@ setup_tun_network() {
     log "network/firewall 已 reload"
 }
 
+# ── UDP GRO 转发优化（subnet router / exit node 吞吐）──────────────
+
+setup_udp_gro() {
+    # 对 WAN 物理网卡开 rx-udp-gro-forwarding、关 rx-gro-list：聚合入站 UDP
+    # 降低转发 CPU 开销（需内核≥6.2 + TS≥1.54）。tailscaled 启动时检测到次优会
+    # 打印 GRO 警告。ethtool 设置重启即失，故同时写 hotplug 在 wan ifup 时重应用。
+    command -v ethtool >/dev/null 2>&1 || { opkg update >/dev/null 2>&1; opkg install ethtool >/dev/null 2>&1; }
+    command -v ethtool >/dev/null 2>&1 || { warn "未找到 ethtool，跳过 UDP GRO 优化（非关键）"; return 0; }
+
+    _netdev=$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print $2}')
+    if [ -n "$_netdev" ]; then
+        if ethtool -K "$_netdev" rx-udp-gro-forwarding on rx-gro-list off 2>/dev/null; then
+            log "已对 $_netdev 应用 UDP GRO 优化"
+        else
+            warn "ethtool 应用 GRO 失败（网卡/驱动可能不支持，可忽略）"
+        fi
+    else
+        warn "无法确定 WAN 出口网卡，跳过即时 GRO 应用"
+    fi
+
+    # hotplug 持久化：wan 每次 ifup 后重应用（PPPoE 重拨 / DHCP 续约断流后兜底）
+    _hook=/etc/hotplug.d/iface/99-tailscale-udp-gro
+    backup_file "$_hook"
+    cat > "$_hook" <<'EOF'
+#!/bin/sh
+# Tailscale UDP GRO 优化：wan ifup 时对出口网卡重应用（sb-xray install.sh 固化）
+[ "$ACTION" = ifup ] || exit 0
+[ "$INTERFACE" = wan ] || exit 0
+NETDEV=$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print $2}')
+[ -n "$NETDEV" ] && ethtool -K "$NETDEV" rx-udp-gro-forwarding on rx-gro-list off 2>/dev/null
+exit 0
+EOF
+    chmod +x "$_hook"
+    log "已写入 UDP GRO hotplug 持久化: $_hook"
+}
+
 setup_tailscale() {
     /etc/init.d/tailscale enable 2>/dev/null
     /etc/init.d/tailscale restart 2>/dev/null
@@ -490,6 +526,7 @@ verify() {
     check "tailscaled 监听 UDP ${TS_PORT}" sh -c "netstat -lnup 2>/dev/null | grep -q ':${TS_PORT} '"
     check "tailscale0 网卡存在" ip link show tailscale0
     check "tailscale 防火墙 zone 已配置" sh -c "uci show firewall 2>/dev/null | grep -q \"name='tailscale'\""
+    check "WAN UDP GRO 已优化" sh -c "ethtool -k \$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print \$2}') 2>/dev/null | grep -q 'rx-udp-gro-forwarding: on'"
     check "已通告 routes ${TS_ADVERTISE_ROUTES}" sh -c "tailscale debug prefs 2>/dev/null | grep -q '${TS_ADVERTISE_ROUTES}'"
     check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
     check "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
@@ -519,6 +556,7 @@ main() {
     ensure_tun
     install_tailscale
     setup_tun_network
+    setup_udp_gro
     setup_tailscale
     install_keepalive_cron
     setup_tailscale_firewall_bypass

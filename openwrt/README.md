@@ -12,7 +12,8 @@
 | 3b. skip-auth | 经 overwrite 钩子把 `100.64.0.0/10` 注入 mihomo `skip-auth-prefixes`，让 VPS 经 Tailscale 访问本机 SOCKS5(7891) 免认证（机场开了 SOCKS 认证时 cn-exit 的必要条件）|
 | 4. xray bridge | 下载 xray + 带 token 拉取已渲染的落地机 `client.json` + 写 `/etc/init.d/xray-bridge` |
 | 5. keepalive | 每分钟 ping 对端 Tailscale IP，缓解双重 NAT 空闲掉线 |
-| 6. 自检 | 12 项端到端验证 |
+| 5b. UDP GRO | 对 WAN 网卡开 `rx-udp-gro-forwarding`、关 `rx-gro-list` 提升转发吞吐 + 写 hotplug 持久化（消除 tailscale 启动的 GRO 警告）|
+| 6. 自检 | 13 项端到端验证 |
 
 ## 前置条件
 
@@ -64,7 +65,7 @@ sh install.sh
 
 ## 验证
 
-脚本结尾自动跑 12 项自检。也可手动复测：
+脚本结尾自动跑 13 项自检。也可手动复测：
 
 ```sh
 # 重启鲁棒性：OpenClash 重启后链路应快速恢复
