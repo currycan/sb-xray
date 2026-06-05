@@ -8,6 +8,8 @@
 
 适用于 OpenWrt 上已安装 OpenClash 的场景，无需公网 IP，无需手动管理 xray 密钥。
 
+> 📐 本节是「照着抄就能跑」的部署步骤。架构原理、四个角色的流量图解、OpenClash/fake-ip 机制与完整踩坑实录见 [09. Tailscale 代理架构设计与配置指南](./09-tailscale-proxy-architecture.md)。
+
 ### 架构
 
 ```
@@ -82,7 +84,7 @@ tailscale up --accept-dns=false --advertise-exit-node --advertise-routes=172.18.
 
 > **注意**：`--advertise-routes` 与 `--advertise-exit-node` 需到 [Tailscale 管理后台](https://login.tailscale.com/admin/machines) 找到该节点 → Edit route settings 手动批准后才生效。
 
-> ⚠️ **严禁在本机加 `--accept-routes`**：kernel TUN 模式下，若 tailnet 中任何其他节点（包括早已下线的旧设备）持有已批准的、与本机 LAN 网段重叠的子网路由，accept-routes 会把这条路由装进内核策略路由——发往 LAN 的所有回包被丢进隧道黑洞，整机失联，表现与死机无异。本机自己就是 subnet router，无需接受任何对端路由。排查方法见故障排查节。
+> ⚠️ **严禁在本机加 `--accept-routes`**：kernel TUN 模式下它会把对端节点（含已下线旧设备）持有的、与本机 LAN 重叠的子网路由装进内核策略路由，发往 LAN 的回包全进隧道黑洞、整机失联，表现与死机无异。本机自己就是 subnet router，无需接受任何对端路由。根因分析与活体特征、远程急救见 [09 §6.1](./09-tailscale-proxy-architecture.md#61-整机死机失联路由黑洞真凶)。
 
 ### 1.2 防火墙：允许 Tailscale 接口访问 OpenClash SOCKS5
 
