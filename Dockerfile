@@ -299,7 +299,18 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 ENV ENABLE_REVERSE="false"
 ENV REVERSE_DOMAINS="domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan"
 
-# true: 启用 SOCKS5 代理（需同时设置 CN_EXIT_SOCKS5_HOST/PORT）
+# 回国出口模式开关（显式选择回国链路）：
+#   socks5   CN 流量经 SOCKS5（Tailscale/OpenClash，需 CN_EXIT_SOCKS5_HOST/PORT）
+#   reverse  CN 流量经 r-tunnel（VLESS reverse bridge，需 ENABLE_REVERSE=true + 国内 bridge）
+#   balance  socks5 + r-tunnel 主备，leastPing + observatory 健康探测自动故障转移
+#   off      CN 流量不回国（保持封禁）
+# 留空 = 按既有变量派生（向后兼容）：SOCKS5 有 HOST 则 socks5，否则 REVERSE_CN_EXIT=true 则 reverse，否则 off
+ENV CN_EXIT_MODE=""
+# balance 模式健康探测（observatory 直连出站探测，中国大陆可达且返回 204）
+ENV CN_EXIT_PROBE_URL="http://connect.rom.miui.com/generate_204"
+ENV CN_EXIT_PROBE_INTERVAL="30s"
+
+# true: 启用 SOCKS5 代理（socks5/balance 模式需同时设置 CN_EXIT_SOCKS5_HOST/PORT）
 ENV ENABLE_SOCKS5_PROXY="true"
 ENV CN_EXIT_SOCKS5_HOST=""
 ENV CN_EXIT_SOCKS5_PORT="7891"

@@ -1,16 +1,15 @@
 #!/bin/sh
-# sb-xray OpenWrt 客户端一键安装脚本
+# sb-xray OpenWrt 回国出口（CN exit）客户端配置脚本
 #
-# 把回国代理客户端的全部配置固化成幂等脚本：
-#   1. 安装 + 配置 Tailscale（固定 UDP 端口，kernel TUN 模式，
-#      subnet router + exit node + 防火墙 zone/转发 + WAN UDP GRO 优化）
-#   2. OpenClash 防火墙放行 Tailscale（重启自动重跑的原生钩子）
-#   3. reverse bridge 与 OpenClash 解耦（DIRECT 规则 + fake-ip 过滤）
-#   4. 安装 + 配置 xray reverse bridge 落地机
-#   5. 端到端自检
+# 把回国代理客户端配置固化成幂等脚本，按 CN_EXIT_MODE 选择方案（与服务端一致）：
+#   socks5   仅装 Tailscale（kernel TUN + subnet router + exit node + 防火墙 zone/
+#            转发 + WAN UDP GRO），作为 VPS 经 OpenClash SOCKS5 回国的落地。
+#   reverse  仅装 xray reverse bridge 落地机（主动拨向 VPS 建反向隧道）。
+#   balance  两者都装（VPS 侧 leastPing 主备故障转移）。
+# 各模式都会在检测到 OpenClash 时做解耦（VPS 域名 DIRECT + fake-ip 过滤）。
 #
-# 前置：OpenClash 已安装并运行；fw4/nftables；能访问公网。
-# 用法：cp config.env.example config.env && vi config.env && sh install.sh
+# 前置：fw4/nftables；能访问公网；socks5/balance 模式还需 OpenClash 已安装运行。
+# 用法：cp config.env.example config.env && vi config.env && sh cn-exit-setup.sh
 #
 # 兼容 BusyBox ash / POSIX sh —— 不用 bashism（无 [[ ]] / 数组 / set -e / echo -e）。
 
@@ -73,42 +72,67 @@ download_verify() {
 load_config() {
     _dir=$(dirname "$0")
     CONFIG="${CONFIG:-$_dir/config.env}"
-    [ -f "$CONFIG" ] || die "找不到 $CONFIG —— 请先 cp config.env.example config.env 并填值"
-    # shellcheck disable=SC1090
-    . "$CONFIG"
+    # config.env 可选：存在则 source（持久、可反复重跑）；不存在则直接用环境变量
+    # （内联传参，如 CN_EXIT_MODE=reverse VPS_DOMAIN=.. sh cn-exit-setup.sh）。
+    if [ -f "$CONFIG" ]; then
+        # shellcheck disable=SC1090
+        . "$CONFIG"
+        _cfg_src="$CONFIG"
+    else
+        _cfg_src="环境变量（未找到 $CONFIG）"
+    fi
     # 默认值
+    # CN_EXIT_MODE 未设默认 balance（两套都装，与历史 install.sh 行为一致，不破坏既有部署）
+    CN_EXIT_MODE="${CN_EXIT_MODE:-balance}"
     TS_PORT="${TS_PORT:-41641}"
     TS_ADVERTISE_ROUTES="${TS_ADVERTISE_ROUTES:-172.18.18.0/23}"
     RELOAD_OPENCLASH="${RELOAD_OPENCLASH:-0}"
     DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
-    log "已加载配置: $CONFIG"
+    case "$CN_EXIT_MODE" in
+        socks5|reverse|balance) : ;;
+        *) die "CN_EXIT_MODE 非法: $CN_EXIT_MODE（应为 socks5|reverse|balance）" ;;
+    esac
+    log "配置来源: $_cfg_src (CN_EXIT_MODE=$CN_EXIT_MODE)"
 }
 
+# 模式开关：socks5/balance 走 Tailscale；reverse/balance 走 xray bridge
+mode_uses_tailscale() { [ "$CN_EXIT_MODE" = socks5 ] || [ "$CN_EXIT_MODE" = balance ]; }
+mode_uses_reverse()   { [ "$CN_EXIT_MODE" = reverse ] || [ "$CN_EXIT_MODE" = balance ]; }
+
 validate_config() {
+    # 必填项按模式裁剪：socks5/balance 需 Tailscale 三项；reverse/balance 需 token+xray
+    _req="VPS_DOMAIN"
+    mode_uses_tailscale && _req="$_req PEER_TS_IP TS_HOSTNAME TS_VERSION"
+    mode_uses_reverse && _req="$_req SUBSCRIBE_TOKEN XRAY_VERSION"
     _missing=""
-    for _v in VPS_DOMAIN SUBSCRIBE_TOKEN PEER_TS_IP TS_HOSTNAME TS_VERSION XRAY_VERSION; do
+    for _v in $_req; do
         eval "_val=\$$_v"
         [ -n "$_val" ] || _missing="$_missing $_v"
     done
-    [ -z "$_missing" ] || die "config.env 缺少必填项:$_missing"
+    [ -z "$_missing" ] || die "缺少必填项 (CN_EXIT_MODE=$CN_EXIT_MODE):$_missing（用 config.env 或内联环境变量提供）"
 
     # 轻量格式校验（仅 warn，不阻断）
     case "$VPS_DOMAIN" in
         http://*|https://*) die "VPS_DOMAIN 不要带 http(s):// 前缀，只填域名" ;;
     esac
-    case "$PEER_TS_IP" in
-        100.0.0.0) die "PEER_TS_IP 仍是示例占位符 100.0.0.0 —— 请填 VPS 的 tailscale ip -4 输出" ;;
-        100.*) : ;;
-        *) warn "PEER_TS_IP=$PEER_TS_IP 不像 Tailscale IP（应为 100.x 网段）" ;;
-    esac
-    # XRAY_VERSION 归一化：去掉可能的 v 前缀
-    XRAY_VERSION=$(printf '%s' "$XRAY_VERSION" | sed 's/^v//')
+    if mode_uses_tailscale; then
+        case "$PEER_TS_IP" in
+            100.0.0.0) die "PEER_TS_IP 仍是示例占位符 100.0.0.0 —— 请填 VPS 的 tailscale ip -4 输出" ;;
+            100.*) : ;;
+            *) warn "PEER_TS_IP=$PEER_TS_IP 不像 Tailscale IP（应为 100.x 网段）" ;;
+        esac
+    fi
+    # XRAY_VERSION 归一化：去掉可能的 v 前缀（仅 reverse/balance 用得到）
+    mode_uses_reverse && XRAY_VERSION=$(printf '%s' "$XRAY_VERSION" | sed 's/^v//')
 
     # 环境前置
     command -v nft >/dev/null 2>&1 || die "未找到 nft，需要 fw4/nftables 的 OpenWrt"
     command -v uci >/dev/null 2>&1 || die "未找到 uci，这不是 OpenWrt？"
-    [ -x /etc/init.d/openclash ] || die "未找到 /etc/init.d/openclash —— 请先安装 OpenClash"
     command -v wget >/dev/null 2>&1 || die "未找到 wget"
+    # socks5/balance 用 OpenClash 当 SOCKS5 服务端，必须存在；reverse 模式 OpenClash 可选
+    if mode_uses_tailscale; then
+        [ -x /etc/init.d/openclash ] || die "未找到 /etc/init.d/openclash —— socks5/balance 模式需先安装 OpenClash"
+    fi
     log "配置校验通过"
 }
 
@@ -298,7 +322,7 @@ setup_udp_gro() {
     backup_file "$_hook"
     cat > "$_hook" <<'EOF'
 #!/bin/sh
-# Tailscale UDP GRO 优化：wan ifup 时对出口网卡重应用（sb-xray install.sh 固化）
+# Tailscale UDP GRO 优化：wan ifup 时对出口网卡重应用（sb-xray cn-exit-setup.sh 固化）
 [ "$ACTION" = ifup ] || exit 0
 [ "$INTERFACE" = wan ] || exit 0
 NETDEV=$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print $2}')
@@ -412,7 +436,7 @@ setup_socks_skip_auth() {
     # quoted here-doc：$CONFIG_FILE/$LOG_FILE 保持字面，留给 overwrite.sh 运行时展开
     cat >> "$_hook" <<'RUBYEOF'
 
-# 放行 Tailscale CGNAT 段(100.64.0.0/10)免 SOCKS/HTTP 入站认证（sb-xray install.sh 注入）。
+# 放行 Tailscale CGNAT 段(100.64.0.0/10)免 SOCKS/HTTP 入站认证（sb-xray cn-exit-setup.sh 注入）。
 # 幂等：include? 去重；订阅更新后由本钩子自动重补。
 ruby -ryaml -rYAML -I "/usr/share/openclash" -E UTF-8 -e "
    begin
@@ -429,6 +453,8 @@ RUBYEOF
 }
 
 setup_openclash_decouple() {
+    # 未装 OpenClash（纯 reverse 模式可能如此）则跳过：解耦只对 OpenClash 有意义
+    [ -x /etc/init.d/openclash ] || { log "未检测到 OpenClash，跳过解耦"; return 0; }
     _rules=/etc/openclash/custom/openclash_custom_rules.list
     _filter=/etc/openclash/custom/openclash_custom_fake_filter.list
 
@@ -530,22 +556,26 @@ EOF
 # ── 端到端自检 ────────────────────────────────────────────────────
 
 verify() {
-    log "── 自检 ──"
-    check "tailscaled 监听 UDP ${TS_PORT}" sh -c "netstat -lnup 2>/dev/null | grep -q ':${TS_PORT} '"
-    check "tailscale0 网卡存在" ip link show tailscale0
-    check "tailscale 防火墙 zone 已配置" sh -c "uci show firewall 2>/dev/null | grep -q \"name='tailscale'\""
-    check "WAN UDP GRO 已优化" sh -c "ethtool -k \$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print \$2}') 2>/dev/null | grep -q 'rx-udp-gro-forwarding: on'"
-    check "已通告 routes ${TS_ADVERTISE_ROUTES}" sh -c "tailscale debug prefs 2>/dev/null | grep -q '${TS_ADVERTISE_ROUTES}'"
-    check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
-    check "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
-    check "防火墙 bypass 规则已注入" sh -c "test \$(nft list ruleset 2>/dev/null | grep -c tailscale-bypass) -ge 1"
-    check "bridge 隧道到 VPS:443 ESTABLISHED" sh -c "netstat -tn 2>/dev/null | grep -q ':443 .*ESTABLISHED'"
-    check "client.json 无占位符残留" sh -c "! grep -q '\${' /etc/xray/client.json"
-    check "client.json routing 为 r-tunnel" sh -c "grep -q 'r-tunnel' /etc/xray/client.json"
-    check "tailscale 开机自启" /etc/init.d/tailscale enabled
-    check "xray-bridge 开机自启" /etc/init.d/xray-bridge enabled
+    log "── 自检 (mode=$CN_EXIT_MODE) ──"
+    if mode_uses_tailscale; then
+        check "tailscaled 监听 UDP ${TS_PORT}" sh -c "netstat -lnup 2>/dev/null | grep -q ':${TS_PORT} '"
+        check "tailscale0 网卡存在" ip link show tailscale0
+        check "tailscale 防火墙 zone 已配置" sh -c "uci show firewall 2>/dev/null | grep -q \"name='tailscale'\""
+        check "WAN UDP GRO 已优化" sh -c "ethtool -k \$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print \$2}') 2>/dev/null | grep -q 'rx-udp-gro-forwarding: on'"
+        check "已通告 routes ${TS_ADVERTISE_ROUTES}" sh -c "tailscale debug prefs 2>/dev/null | grep -q '${TS_ADVERTISE_ROUTES}'"
+        check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
+        check "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
+        check "防火墙 bypass 规则已注入" sh -c "test \$(nft list ruleset 2>/dev/null | grep -c tailscale-bypass) -ge 1"
+        check "tailscale 开机自启" /etc/init.d/tailscale enabled
+    fi
+    if mode_uses_reverse; then
+        check "bridge 隧道到 VPS:443 ESTABLISHED" sh -c "netstat -tn 2>/dev/null | grep -q ':443 .*ESTABLISHED'"
+        check "client.json 无占位符残留" sh -c "! grep -q '\${' /etc/xray/client.json"
+        check "client.json routing 为 r-tunnel" sh -c "grep -q 'r-tunnel' /etc/xray/client.json"
+        check "xray-bridge 开机自启" /etc/init.d/xray-bridge enabled
+    fi
 
-    printf '\n[install] 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
+    printf '\n[cn-exit] 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
     if [ "$bad" -gt 0 ]; then
         warn "存在失败项 —— 若刚做完 tailscale up 授权，链路可能需 1-2 分钟打洞，稍后重跑 verify"
         return 1
@@ -557,20 +587,25 @@ verify() {
 
 main() {
     trap 'warn "已中断"; exit 130' INT TERM
-    log "=== sb-xray OpenWrt 客户端安装 ==="
+    log "=== sb-xray OpenWrt 回国出口客户端配置 ==="
     load_config
     validate_config
     detect_arch
-    ensure_tun
-    install_tailscale
-    setup_tun_network
-    setup_udp_gro
-    setup_tailscale
-    install_keepalive_cron
-    setup_tailscale_firewall_bypass
-    setup_socks_skip_auth
+    if mode_uses_tailscale; then
+        ensure_tun
+        install_tailscale
+        setup_tun_network
+        setup_udp_gro
+        setup_tailscale
+        install_keepalive_cron
+        setup_tailscale_firewall_bypass
+        setup_socks_skip_auth
+    fi
+    # 解耦对两套方案都适用（自身按是否存在 OpenClash 决定跑不跑）
     setup_openclash_decouple
-    install_xray_bridge
+    if mode_uses_reverse; then
+        install_xray_bridge
+    fi
     verify
     log "=== 完成 ==="
 }

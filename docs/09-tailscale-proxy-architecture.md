@@ -272,7 +272,7 @@ flowchart LR
 3. **同时**，OpenClash 的 `dstnat` / `mangle_prerouting` 拦截链对所有接口生效（§2.3），把这股流量也拉进 tproxy 分流。
 4. mihomo 按规则判定：`GEOIP,CN` → DIRECT 家宽直出；非 CN → 你家路由器配置的代理节点。
 
-> ✅ **这是纯默认配置就工作的**——`install.sh` 配好 `tailscale→wan` 转发后，OpenClash 的无接口限制拦截链自动接管，**不需要**手写任何 redirect/tproxy 规则。
+> ✅ **这是纯默认配置就工作的**——`cn-exit-setup.sh` 配好 `tailscale→wan` 转发后，OpenClash 的无接口限制拦截链自动接管，**不需要**手写任何 redirect/tproxy 规则。
 >
 > ⚠️ 验证这个角色**必须用真正的外网设备**（手机关 WiFi 用 4G）。用同网段/异网段的局域网设备测会得到假阴性，原因见 §6.5。
 
@@ -332,13 +332,13 @@ flowchart LR
 
 ### 4.1 一键脚本（推荐路径）
 
-🔧 **脚本已自动**：仓库 `openwrt/install.sh` 把下面所有配置固化成**幂等脚本**（重复跑不叠加、不破坏）。绝大多数人用这个就够了：
+🔧 **脚本已自动**：仓库 `openwrt/cn-exit-setup.sh` 把下面所有配置固化成**幂等脚本**（重复跑不叠加、不破坏）。本文这套 Tailscale 链路对应 `CN_EXIT_MODE=socks5`，绝大多数人用这个就够了：
 
 ```sh
 cd openwrt
 cp config.env.example config.env
-vi config.env          # 填 VPS_DOMAIN / SUBSCRIBE_TOKEN / PEER_TS_IP / TS_HOSTNAME 等
-sh install.sh
+vi config.env          # CN_EXIT_MODE=socks5；填 VPS_DOMAIN / PEER_TS_IP / TS_HOSTNAME / TS_VERSION
+sh cn-exit-setup.sh
 ```
 
 脚本各关键函数职责一览（想知道某一步在干嘛时对照看）：
@@ -389,7 +389,7 @@ procd_set_param command /usr/sbin/tailscaled \
 
 #### `tailscale up` 参数
 
-🔧 **`install.sh` 自动执行**，手动等价命令：
+🔧 **`cn-exit-setup.sh` 自动执行**，手动等价命令：
 
 ```sh
 tailscale up --reset --timeout=120s --accept-dns=false \
@@ -407,7 +407,7 @@ tailscale up --reset --timeout=120s --accept-dns=false \
 
 #### 防火墙 zone 与转发
 
-🔧 **`install.sh` 自动执行**（带幂等守卫），手动等价：
+🔧 **`cn-exit-setup.sh` 自动执行**（带幂等守卫），手动等价：
 
 ```sh
 # 1. 注册 tailscale0 为网络接口（供 zone 匹配）
@@ -437,7 +437,7 @@ uci commit firewall
 
 #### OpenClash 侧三件事
 
-🔧 **`install.sh` 自动执行**：
+🔧 **`cn-exit-setup.sh` 自动执行**：
 
 1. **fake-ip 过滤**（`openclash_custom_fake_filter.list` 加入 `<VPS_DOMAIN>`）：让 VPS 域名解析**真实 IP**，不发假 IP。否则 reverse bridge / 本机访问 VPS 会因拿到假 IP 连不上。见 §6.5。
 2. **DIRECT 规则**（`openclash_custom_rules.list` 加 `DOMAIN,<VPS_DOMAIN>,DIRECT`）：VPS 域名直连不进代理，防环路。
@@ -446,7 +446,7 @@ uci commit firewall
 
 #### UDP GRO 转发优化（吞吐）
 
-🔧 **`install.sh` 自动执行**，手动等价：
+🔧 **`cn-exit-setup.sh` 自动执行**，手动等价：
 
 ```sh
 # 对 WAN 物理网卡开 GRO 转发聚合（需内核≥6.2 + Tailscale≥1.54）

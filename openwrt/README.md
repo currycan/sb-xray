@@ -1,44 +1,61 @@
-# sb-xray OpenWrt 客户端安装脚本
+# sb-xray OpenWrt 回国出口（CN exit）客户端配置脚本
 
-把回国代理客户端在 OpenWrt 上的全部配置固化成一个幂等脚本。服务端（VPS）由 `docker-compose` 单独部署，不在本脚本范围内。
+把回国代理客户端在 OpenWrt 上的配置固化成一个幂等脚本，按 `CN_EXIT_MODE` 选择方案（与 VPS 服务端 `CN_EXIT_MODE` 对齐）。服务端（VPS）由 `docker-compose` 单独部署，不在本脚本范围内。
 
-## 这个脚本做什么
+## 方案（CN_EXIT_MODE）
 
-| 步骤 | 内容 |
-|------|------|
-| 1. Tailscale | 下载二进制 + 写 `/etc/init.d/tailscale`，**固定 UDP 端口 41641** + kernel TUN 模式；配置 tailscale 防火墙 zone 与转发（lan 双向 + wan 出口）；`tailscale up` 上线并通告 subnet routes + exit node |
-| 2. 防火墙放行 | 写 OpenClash 原生钩子，把 Tailscale UDP 在 nftables mangle 链顶 `return`，绕过 tproxy；OpenClash 每次重启自动重跑 |
-| 3. 解耦 | 给 OpenClash 加 `DOMAIN,<VPS>,DIRECT` + fake-ip 过滤，让 reverse bridge 直连 VPS 真实 IP，不依赖 OpenClash 在线 |
-| 3b. skip-auth | 经 overwrite 钩子把 `100.64.0.0/10` 注入 mihomo `skip-auth-prefixes`，让 VPS 经 Tailscale 访问本机 SOCKS5(7891) 免认证（机场开了 SOCKS 认证时 cn-exit 的必要条件）|
-| 4. xray bridge | 下载 xray + 带 token 拉取已渲染的落地机 `client.json` + 写 `/etc/init.d/xray-bridge` |
-| 5. keepalive | 每分钟 ping 对端 Tailscale IP，缓解双重 NAT 空闲掉线 |
-| 5b. UDP GRO | 对 WAN 网卡开 `rx-udp-gro-forwarding`、关 `rx-gro-list` 提升转发吞吐 + 写 hotplug 持久化（消除 tailscale 启动的 GRO 警告）|
-| 6. 自检 | 13 项端到端验证 |
+| 模式 | 装什么 | 适用 |
+|------|--------|------|
+| `socks5` | 仅 Tailscale（VPS 经 OpenClash SOCKS5 回国） | 已有 OpenClash |
+| `reverse` | 仅 xray reverse bridge（主动拨向 VPS 建反向隧道） | 无 OpenClash / 纯回国穿透 |
+| `balance` | 两者都装（VPS 侧主备故障转移） | 既有 OpenClash 又要高可用 |
+
+留空默认 `balance`（两套都装，与历史行为一致）。
+
+## 这个脚本做什么（按模式执行）
+
+| 步骤 | 模式 | 内容 |
+|------|------|------|
+| Tailscale | socks5 / balance | 下载二进制 + 写 `/etc/init.d/tailscale`，**固定 UDP 端口 41641** + kernel TUN；tailscale 防火墙 zone 与转发（lan 双向 + wan 出口）；`tailscale up` 通告 subnet routes + exit node |
+| 防火墙放行 | socks5 / balance | OpenClash 原生钩子把 Tailscale UDP 在 nftables mangle 链顶 `return` 绕过 tproxy；OpenClash 每次重启自动重跑 |
+| skip-auth | socks5 / balance | overwrite 钩子把 `100.64.0.0/10` 注入 mihomo `skip-auth-prefixes`，让 VPS 经 Tailscale 访问本机 SOCKS5(7891) 免认证 |
+| keepalive / UDP GRO | socks5 / balance | 每分钟 ping 对端缓解双重 NAT 空闲掉线；WAN 网卡开 `rx-udp-gro-forwarding` 提升转发吞吐 + hotplug 持久化 |
+| 解耦 | 所有（有 OpenClash 时） | 给 OpenClash 加 `DOMAIN,<VPS>,DIRECT` + fake-ip 过滤，让 bridge 直连 VPS 真实 IP；未装 OpenClash 自动跳过 |
+| xray bridge | reverse / balance | 下载 xray + 带 token 拉取已渲染的落地机 `client.json` + 写 `/etc/init.d/xray-bridge` |
+| 自检 | 所有 | 按模式裁剪的端到端验证 |
 
 ## 前置条件
 
 - OpenWrt，使用 **fw4 / nftables**（不是旧 iptables）
-- **OpenClash 已安装并运行**（脚本只注入钩子与规则，不装 OpenClash 本体）
 - 能访问公网（下载 Tailscale / Xray / 落地机配置）
-- VPS 服务端已 `ENABLE_REVERSE=true` 并能 `docker exec sb-xray show` 拿到下载链接
+- `socks5` / `balance` 模式：**OpenClash 已安装并运行**（脚本只注入钩子与规则，不装 OpenClash 本体）
+- `reverse` / `balance` 模式：VPS 服务端已 `ENABLE_REVERSE=true` 并能 `docker exec sb-xray show` 拿到下载链接
 
 ## 用法
 
-```sh
-# 1. 复制脚本和配置到路由器
-scp openwrt/install.sh openwrt/config.env.example root@<路由器IP>:/root/sb-xray-openwrt/
+值都来自 VPS：在 VPS 上运行 `docker exec sb-xray show`，输出里有域名、`?token=` 后的订阅 token、以及 reverse bridge 下载链接；`PEER_TS_IP` 用 VPS 上 `tailscale ip -4` 获取。
 
-# 2. 在路由器上填配置
+**方式 A — 持久（推荐，可反复重跑）**：用 `config.env`。
+
+```sh
+scp openwrt/cn-exit-setup.sh openwrt/config.env.example root@<路由器IP>:/root/sb-xray-openwrt/
 ssh root@<路由器IP>
 cd /root/sb-xray-openwrt
 cp config.env.example config.env
-vi config.env          # 填 VPS_DOMAIN / SUBSCRIBE_TOKEN / PEER_TS_IP / TS_HOSTNAME
-
-# 3. 运行
-sh install.sh
+vi config.env          # 设 CN_EXIT_MODE 及该模式必填项
+sh cn-exit-setup.sh
 ```
 
-`config.env` 里所有值都来自 VPS：在 VPS 上运行 `docker exec sb-xray show`，输出里有域名、`?token=` 后的订阅 token、以及 reverse bridge 下载链接。`PEER_TS_IP` 用 VPS 上 `tailscale ip -4` 获取。
+**方式 B — 内联（快速，免建文件）**：直接用环境变量。config.env 不存在时脚本自动读环境变量。
+
+```sh
+# reverse 只需 3 个变量：
+CN_EXIT_MODE=reverse VPS_DOMAIN=vpn.example.com \
+  SUBSCRIBE_TOKEN=<token> XRAY_VERSION=26.3.27 \
+  sh cn-exit-setup.sh
+```
+
+> 内联方式把 token 写进了 shell history；要持久重跑或在意 history 泄露，用方式 A。
 
 ### Tailscale 授权（仅首次）
 
@@ -51,7 +68,12 @@ sh install.sh
 
 ## 配置项
 
-见 `config.env.example`。必填：`VPS_DOMAIN`、`SUBSCRIBE_TOKEN`、`PEER_TS_IP`、`TS_HOSTNAME`、`TS_VERSION`、`XRAY_VERSION`。
+见 `config.env.example`。必填项按模式裁剪：
+
+- 所有模式：`VPS_DOMAIN`
+- `socks5` / `balance`：`PEER_TS_IP`、`TS_HOSTNAME`、`TS_VERSION`
+- `reverse` / `balance`：`SUBSCRIBE_TOKEN`、`XRAY_VERSION`
+
 常用可选：`RELOAD_OPENCLASH=1`（安装末尾自动重载 OpenClash 使解耦规则生效）、`ARCH_OVERRIDE`、`TS_PORT`、`TS_ADVERTISE_ROUTES`（subnet router 通告网段，默认 `172.18.18.0/23`）。
 
 ## 幂等
@@ -65,7 +87,7 @@ sh install.sh
 
 ## 验证
 
-脚本结尾自动跑 13 项自检。也可手动复测：
+脚本结尾按当前模式自动跑端到端自检（socks5/balance 检查 Tailscale 链路，reverse/balance 检查 bridge 隧道）。也可手动复测：
 
 ```sh
 # 重启鲁棒性：OpenClash 重启后链路应快速恢复
@@ -95,9 +117,9 @@ cp /etc/init.d/tailscale.bak.<ts> /etc/init.d/tailscale
 回退到 userspace-networking 模式（不需要 TUN / 防火墙 zone 的旧形态）：
 
 ```sh
-# 仓库侧取回旧版脚本重跑
+# 仓库侧取回旧版脚本重跑（commit 10ce8f9 时脚本名还是 install.sh）
 git checkout 10ce8f9 -- openwrt/install.sh
-# 重新 scp 到路由器后 sh install.sh
+# 重新 scp openwrt/install.sh 到路由器后 sh install.sh
 
 # （可选）清理 kernel TUN 模式遗留的防火墙配置——留着也无害
 uci delete network.tailscale
