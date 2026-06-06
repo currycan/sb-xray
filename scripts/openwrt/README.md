@@ -156,22 +156,22 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    S1["① 上传文件<br/>scp 到路由器"] --> S2["② 填配置<br/>config.env<br/>(+ nodes.list)"] --> S3["③ 运行<br/>sh cn-exit-setup.sh"] --> S4["④ Tailscale 授权<br/>浏览器点一次<br/>(仅首次)"] --> S5["⑤ 看自检结果<br/>+ 手动复测"]
+    S1["① 下载文件<br/>路由器上 wget"] --> S2["② 填配置<br/>config.env<br/>(+ nodes.list)"] --> S3["③ 运行<br/>sh cn-exit-setup.sh"] --> S4["④ Tailscale 授权<br/>浏览器点一次<br/>(仅首次)"] --> S5["⑤ 看自检结果<br/>+ 手动复测"]
 ```
 
-### 步骤 1：上传文件到路由器
+### 步骤 1：下载文件到路由器
 
-在你的电脑上（仓库根目录）：
+登录路由器，直接 wget 拉取：
 
 ```sh
-ssh root@<路由器IP> "mkdir -p /root/sb-xray-openwrt"
-scp scripts/openwrt/cn-exit-setup.sh scripts/openwrt/config.env.example \
-    scripts/openwrt/cn-bridge scripts/openwrt/cn-bridge-monitor \
-    scripts/openwrt/nodes.list.example \
-    root@<路由器IP>:/root/sb-xray-openwrt/
+ssh root@<路由器IP>
+mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
+for f in cn-exit-setup.sh config.env.example cn-bridge cn-bridge-monitor nodes.list.example; do
+  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/scripts/openwrt/$f"
+done
 ```
 
-> `cn-bridge` / `cn-bridge-monitor` 不上传也行——脚本会从 GitHub raw 自动下载；国内网络环境下建议一并上传，免得下载失败。
+> 国内直连 GitHub raw 可能失败：让路由器先走代理再下载，或换一台能访问 GitHub 的机器下载后传入。`cn-bridge` / `cn-bridge-monitor` 缺失也不要紧——主脚本运行时会自动补下载。
 
 ### 步骤 2：填配置
 
@@ -375,7 +375,7 @@ flowchart TD
 | `VPS_DOMAIN 不要带 http(s):// 前缀` | 只填域名本身 |
 | `PEER_TS_IP 仍是示例占位符 100.0.0.0` | 去 VPS 跑 `tailscale ip -4` 拿真实 IP |
 | `需提供节点清单文件、BRIDGE_NODES 或 VPS_DOMAIN` | 三种节点来源至少给一种 |
-| `下载失败（已重试 N 次）` | 路由器到 GitHub/Tailscale 网络不通；先把文件 scp 上去（脚本优先用同目录文件），或挂代理后重跑 |
+| `下载失败（已重试 N 次）` | 路由器到 GitHub/Tailscale 网络不通；挂代理后重跑，或换台能访问 GitHub 的机器下载后传入脚本同目录（脚本优先用同目录文件） |
 | `client.json 含占位符` | VPS 服务端没开 `ENABLE_REVERSE=true`，或 token 抄错——去 VPS 重新 `show` 核对 |
 | `无法获得 /dev/net/tun` | 固件缺 kmod-tun 且 opkg 安装失败；先 `opkg update && opkg install kmod-tun` 再重跑 |
 | `不支持的架构` | 在 `config.env` 设 `ARCH_OVERRIDE=arm64` 或 `amd64` |
