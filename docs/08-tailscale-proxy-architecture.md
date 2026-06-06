@@ -332,10 +332,14 @@ flowchart LR
 
 ### 4.1 一键脚本（推荐路径）
 
-🔧 **脚本已自动**：仓库 `scripts/openwrt/cn-exit-setup.sh` 把下面所有配置固化成**幂等脚本**（重复跑不叠加、不破坏）。本文这套 Tailscale 链路对应 `CN_EXIT_MODE=socks5`，绝大多数人用这个就够了：
+🔧 **脚本已自动**：仓库 `sources/openwrt/cn-exit-setup.sh` 把下面所有配置固化成**幂等脚本**（重复跑不叠加、不破坏）。本文这套 Tailscale 链路对应 `CN_EXIT_MODE=socks5`，绝大多数人用这个就够了：
 
 ```sh
-cd scripts/openwrt
+# 路由器上直接下载：
+mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
+for f in cn-exit-setup.sh config.env.example; do
+  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
+done
 cp config.env.example config.env
 vi config.env          # CN_EXIT_MODE=socks5；填 VPS_DOMAIN / PEER_TS_IP / TS_HOSTNAME / TS_VERSION
 sh cn-exit-setup.sh

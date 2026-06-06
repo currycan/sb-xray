@@ -2,7 +2,7 @@
 
 把「海外 VPS 流量回到中国大陆家宽出口」所需的 OpenWrt 侧全部配置，固化成一个**可反复重跑的幂等脚本**。你只需要填一份 `config.env`，跑一条命令，脚本自动完成安装、配置、自检。
 
-服务端（VPS）由 `docker-compose` 单独部署（多台 VPS 可用 [`../vps-cn-exit-init.sh`](../vps-cn-exit-init.sh) 一键初始化），不在本目录范围内。
+服务端（VPS）由 `docker-compose` 单独部署（多台 VPS 可用 [`../vps/vps-cn-exit-init.sh`](../vps/vps-cn-exit-init.sh) 一键初始化，用法见 [../vps/README.md](../vps/README.md)），不在本目录范围内。
 
 ## 目录内容
 
@@ -167,7 +167,7 @@ flowchart LR
 ssh root@<路由器IP>
 mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
 for f in cn-exit-setup.sh config.env.example cn-bridge cn-bridge-monitor nodes.list.example; do
-  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/scripts/openwrt/$f"
+  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
 done
 ```
 

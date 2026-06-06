@@ -250,7 +250,7 @@ docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
 # balance 预期：CN-exit(balance): selector=['cn-exit', 'r-tunnel'] leastPing
 ```
 
-🔧 **多 VPS 批量初始化**：每台 VPS 用 `scripts/vps-cn-exit-init.sh` 一键写 `.env`（回国项以 `${VAR}` 注入 docker-compose）、装 Tailscale 入网、配 VPS 侧 keepalive、拉起容器，嵌进你的 provisioning 即可。各台 `XRAY_REVERSE_UUID` 自动生成持久化、互不冲突；socks5 腿命脉是 Tailscale 链路，务必每台都入 tailnet。配一次永不改 env，回国拨号切换全在 OpenWrt 侧 `cn-bridge` 完成。
+🔧 **多 VPS 批量初始化**：每台 VPS 用 `sources/vps/vps-cn-exit-init.sh`（用法详见 [sources/vps/README.md](../sources/vps/README.md)）一键写 `.env`（回国项以 `${VAR}` 注入 docker-compose）、装 Tailscale 入网、配 VPS 侧 keepalive、拉起容器，嵌进你的 provisioning 即可。各台 `XRAY_REVERSE_UUID` 自动生成持久化、互不冲突；socks5 腿命脉是 Tailscale 链路，务必每台都入 tailnet。配一次永不改 env，回国拨号切换全在 OpenWrt 侧 `cn-bridge` 完成。
 
 ### 4.2 拿落地机配置下载链接
 
@@ -264,11 +264,15 @@ docker exec sb-xray show
 
 ### 4.3 bridge 侧（大陆 OpenWrt）
 
-🔧 **推荐：一键脚本**。仓库 `scripts/openwrt/cn-exit-setup.sh` 已把「装 xray + 带 token 拉取已渲染 `client.json` + 写 `/etc/init.d/xray-bridge` 开机自启 + 自检」固化成幂等脚本，`CN_EXIT_MODE=reverse` 时只跑 bridge 相关步骤、不碰 Tailscale。
+🔧 **推荐：一键脚本**。仓库 `sources/openwrt/cn-exit-setup.sh` 已把「装 xray + 带 token 拉取已渲染 `client.json` + 写 `/etc/init.d/xray-bridge` 开机自启 + 自检」固化成幂等脚本，`CN_EXIT_MODE=reverse` 时只跑 bridge 相关步骤、不碰 Tailscale。
 
 ```sh
-# 持久（可反复重跑）：
-cd scripts/openwrt && cp config.env.example config.env
+# 路由器上直接下载（持久，可反复重跑）：
+mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
+for f in cn-exit-setup.sh config.env.example; do
+  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
+done
+cp config.env.example config.env
 vi config.env          # CN_EXIT_MODE=reverse；填 VPS_DOMAIN / SUBSCRIBE_TOKEN / XRAY_VERSION
 sh cn-exit-setup.sh
 
@@ -278,7 +282,7 @@ CN_EXIT_MODE=reverse VPS_DOMAIN=<你的域名> \
   sh cn-exit-setup.sh
 ```
 
-> `balance` 模式把 `CN_EXIT_MODE` 改成 `balance` 并补齐 Tailscale 相关变量即可（脚本会同时装 Tailscale 与 bridge）。详见 [scripts/openwrt/README.md](../scripts/openwrt/README.md)。
+> `balance` 模式把 `CN_EXIT_MODE` 改成 `balance` 并补齐 Tailscale 相关变量即可（脚本会同时装 Tailscale 与 bridge）。详见 [sources/openwrt/README.md](../sources/openwrt/README.md)。
 
 🔧 **手动等价**（不想用脚本时）：
 
@@ -319,7 +323,7 @@ chmod +x /etc/init.d/xray-bridge
 
 单条 bridge 是单点——那台 VPS 宕机，走它的回国就断。多公网部署让每台 VPS 都成为独立回国入口：家里 OpenWrt 对**热备**节点常驻拨通、**冷备**节点平时不拨、故障时一条命令顶上。
 
-🔧 **配置**（`scripts/openwrt/config.env`）：`BRIDGE_NODES` 列全部 VPS 节点池，`BRIDGE_HOT` 指定常驻热备：
+🔧 **配置**（`sources/openwrt/config.env`）：`BRIDGE_NODES` 列全部 VPS 节点池，`BRIDGE_HOT` 指定常驻热备：
 
 ```sh
 # 每项 名:FQDN:token，空格分隔；token 为各 VPS show 输出 ?token= 后那段（可各异）

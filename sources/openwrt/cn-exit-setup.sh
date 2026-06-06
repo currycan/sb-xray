@@ -601,7 +601,7 @@ install_cn_bridge() {
         cp "$_src" /usr/bin/cn-bridge
     else
         download_verify \
-            "https://raw.githubusercontent.com/currycan/sb-xray/main/scripts/openwrt/cn-bridge" \
+            "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/cn-bridge" \
             /usr/bin/cn-bridge raw
     fi
     chmod +x /usr/bin/cn-bridge
@@ -657,7 +657,7 @@ install_monitor() {
         cp "$_src" /usr/bin/cn-bridge-monitor
     else
         download_verify \
-            "https://raw.githubusercontent.com/currycan/sb-xray/main/scripts/openwrt/cn-bridge-monitor" \
+            "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/cn-bridge-monitor" \
             /usr/bin/cn-bridge-monitor raw
     fi
     chmod +x /usr/bin/cn-bridge-monitor
