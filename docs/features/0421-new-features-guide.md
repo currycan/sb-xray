@@ -26,7 +26,7 @@
 Xray ban 规则命中 → webhook POST → `shoutrrr` CLI → Telegram / Discord / Slack / Gotify。
 适合想实时知道节点被 BT / 广告流量骚扰、客户端触发私网 IP 防护、或国内回源审计的运维用户。
 
-**→ 完整产品文档（含架构图、序列图、Telegram 5 分钟快速开始、故障排查速查表）：[`07-event-bus-shoutrrr.md`](../07-event-bus-shoutrrr.md)**
+**→ 完整产品文档（含架构图、序列图、Telegram 5 分钟快速开始、故障排查速查表）：[`06-event-bus-shoutrrr.md`](../06-event-bus-shoutrrr.md)**
 
 ---
 
@@ -75,7 +75,7 @@ docker exec sb-xray sh -c 'ls /sb-xray/subscribe/ | grep -c v2rayn-adv'
 - 想让流媒体（Netflix / Disney）走家宽真实 ISP 出口以匹配 residential IP 需求
 - VPS 要让部分业务"落地"到家宽以获得更好的国内访问路径
 
-**怎么开**：完整部署步骤见 [`docs/06-reverse-proxy-guide.md`](./06-reverse-proxy-guide.md)。核心 env 配置：
+**怎么开**：完整部署步骤见 [`docs/05-reverse-proxy-guide.md`](./05-reverse-proxy-guide.md)。核心 env 配置：
 
 ```yaml
     environment:
@@ -381,6 +381,6 @@ docker exec sb-xray tail -100 /var/log/supervisor/xray.err.log
 - [docs/02-protocols-and-security.md](./02-protocols-and-security.md) —— 协议与安全设计
 - [docs/03-routing-and-clients.md](./03-routing-and-clients.md) —— 路由与客户端
 - [docs/04-ops-and-troubleshooting.md](./04-ops-and-troubleshooting.md) —— 运维与故障排查
-- [docs/05-build-release.md](./05-build-release.md) —— 构建与发布流程
-- [docs/06-reverse-proxy-guide.md](./06-reverse-proxy-guide.md) —— VLESS Reverse Proxy 部署指南
+- [docs/00-build-release.md](./00-build-release.md) —— 构建与发布流程
+- [docs/05-reverse-proxy-guide.md](./05-reverse-proxy-guide.md) —— VLESS Reverse Proxy 部署指南
 - [references/implementation-notes.md](../references/implementation-notes.md) —— 实施过程笔记（本地维护）

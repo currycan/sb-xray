@@ -100,10 +100,21 @@ mode_uses_tailscale() { [ "$CN_EXIT_MODE" = socks5 ] || [ "$CN_EXIT_MODE" = bala
 mode_uses_reverse()   { [ "$CN_EXIT_MODE" = reverse ] || [ "$CN_EXIT_MODE" = balance ]; }
 
 validate_config() {
-    # 必填项按模式裁剪：socks5/balance 需 Tailscale 三项；reverse/balance 需 token+xray
-    _req="VPS_DOMAIN"
+    # 节点来源：nodes.list 文件（NODES_FILE / 脚本同目录 nodes.list）、BRIDGE_NODES
+    # 内联，或单节点旧用法 VPS_DOMAIN，至少一种。
+    _nsrc="${NODES_FILE:-$(dirname "$0")/nodes.list}"
+    if [ ! -f "$_nsrc" ] && [ -z "$BRIDGE_NODES" ] && [ -z "$VPS_DOMAIN" ]; then
+        die "需提供节点清单文件（NODES_FILE / 同目录 nodes.list）、BRIDGE_NODES 或 VPS_DOMAIN"
+    fi
+    # 必填项按模式裁剪：socks5/balance 需 Tailscale 三项；reverse/balance 需 xray 版本
+    _req=""
     mode_uses_tailscale && _req="$_req PEER_TS_IP TS_HOSTNAME TS_VERSION"
-    mode_uses_reverse && _req="$_req SUBSCRIBE_TOKEN XRAY_VERSION"
+    mode_uses_reverse && _req="$_req XRAY_VERSION"
+    # 单节点旧用法（无 nodes 文件、无 BRIDGE_NODES）的 reverse/balance 还需
+    # SUBSCRIBE_TOKEN；多节点的 token 已随清单每项提供。
+    if mode_uses_reverse && [ -z "$BRIDGE_NODES" ] && [ ! -f "$_nsrc" ]; then
+        _req="$_req SUBSCRIBE_TOKEN"
+    fi
     _missing=""
     for _v in $_req; do
         eval "_val=\$$_v"
@@ -112,9 +123,11 @@ validate_config() {
     [ -z "$_missing" ] || die "缺少必填项 (CN_EXIT_MODE=$CN_EXIT_MODE):$_missing（用 config.env 或内联环境变量提供）"
 
     # 轻量格式校验（仅 warn，不阻断）
-    case "$VPS_DOMAIN" in
-        http://*|https://*) die "VPS_DOMAIN 不要带 http(s):// 前缀，只填域名" ;;
-    esac
+    if [ -n "$VPS_DOMAIN" ]; then
+        case "$VPS_DOMAIN" in
+            http://*|https://*) die "VPS_DOMAIN 不要带 http(s):// 前缀，只填域名" ;;
+        esac
+    fi
     if mode_uses_tailscale; then
         case "$PEER_TS_IP" in
             100.0.0.0) die "PEER_TS_IP 仍是示例占位符 100.0.0.0 —— 请填 VPS 的 tailscale ip -4 输出" ;;
@@ -363,16 +376,40 @@ setup_tailscale() {
 }
 
 install_keepalive_cron() {
-    _line="* * * * * /usr/sbin/tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} >/dev/null 2>&1"
+    # 保活目标：默认 PEER_TS_IP；多热备时用 KEEPALIVE_PEERS 覆盖（逗号分隔，任一
+    # 在线即维持映射）。EIM NAT 下保住 openwrt 41641 出站映射即惠及全部 VPS。
+    _peers=$(printf '%s' "${KEEPALIVE_PEERS:-$PEER_TS_IP}" | tr ',' ' ')
+    # 生成共享保活脚本：无参=cron 模式（一分钟内 4 轮、~15s 粒度，缩短 OpenClash
+    # 重启后直连恢复窗口）；once=单轮（供 OpenClash 防火墙钩子重启后立即唤醒）。
+    _ka=/usr/bin/cn-ts-keepalive
+    backup_file "$_ka"
+    cat > "$_ka" <<EOF
+#!/bin/sh
+# Tailscale 直连保活（cn-exit-setup.sh 生成）：ping 热备 peers 保住 openwrt 41641
+# 出站 NAT 映射，EIM 特性下惠及全部 VPS 的直连。用法：cn-ts-keepalive [once]
+PEERS="$_peers"
+ping_round() { for p in \$PEERS; do /usr/sbin/tailscale ping -c 1 --timeout 5s "\$p" >/dev/null 2>&1; done; }
+[ "\$1" = once ] && { ping_round; exit 0; }
+# cron 模式：单实例锁，防 ping 持续超时使脚本逼近 60s 时与下一次 cron 叠加（flock 不可用则降级不加锁）
+if command -v flock >/dev/null 2>&1; then exec 9>/var/run/cn-ts-keepalive.lock; flock -n 9 || exit 0; fi
+i=0
+while [ \$i -lt 4 ]; do ping_round; i=\$((i+1)); [ \$i -lt 4 ] && sleep 15; done
+EOF
+    chmod +x "$_ka"
+    _line="* * * * * $_ka >/dev/null 2>&1"
     _crontab=/etc/crontabs/root
     touch "$_crontab"
-    if grep -qF "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP}" "$_crontab"; then
+    # 迁移：清理历史的旧版单行 ping（直接 cron ping，无脚本封装）
+    if grep -q "tailscale ping -c 1 --timeout 5s" "$_crontab" && ! grep -qF "$_ka" "$_crontab"; then
+        sed -i '/tailscale ping -c 1 --timeout 5s/d' "$_crontab"
+    fi
+    if grep -qF "$_ka" "$_crontab"; then
         log "keepalive cron 已存在，跳过"
     else
         printf '%s\n' "$_line" >> "$_crontab"
         /etc/init.d/cron enable 2>/dev/null
         /etc/init.d/cron restart 2>/dev/null
-        log "已添加 keepalive cron（每分钟 ping $PEER_TS_IP）"
+        log "已添加 keepalive cron（每分钟 4 轮 ~15s ping: $_peers）"
     fi
 }
 
@@ -404,6 +441,9 @@ for CHAIN in openclash_mangle openclash_mangle_output openclash_mangle_v6 opencl
     nft insert rule inet fw4 "\$CHAIN" udp dport \$TS_PORT counter return comment "tailscale-bypass" 2>/dev/null
 done
 LOG_TIP "Tailscale UDP \$TS_PORT bypass injected." 2>/dev/null
+# OpenClash 重启会 flush fw4 + 打断 tailscale 直连；注入 bypass 后立即唤醒一轮保活，
+# 重建 41641 出站映射，把直连恢复窗口从"等下一个 cron 分钟"压到秒级。
+[ -x /usr/bin/cn-ts-keepalive ] && /usr/bin/cn-ts-keepalive once >/dev/null 2>&1 &
 exit 0
 EOF
     chmod +x "$_hook"
@@ -457,40 +497,115 @@ setup_openclash_decouple() {
     [ -x /etc/init.d/openclash ] || { log "未检测到 OpenClash，跳过解耦"; return 0; }
     _rules=/etc/openclash/custom/openclash_custom_rules.list
     _filter=/etc/openclash/custom/openclash_custom_fake_filter.list
+    _nl=/etc/cn-exit/nodes.list
+    mkdir -p /etc/openclash/custom
+    touch "$_rules" "$_filter"
+    [ -f "$_nl" ] || { warn "节点清单 $_nl 不存在，跳过解耦"; return 0; }
 
-    # DIRECT 规则：让 OpenClash 把 VPS 域名直连，不进代理
-    touch "$_rules"
-    if grep -qF "DOMAIN,${VPS_DOMAIN},DIRECT" "$_rules"; then
-        log "DIRECT 规则已存在，跳过"
-    else
-        backup_file "$_rules"
-        if grep -q '^rules:' "$_rules"; then
-            sed -i "/^rules:/a - DOMAIN,${VPS_DOMAIN},DIRECT" "$_rules"
-        else
-            # 没有 rules: 头则补一个再插
-            printf 'rules:\n- DOMAIN,%s,DIRECT\n' "$VPS_DOMAIN" >> "$_rules"
+    # 对清单内每个 VPS 域名解耦：DIRECT（OpenClash 直连不进代理 —— socks5 腿防环路
+    # + bridge 直连真实 IP）+ fake-ip 过滤（解析真实 IP 而非 fake-ip）。与拨不拨
+    # 无关，所有已知 VPS 域名都解耦。
+    backup_file "$_rules"
+    backup_file "$_filter"
+    _added=0
+    while read -r _n _dom _t; do
+        case "$_n" in ''|\#*) continue ;; esac
+        [ -n "$_dom" ] || continue
+        if ! grep -qF "DOMAIN,${_dom},DIRECT" "$_rules"; then
+            if grep -q '^rules:' "$_rules"; then
+                sed -i "/^rules:/a - DOMAIN,${_dom},DIRECT" "$_rules"
+            else
+                printf 'rules:\n- DOMAIN,%s,DIRECT\n' "$_dom" >> "$_rules"
+            fi
+            _added=$((_added + 1))
         fi
-        log "已加入 DIRECT 规则: $VPS_DOMAIN"
-    fi
-
-    # fake-ip 过滤：让 VPS 域名解析真实 IP，不发 fake-ip（bridge 才能直连）
-    touch "$_filter"
-    if grep -qxF "$VPS_DOMAIN" "$_filter"; then
-        log "fake-ip 过滤已含 $VPS_DOMAIN，跳过"
-    else
-        backup_file "$_filter"
-        printf '%s\n' "$VPS_DOMAIN" >> "$_filter"
-        log "已加入 fake-ip 过滤: $VPS_DOMAIN"
-    fi
+        grep -qxF "$_dom" "$_filter" || printf '%s\n' "$_dom" >> "$_filter"
+    done < "$_nl"
+    log "解耦完成：本次新增 $_added 条 DIRECT 规则"
 
     if [ "$RELOAD_OPENCLASH" = "1" ]; then
-        # 必须 restart 而非 reload：skip-auth 的 overwrite 钩子只在 restart 的
-        # 配置生成流程里跑，reload 仅热载规则、不触发 overwrite。
-        log "restart OpenClash 使解耦规则 + skip-auth 注入生效..."
+        # 必须 restart 而非 reload：skip-auth/force-direct 的 overwrite 钩子只在
+        # restart 的配置生成流程里跑，reload 仅热载规则、不触发 overwrite。
+        log "restart OpenClash 使解耦规则 + skip-auth + force-direct 生效..."
         /etc/init.d/openclash restart 2>/dev/null
     else
-        warn "解耦规则与 skip-auth 注入需 OpenClash restart 才生效（reload 不触发 overwrite 钩子）—— 请手动 /etc/init.d/openclash restart，或设 RELOAD_OPENCLASH=1 重跑"
+        warn "解耦/skip-auth/force-direct 需 OpenClash restart 才生效（reload 不触发 overwrite 钩子）—— 请手动 /etc/init.d/openclash restart，或设 RELOAD_OPENCLASH=1 重跑"
     fi
+}
+
+# ── socks5 入站回国流量强制 direct（两腿质量对齐）─────────────────
+
+setup_socks5_force_direct() {
+    # socks5 腿（VPS 经 Tailscale 连本机 OpenClash SOCKS5 7891 回国）的流量会被
+    # OpenClash 二次分流，灰色域名可能被判海外走代理 → 回国失败。注入按入站端口
+    # 7891 强制 direct 的规则，对齐 r-tunnel 的纯直出，使冷备台（长期仅 socks5）
+    # 也满质量。关键：按 IN-PORT 区分，不能按来源 IP —— socks5 来源与 exit-node
+    # 终端同为 Tailscale CGNAT 100.64.0.0/10，按 IP 会误伤终端的海外流量。
+    [ -x /etc/init.d/openclash ] || { log "未检测到 OpenClash，跳过 socks5 force-direct"; return 0; }
+    _rules=/etc/openclash/custom/openclash_custom_rules.list
+    mkdir -p /etc/openclash/custom
+    touch "$_rules"
+    if grep -qF "IN-PORT,7891,DIRECT" "$_rules"; then
+        log "socks5 force-direct 规则已存在，跳过"
+        return 0
+    fi
+    backup_file "$_rules"
+    if grep -q '^rules:' "$_rules"; then
+        sed -i "/^rules:/a - IN-PORT,7891,DIRECT" "$_rules"
+    else
+        printf 'rules:\n- IN-PORT,7891,DIRECT\n' >> "$_rules"
+    fi
+    log "已注入 socks5 入站强制 direct 规则（IN-PORT,7891）"
+}
+
+# ── 节点清单与 cn-bridge 工具 ─────────────────────────────────────
+
+generate_nodes_list() {
+    # 生成 /etc/cn-exit/nodes.list（每行 <名> <FQDN> <token>），供 cn-bridge 拨号
+    # 与 OpenClash 解耦遍历。来源优先级：① NODES_FILE 多行文件（推荐，默认脚本同目录
+    # nodes.list）；② BRIDGE_NODES 内联（名:域名:token 空格分隔）；③ 单节点旧用法
+    # VPS_DOMAIN + SUBSCRIBE_TOKEN。
+    mkdir -p /etc/cn-exit
+    _nl=/etc/cn-exit/nodes.list
+    _src="${NODES_FILE:-$(dirname "$0")/nodes.list}"
+    if [ -f "$_src" ] && [ "$_src" != "$_nl" ]; then
+        backup_file "$_nl"
+        cp "$_src" "$_nl"
+        chmod 600 "$_nl"
+        _cnt=$(awk '!/^#/&&NF{c++} END{print c+0}' "$_nl")
+        log "已从 $_src 装入节点清单（$_cnt 个节点）"
+        return 0
+    fi
+    backup_file "$_nl"
+    {
+        printf '# sb-xray reverse bridge 节点清单（cn-exit-setup.sh 生成）\n'
+        printf '# 格式：<名> <FQDN> <token>\n'
+        if [ -n "$BRIDGE_NODES" ]; then
+            for _it in $BRIDGE_NODES; do
+                _nm=${_it%%:*}; _rest=${_it#*:}; _dm=${_rest%%:*}; _tk=${_rest#*:}
+                [ -n "$_nm" ] && [ -n "$_dm" ] && [ -n "$_tk" ] && \
+                    printf '%s %s %s\n' "$_nm" "$_dm" "$_tk"
+            done
+        elif [ -n "$VPS_DOMAIN" ] && [ -n "$SUBSCRIBE_TOKEN" ]; then
+            printf '%s %s %s\n' "${VPS_DOMAIN%%.*}" "$VPS_DOMAIN" "$SUBSCRIBE_TOKEN"
+        fi
+    } > "$_nl"
+    chmod 600 "$_nl"
+    _cnt=$(awk '!/^#/&&NF{c++} END{print c+0}' "$_nl")
+    log "已生成节点清单 $_nl（$_cnt 个节点）"
+}
+
+install_cn_bridge() {
+    _src="$(dirname "$0")/cn-bridge"
+    if [ -f "$_src" ]; then
+        cp "$_src" /usr/bin/cn-bridge
+    else
+        download_verify \
+            "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/cn-bridge" \
+            /usr/bin/cn-bridge raw
+    fi
+    chmod +x /usr/bin/cn-bridge
+    log "已安装 cn-bridge 拨号工具"
 }
 
 # ── xray reverse bridge 落地机 ────────────────────────────────────
@@ -512,45 +627,70 @@ install_xray_bridge() {
     fi
 
     mkdir -p /etc/xray
-    backup_file /etc/xray/client.json
-    download_verify \
-        "https://${VPS_DOMAIN}/sb-xray/reverse_bridge_client.json?token=${SUBSCRIBE_TOKEN}" \
-        /etc/xray/client.json json
+    install_cn_bridge
 
-    # 校验：无占位符残留（确认服务端已渲染）
-    if grep -q '${' /etc/xray/client.json; then
-        die "client.json 仍含占位符 \${...}，服务端可能未开 ENABLE_REVERSE 或 token 错误"
-    fi
-    # JSON 合法性
-    xray run -test -config /etc/xray/client.json >/dev/null 2>&1 || \
-        warn "xray -test 校验未通过，请人工检查 /etc/xray/client.json"
-    # 保险修正：routing inboundTag 必须是 r-tunnel（防御历史 bug，服务端已修）
-    if grep -q '"reverse-bridge"' /etc/xray/client.json && \
-       grep -q 'inboundTag' /etc/xray/client.json; then
-        if ! grep -q '"r-tunnel"' /etc/xray/client.json; then
-            sed -i 's/"inboundTag": \["reverse-bridge"\]/"inboundTag": ["r-tunnel"]/' /etc/xray/client.json
-            warn "已就地修正 client.json 的 inboundTag -> r-tunnel"
-        fi
+    # 清理历史单 bridge 残留（旧版 /etc/init.d/xray-bridge + 单 client.json），
+    # 多节点改用 per-node 的 xray-bridge-<名> + client-<名>.json。
+    if [ -x /etc/init.d/xray-bridge ]; then
+        /etc/init.d/xray-bridge stop 2>/dev/null
+        /etc/init.d/xray-bridge disable 2>/dev/null
+        rm -f /etc/init.d/xray-bridge /etc/xray/client.json
+        log "已清理旧版单 xray-bridge 服务"
     fi
 
-    backup_file /etc/init.d/xray-bridge
-    cat > /etc/init.d/xray-bridge <<'EOF'
-#!/bin/sh /etc/rc.common
-START=99
-USE_PROCD=1
-start_service() {
-    procd_open_instance
-    procd_set_param command /usr/bin/xray run -config /etc/xray/client.json
-    procd_set_param respawn
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
+    # 拨通热备（BRIDGE_HOT；未指定则拨清单内全部，兼容单节点旧用法）。
+    # 节点清单已由 main 的 generate_nodes_list 生成。
+    _hot="${BRIDGE_HOT:-$(awk '!/^#/&&NF{print $1}' /etc/cn-exit/nodes.list)}"
+    _hot=$(printf '%s' "$_hot" | tr ',' ' ')
+    [ -n "$_hot" ] || { warn "无热备节点可拨（BRIDGE_HOT 与节点清单均空）"; return 0; }
+    for _bn in $_hot; do
+        cn-bridge up "$_bn" || warn "拨通 $_bn 失败"
+    done
+    log "热备拨号完成: $_hot"
 }
-EOF
-    chmod +x /etc/init.d/xray-bridge
-    /etc/init.d/xray-bridge enable 2>/dev/null
-    /etc/init.d/xray-bridge restart 2>/dev/null
-    log "已写入 /etc/init.d/xray-bridge 并启动"
+
+# ── 双腿监控告警 ──────────────────────────────────────────────────
+
+install_monitor() {
+    _src="$(dirname "$0")/cn-bridge-monitor"
+    if [ -f "$_src" ]; then
+        cp "$_src" /usr/bin/cn-bridge-monitor
+    else
+        download_verify \
+            "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/cn-bridge-monitor" \
+            /usr/bin/cn-bridge-monitor raw
+    fi
+    chmod +x /usr/bin/cn-bridge-monitor
+}
+
+setup_monitor_cron() {
+    # 探活热备 r-tunnel 隧道 + Tailscale 链路，异常去抖后 telegram 告警。
+    # 未设 ALERT_TG_TOKEN 时监控仍跑，只记录不告警。
+    install_monitor
+    _hot="${BRIDGE_HOT:-$(awk '!/^#/&&NF{print $1}' /etc/cn-exit/nodes.list 2>/dev/null)}"
+    _hot=$(printf '%s' "$_hot" | tr ',' ' ')
+    mkdir -p /etc/cn-exit
+    _menv=/etc/cn-exit/monitor.env
+    backup_file "$_menv"
+    {
+        printf 'TG_TOKEN=%s\n' "${ALERT_TG_TOKEN}"
+        printf 'TG_CHAT=%s\n' "${ALERT_TG_CHAT}"
+        printf 'HOT="%s"\n' "$_hot"
+        printf 'MON_THRESHOLD=%s\n' "${MON_THRESHOLD:-3}"
+    } > "$_menv"
+    chmod 600 "$_menv"
+    _line="*/${MON_INTERVAL:-2} * * * * /usr/bin/cn-bridge-monitor >/dev/null 2>&1"
+    _crontab=/etc/crontabs/root
+    touch "$_crontab"
+    if grep -qF "/usr/bin/cn-bridge-monitor" "$_crontab"; then
+        log "监控 cron 已存在，跳过"
+    else
+        printf '%s\n' "$_line" >> "$_crontab"
+        /etc/init.d/cron enable 2>/dev/null
+        /etc/init.d/cron restart 2>/dev/null
+        log "已添加监控 cron（每 ${MON_INTERVAL:-2} 分钟）"
+    fi
+    [ -n "$ALERT_TG_TOKEN" ] || warn "未设 ALERT_TG_TOKEN —— 监控只记录、不发 telegram 告警"
 }
 
 # ── 端到端自检 ────────────────────────────────────────────────────
@@ -569,10 +709,15 @@ verify() {
         check "tailscale 开机自启" /etc/init.d/tailscale enabled
     fi
     if mode_uses_reverse; then
-        check "bridge 隧道到 VPS:443 ESTABLISHED" sh -c "netstat -tn 2>/dev/null | grep -q ':443 .*ESTABLISHED'"
-        check "client.json 无占位符残留" sh -c "! grep -q '\${' /etc/xray/client.json"
-        check "client.json routing 为 r-tunnel" sh -c "grep -q 'r-tunnel' /etc/xray/client.json"
-        check "xray-bridge 开机自启" /etc/init.d/xray-bridge enabled
+        _hot="${BRIDGE_HOT:-$(awk '!/^#/&&NF{print $1}' /etc/cn-exit/nodes.list 2>/dev/null)}"
+        _hot=$(printf '%s' "$_hot" | tr ',' ' ')
+        check "cn-bridge 工具已安装" test -x /usr/bin/cn-bridge
+        check "节点清单已生成" test -s /etc/cn-exit/nodes.list
+        check "至少一条 bridge 隧道到 VPS:443 ESTABLISHED" sh -c "netstat -tn 2>/dev/null | grep -q ':443 .*ESTABLISHED'"
+        for _bn in $_hot; do
+            check "热备 $_bn 服务开机自启" /etc/init.d/xray-bridge-$_bn enabled
+            check "热备 $_bn client 无占位符" sh -c "! grep -q '\${' /etc/xray/client-$_bn.json 2>/dev/null"
+        done
     fi
 
     printf '\n[cn-exit] 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
@@ -591,6 +736,7 @@ main() {
     load_config
     validate_config
     detect_arch
+    generate_nodes_list          # 所有模式：清单供解耦遍历 + cn-bridge 拨号
     if mode_uses_tailscale; then
         ensure_tun
         install_tailscale
@@ -600,12 +746,14 @@ main() {
         install_keepalive_cron
         setup_tailscale_firewall_bypass
         setup_socks_skip_auth
+        setup_socks5_force_direct   # socks5 入站回国流量强制 direct，对齐 r-tunnel
     fi
     # 解耦对两套方案都适用（自身按是否存在 OpenClash 决定跑不跑）
     setup_openclash_decouple
     if mode_uses_reverse; then
         install_xray_bridge
     fi
+    setup_monitor_cron
     verify
     log "=== 完成 ==="
 }

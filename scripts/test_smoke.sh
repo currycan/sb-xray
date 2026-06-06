@@ -280,10 +280,10 @@ else
     bad "M3-3: reverse_bridge/client.json 缺失"
 fi
 
-if [ -f "${REPO_ROOT}/docs/06-reverse-proxy-guide.md" ]; then
-    ok "M3-5: docs/06-reverse-proxy-guide 指南已就位"
+if [ -f "${REPO_ROOT}/docs/05-reverse-proxy-guide.md" ]; then
+    ok "M3-5: docs/05-reverse-proxy-guide 指南已就位"
 else
-    bad "M3-5: docs/06-reverse-proxy-guide.md 缺失"
+    bad "M3-5: docs/05-reverse-proxy-guide.md 缺失"
 fi
 
 # ---- M4 规约 -----------------------------------------------------------------

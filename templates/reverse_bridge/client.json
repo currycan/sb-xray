@@ -9,7 +9,7 @@
         "5. 落地机端需要能访问公网 sb-xray（出站 443/TCP）；无需落地机开端口",
         "6. 公网端 routing.rules 里把 REVERSE_DOMAINS 匹配的流量 outboundTag 指向 r-tunnel，流量即反向穿透到落地机 freedom 出口",
         "",
-        "详见 docs/06-reverse-proxy-guide.md"
+        "详见 docs/05-reverse-proxy-guide.md"
     ],
     "log": {
         "loglevel": "warning"

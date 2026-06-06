@@ -2,7 +2,7 @@
 
 本文把 OpenWrt 上 Tailscale 这套「一机多用」的代理网关讲透：它**同时**承担回国出口、出国分流、内网穿透三类流量，外加把路由器自己接进 Tailscale 私有网络。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
-> **本文与 [09. Xray Reverse Bridge 回国架构设计与配置](./09-xray-reverse-bridge.md) 的分工**：本文讲 Tailscale + OpenClash SOCKS5 这条回国链路（`CN_EXIT_MODE=socks5`）；09 讲 Xray 反向隧道那条链路（`CN_EXIT_MODE=reverse`）及两者主备的 balance 模式。两套方案怎么选见 09 的附录。
+> **本文与 [08. Xray Reverse Bridge 回国架构设计与配置](./08-xray-reverse-bridge.md) 的分工**：本文讲 Tailscale + OpenClash SOCKS5 这条回国链路（`CN_EXIT_MODE=socks5`）；08 讲 Xray 反向隧道那条链路（`CN_EXIT_MODE=reverse`）及两者主备的 balance 模式。两套方案怎么选见 08 的附录。
 
 ---
 
@@ -332,10 +332,14 @@ flowchart LR
 
 ### 4.1 一键脚本（推荐路径）
 
-🔧 **脚本已自动**：仓库 `openwrt/cn-exit-setup.sh` 把下面所有配置固化成**幂等脚本**（重复跑不叠加、不破坏）。本文这套 Tailscale 链路对应 `CN_EXIT_MODE=socks5`，绝大多数人用这个就够了：
+🔧 **脚本已自动**：仓库 `sources/openwrt/cn-exit-setup.sh` 把下面所有配置固化成**幂等脚本**（重复跑不叠加、不破坏）。本文这套 Tailscale 链路对应 `CN_EXIT_MODE=socks5`，绝大多数人用这个就够了：
 
 ```sh
-cd openwrt
+# 路由器上直接下载：
+mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
+for f in cn-exit-setup.sh config.env.example; do
+  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
+done
 cp config.env.example config.env
 vi config.env          # CN_EXIT_MODE=socks5；填 VPS_DOMAIN / PEER_TS_IP / TS_HOSTNAME / TS_VERSION
 sh cn-exit-setup.sh
@@ -563,15 +567,16 @@ tailscale ping <peer-ts-ip>             # 应返回 pong
 
 ### 6.7 空闲一段时间后 SOCKS5 失联
 
-- **现象**：长时间不用后，VPS 连本机 SOCKS5 超时；手动 `tailscale ping` 一下又好了。
-- **根因**：两个都在 NAT 后的节点，WireGuard 直连路径空闲后会回退，需要重新打洞。
-- **解法**：`install_keepalive_cron` 每分钟 `tailscale ping` 一次对端，维持隧道活性（角色④的实际应用）。
+- **现象**：长时间不用后，VPS 连本机 SOCKS5 超时；手动 `tailscale ping` 一下又好了。OpenClash 重启后这种失联尤其久（重启会 flush 防火墙、打断直连）。
+- **根因**：VPS 公网、OpenWrt 在 NAT 后，直连靠 OpenWrt 主动出站的 41641 映射；该映射空闲老化即回退 DERP，必须 OpenWrt 再次主动发包重建（反向 ping 无效——映射已老化，VPS 不知道 OpenWrt 新的公网映射地址）。
+- **解法**：`install_keepalive_cron` 生成 `/usr/bin/cn-ts-keepalive`，cron 内一分钟跑 4 轮（~15s 粒度）ping 热备列表保活；`KEEPALIVE_PEERS` 可填多个热备做冗余（EIM NAT 下保住 41641 映射即惠及全部 VPS）。OpenClash 防火墙钩子末尾追加 `cn-ts-keepalive once`，重启注入 bypass 后立即唤醒一轮，把直连恢复窗口从「等下一个 cron 分钟」压到秒级。
 
 ### 6.8 `myip.ipip.net` 测试陷阱
 
 - **现象**：测回国出口时用 `myip.ipip.net`，显示的是代理节点 IP（日本/美国），以为分流坏了。
 - **根因**：`myip.ipip.net` 的域名不在 `geosite:cn` 里，被 mihomo 当国外流量又走了一次代理。
 - **解法**：测回国出口用 `cip.cc`、`ip.cn` 这类命中 `geosite:cn` 的域名。
+- **彻底对齐**：`setup_socks5_force_direct` 注入 `IN-PORT,7891,DIRECT`，让经 SOCKS5 入站（cn-exit socks5 腿）的回国流量强制纯直出、不再二次分流，这类灰色域名也直接出家宽，与 reverse bridge 的 r-tunnel 腿质量一致。详见 [docs/08 §4.5 多节点高可用](08-xray-reverse-bridge.md)。
 
 ---
 
@@ -607,4 +612,4 @@ sh openwrt/install.sh
 
 ---
 
-> **相关文档**：[09. Xray Reverse Bridge 回国架构设计与配置](./09-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [06. VLESS Reverse Proxy（出境代理另一方案）](./06-reverse-proxy-guide.md)
+> **相关文档**：[08. Xray Reverse Bridge 回国架构设计与配置](./08-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [05. VLESS Reverse Proxy（出境代理另一方案）](./05-reverse-proxy-guide.md)

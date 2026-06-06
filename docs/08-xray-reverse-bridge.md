@@ -3,8 +3,8 @@
 本文把「**用 Xray 反向代理（reverse bridge）做海外回国**」这套链路讲透：境外设备访问大陆限定服务时，海外 VPS 把国内流量经一条**由家里主动建立**的加密隧道丢回大陆软路由，从家宽 IP 直出。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
 > **本文与相邻文档的分工**：
-> - [06. VLESS Reverse Proxy 部署指南](./06-reverse-proxy-guide.md) 讲 reverse 这套机制本身（portal/bridge、双 UUID、内网穿透）。
-> - [08. Tailscale 代理架构设计与配置](./08-tailscale-proxy-architecture.md) 讲**另一套**回国方案（Tailscale + OpenClash SOCKS5）。
+> - [05. VLESS Reverse Proxy 部署指南](./05-reverse-proxy-guide.md) 讲 reverse 这套机制本身（portal/bridge、双 UUID、内网穿透）。
+> - [07. Tailscale 代理架构设计与配置](./07-tailscale-proxy-architecture.md) 讲**另一套**回国方案（Tailscale + OpenClash SOCKS5）。
 > - 本文 09 专讲**用 reverse bridge 回国**：架构、流量图解、`CN_EXIT_MODE` 开关与主备故障转移、完整踩坑。两套回国方案怎么选见 §7.2。
 
 ---
@@ -112,7 +112,7 @@ flowchart TB
 
 | `CN_EXIT_MODE` | 国内流量出口 | 说明 | 本文相关 |
 |---|---|---|---|
-| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [08](./08-tailscale-proxy-architecture.md)） | 否 |
+| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [08](./07-tailscale-proxy-architecture.md)） | 否 |
 | `reverse` | `r-tunnel` 反向隧道 | **本方案** | ✅ §3.1 / §4 |
 | `balance` | `cn-exit` + `r-tunnel` 主备 | 两条链路并挂、自动故障转移 | ✅ §3.2 |
 | `off` | 封禁（不回国） | — | — |
@@ -230,7 +230,7 @@ flowchart LR
 # - REVERSE_DOMAINS=domain:lan   # 顺带做内网穿透时填；纯回国可留空
 ```
 
-🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [08](./08-tailscale-proxy-architecture.md)）：
+🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [08](./07-tailscale-proxy-architecture.md)）：
 
 ```yaml
 - CN_EXIT_MODE=balance
@@ -250,6 +250,8 @@ docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
 # balance 预期：CN-exit(balance): selector=['cn-exit', 'r-tunnel'] leastPing
 ```
 
+🔧 **多 VPS 批量初始化**：每台 VPS 用 `sources/vps/vps-cn-exit-init.sh`（用法详见 [sources/vps/README.md](../sources/vps/README.md)）一键写 `.env`（回国项以 `${VAR}` 注入 docker-compose）、装 Tailscale 入网、配 VPS 侧 keepalive、拉起容器，嵌进你的 provisioning 即可。各台 `XRAY_REVERSE_UUID` 自动生成持久化、互不冲突；socks5 腿命脉是 Tailscale 链路，务必每台都入 tailnet。配一次永不改 env，回国拨号切换全在 OpenWrt 侧 `cn-bridge` 完成。
+
 ### 4.2 拿落地机配置下载链接
 
 🔧 portal 已把所有参数填好，渲染出一份可直接用的 bridge 配置。运行 `show` 取链接：
@@ -262,11 +264,15 @@ docker exec sb-xray show
 
 ### 4.3 bridge 侧（大陆 OpenWrt）
 
-🔧 **推荐：一键脚本**。仓库 `openwrt/cn-exit-setup.sh` 已把「装 xray + 带 token 拉取已渲染 `client.json` + 写 `/etc/init.d/xray-bridge` 开机自启 + 自检」固化成幂等脚本，`CN_EXIT_MODE=reverse` 时只跑 bridge 相关步骤、不碰 Tailscale。
+🔧 **推荐：一键脚本**。仓库 `sources/openwrt/cn-exit-setup.sh` 已把「装 xray + 带 token 拉取已渲染 `client.json` + 写 `/etc/init.d/xray-bridge` 开机自启 + 自检」固化成幂等脚本，`CN_EXIT_MODE=reverse` 时只跑 bridge 相关步骤、不碰 Tailscale。
 
 ```sh
-# 持久（可反复重跑）：
-cd openwrt && cp config.env.example config.env
+# 路由器上直接下载（持久，可反复重跑）：
+mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
+for f in cn-exit-setup.sh config.env.example; do
+  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
+done
+cp config.env.example config.env
 vi config.env          # CN_EXIT_MODE=reverse；填 VPS_DOMAIN / SUBSCRIBE_TOKEN / XRAY_VERSION
 sh cn-exit-setup.sh
 
@@ -276,7 +282,7 @@ CN_EXIT_MODE=reverse VPS_DOMAIN=<你的域名> \
   sh cn-exit-setup.sh
 ```
 
-> `balance` 模式把 `CN_EXIT_MODE` 改成 `balance` 并补齐 Tailscale 相关变量即可（脚本会同时装 Tailscale 与 bridge）。详见 [openwrt/README.md](../openwrt/README.md)。
+> `balance` 模式把 `CN_EXIT_MODE` 改成 `balance` 并补齐 Tailscale 相关变量即可（脚本会同时装 Tailscale 与 bridge）。详见 [sources/openwrt/README.md](../sources/openwrt/README.md)。
 
 🔧 **手动等价**（不想用脚本时）：
 
@@ -312,6 +318,41 @@ chmod +x /etc/init.d/xray-bridge
 ### 4.4 客户端
 
 📘 客户端操作与方案一完全相同（客户端只负责把国内流量送到 VPS，具体走哪条回国链路由 portal 的 `CN_EXIT_MODE` 决定）：把订阅里的 **`国内流量`** 策略组从「直接连接」切到你的 sb-xray VPS 节点即可。人在国内时记得切回「直接连接」。
+
+### 4.5 多节点高可用：多公网 VPS + `cn-bridge` 拨号
+
+单条 bridge 是单点——那台 VPS 宕机，走它的回国就断。多公网部署让每台 VPS 都成为独立回国入口：家里 OpenWrt 对**热备**节点常驻拨通、**冷备**节点平时不拨、故障时一条命令顶上。
+
+🔧 **配置**（`sources/openwrt/config.env`）：`BRIDGE_NODES` 列全部 VPS 节点池，`BRIDGE_HOT` 指定常驻热备：
+
+```sh
+# 每项 名:FQDN:token，空格分隔；token 为各 VPS show 输出 ?token= 后那段（可各异）
+BRIDGE_NODES="dc99:dc99.example.com:tokA jp:jp.example.com:tokB cn2:cn2.example.com:tokC"
+BRIDGE_HOT=dc99,jp     # 常驻拨通的热备；其余为冷备
+```
+
+`sh cn-exit-setup.sh` 会生成节点清单 `/etc/cn-exit/nodes.list`、安装 `cn-bridge` 工具，并对热备各拨一条独立 `xray-bridge-<名>` 进程（api 端口自动错开，避免多进程都监听 7979 冲突）。
+
+🔧 **`cn-bridge` 拨号工具**（运行时随时切换，不改任何 VPS 配置）：
+
+```sh
+cn-bridge list            # 列出全部节点 + 拨号/进程状态
+cn-bridge up cn2          # 把冷备 cn2 拨通（下 client + 起进程 + 开机自启）
+cn-bridge down cn2        # 断开（停 + disable + 删 client/service）
+cn-bridge status          # ESTABLISHED 概览 + 列表
+cn-bridge                 # 交互菜单
+```
+
+📘 **热备 / 冷备语义**：
+
+- **热备**（`BRIDGE_HOT`）：常驻拨通，有 r-tunnel 腿；`balance` 模式下 leastPing 通常优选它（freedom 直出、不经 OpenClash 二次分流，质量更纯净）。
+- **冷备**：未拨、没有 r-tunnel 腿，但只要它在 tailnet 里就仍有 **socks5 腿**（经 Tailscale 回国），`balance` 的 observatory 探测 r-tunnel 失败后**自动用 socks5 兜底——不黑洞**。故障时 `cn-bridge up <名>` 秒级升它为双腿。
+
+> ⚠️ 所有回国流量最终都从家里**同一条家宽上行**出去。多 VPS 是**入口冗余**（某台挂了切别台），**不增加**回国出口带宽。
+
+📘 **两腿质量对齐**：socks5 腿的回国流量到家里 OpenClash 后会被二次分流，灰色域名（如部分 IP 查询站）可能被判海外走代理出口而回国失败。脚本注入 `IN-PORT,7891,DIRECT` 规则，把经 SOCKS5 入站（7891）的回国流量强制纯直出，对齐 r-tunnel——长期只有 socks5 腿的冷备台也满质量。注意按入站端口区分、不能按来源 IP（socks5 来源与 exit-node 终端同为 Tailscale CGNAT `100.64.0.0/10`，按 IP 会误伤终端的海外流量）。
+
+🔧 **监控告警**：`cn-bridge-monitor`（cron 周期跑）探活热备 r-tunnel 隧道 + Tailscale 守护 / 离线 peer，连续失败去抖后 telegram 告警、恢复发通知。在 `config.env` 填 `ALERT_TG_TOKEN` / `ALERT_TG_CHAT` 启用（与 VPS shoutrrr 用同一个 bot 即可）。
 
 ---
 
@@ -370,11 +411,11 @@ curl -x <本地客户端代理> http://cip.cc
 
 ### 7.1 与 reverse 内网穿透的关系
 
-📘 同一条 reverse 隧道既能做「回国出口」（本文，`CN_EXIT_MODE=reverse`/`balance`），也能做「内网穿透」（访问家里 NAS 等，配 `REVERSE_DOMAINS`）。两者可同时开：`geosite:cn` 走回国、`REVERSE_DOMAINS` 列出的内网域名走穿透，都经同一条 `r-tunnel`。内网穿透细节见 [06](./06-reverse-proxy-guide.md)。
+📘 同一条 reverse 隧道既能做「回国出口」（本文，`CN_EXIT_MODE=reverse`/`balance`），也能做「内网穿透」（访问家里 NAS 等，配 `REVERSE_DOMAINS`）。两者可同时开：`geosite:cn` 走回国、`REVERSE_DOMAINS` 列出的内网域名走穿透，都经同一条 `r-tunnel`。内网穿透细节见 [05](./05-reverse-proxy-guide.md)。
 
 ### 7.2 两套回国方案怎么选
 
-| 维度 | 方案一 Tailscale SOCKS5（[08](./08-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
+| 维度 | 方案一 Tailscale SOCKS5（[08](./07-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
 |---|---|---|
 | 大陆侧依赖 | OpenWrt + OpenClash + kmod-tun（kernel TUN） | OpenWrt 能跑 xray、能出站 443 即可 |
 | 公网 IP | 不需要 | 不需要 |
