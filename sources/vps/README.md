@@ -52,13 +52,13 @@ flowchart LR
 VPS 上直接下载并运行：
 
 ```sh
-wget -O /tmp/vps-cn-exit-init.sh \
+wget -O ~/sb-xray/vps-cn-exit-init.sh \
   https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/vps-cn-exit-init.sh
 
 OPENWRT_TS_IP=100.x.y.z \
 TS_AUTHKEY=tskey-auth-xxxxxx \
 TS_HOSTNAME=dc99 \
-sh /tmp/vps-cn-exit-init.sh
+sh ~/sb-xray/vps-cn-exit-init.sh
 ```
 
 > 内联传参会把 `TS_AUTHKEY` 留在 shell history；介意的话 `export` 后再跑，或事后 `history -c`。
@@ -66,7 +66,7 @@ sh /tmp/vps-cn-exit-init.sh
 已在 tailnet 的机器（比如装过 Tailscale 的）更简单：
 
 ```sh
-OPENWRT_TS_IP=100.x.y.z sh /tmp/vps-cn-exit-init.sh
+OPENWRT_TS_IP=100.x.y.z sh ~/sb-xray/vps-cn-exit-init.sh
 ```
 
 ### 多台批量
@@ -77,8 +77,8 @@ OPENWRT_TS_IP=100.x.y.z sh /tmp/vps-cn-exit-init.sh
 KEY=tskey-auth-xxxxxx
 for h in dc99 jp dc99-3 cn2; do
   ssh root@$h.example.com "
-    wget -qO /tmp/vps-init.sh https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/vps-cn-exit-init.sh &&
-    OPENWRT_TS_IP=100.x.y.z TS_AUTHKEY=$KEY TS_HOSTNAME=$h sh /tmp/vps-init.sh
+    wget -qO ~/sb-xray/vps-cn-exit-init.sh https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/vps-cn-exit-init.sh &&
+    OPENWRT_TS_IP=100.x.y.z TS_AUTHKEY=$KEY TS_HOSTNAME=$h sh ~/sb-xray/vps-cn-exit-init.sh
   "
 done
 ```
