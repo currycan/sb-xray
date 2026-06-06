@@ -6,7 +6,7 @@
 
 ```mermaid
 flowchart LR
-    A["① 写 .env<br/>CN_EXIT_MODE=balance<br/>等回国项"] --> B["② 装 Tailscale<br/>并入 tailnet<br/>(已装则跳过)"] --> C["③ 装 keepalive<br/>cron 每分钟<br/>ping OpenWrt"] --> D["④ docker compose<br/>pull + up -d<br/>(顺带升级镜像)"] --> E["⑤ 自检<br/>容器/env/链路"]
+    A["① 写 .env<br/>CN_EXIT_MODE=balance<br/>等回国项"] --> B["② 装 Tailscale<br/>并入 tailnet<br/>(已装则跳过)"] --> C["③ 装 keepalive<br/>cron 每分钟<br/>ping OpenWrt"] --> D["④ 同步<br/>docker-compose.yml<br/>(拉最新+备份)"] --> E["⑤ docker compose<br/>pull + up -d<br/>(顺带升级镜像)"] --> F["⑥ 自检<br/>容器/env/链路"]
 ```
 
 跑完后这台 VPS 具备**两条回国腿**，由容器内 xray 自动择优与故障转移：
@@ -44,6 +44,10 @@ flowchart LR
 | `REVERSE_DOMAINS` | 可选 | 经 bridge 出的内网域名（逗号分隔），多台建议统一 | — |
 | `VPS_DOMAIN` | 可选 | 本节点对外域名（写进 `.env` 的 `domain`） | — |
 | `SHOUTRRR_URLS` | 可选 | 事件总线告警 URL | 见 [docs/06](../../docs/06-event-bus-shoutrrr.md) |
+| `COMPOSE_URL` | 可选 | `docker-compose.yml` 下载源，默认仓库 `main` 的 raw | — |
+| `SKIP_COMPOSE_UPDATE` | 可选 | 设 `1` 跳过 compose 同步；默认 `0`（拉最新覆盖，旧 compose 备份为 `.bak`） | — |
+
+> ℹ️ 脚本会自动把 `docker-compose.yml` 同步为仓库最新版（旧文件备份为 `docker-compose.yml.bak`）。旧部署的 compose 可能不含 `${CN_EXIT_MODE}` / `${tsip}` 等引用，不同步则 `.env` 里的回国项不会生效。节点专属配置都在 `.env`，compose 是模板，覆盖安全。
 
 ## 4. 快速开始
 
