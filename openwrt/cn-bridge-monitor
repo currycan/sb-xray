@@ -1,0 +1,67 @@
+#!/bin/sh
+# cn-bridge-monitor —— sb-xray 回国双腿探活告警（OpenWrt / BusyBox ash）
+#
+# 由 cn-exit-setup.sh 安装，cron 周期调用。读 /etc/cn-exit/monitor.env：
+#   TG_TOKEN       telegram bot token（空 = 只记录、不告警）
+#   TG_CHAT        telegram chat id
+#   HOT            热备节点名（空格分隔），检查其 r-tunnel 隧道进程
+#   MON_THRESHOLD  连续失败多少次才告警（去抖，默认 3）
+#
+# 检查项：① 热备 r-tunnel 隧道进程；② Tailscale 守护（socks5 腿命脉）；
+#         ③ Tailscale 离线 peer（某 VPS 的 socks5 腿不可用）。
+# 去抖：per-key 计数文件，连续失败达阈值才告警；恢复后发通知并清状态。
+# 兼容 BusyBox ash / POSIX sh —— 不用 bashism。
+
+CONF=/etc/cn-exit/monitor.env
+[ -f "$CONF" ] && . "$CONF"
+STATE=/tmp/cn-mon
+THRESH="${MON_THRESHOLD:-3}"
+mkdir -p "$STATE"
+
+notify() {
+    [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] || return 0
+    curl -s --max-time 10 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=${TG_CHAT}" \
+        --data-urlencode "text=$1" >/dev/null 2>&1
+}
+
+# record <key> <描述> <0=ok|1=fail>：维护去抖计数与告警/恢复
+record() {
+    _key=$1; _desc=$2; _fail=$3
+    _cf="$STATE/$_key.cnt"; _af="$STATE/$_key.alerted"
+    if [ "$_fail" = 0 ]; then
+        [ -f "$_af" ] && { notify "✅ 回国恢复：$_desc"; rm -f "$_af"; }
+        rm -f "$_cf"
+    else
+        _c=$(cat "$_cf" 2>/dev/null || echo 0); _c=$((_c + 1)); echo "$_c" > "$_cf"
+        if [ "$_c" -ge "$THRESH" ] && [ ! -f "$_af" ]; then
+            notify "⚠️ 回国告警：$_desc（连续 ${_c} 次探测失败）"; touch "$_af"
+        fi
+    fi
+}
+
+# ① 热备 r-tunnel 隧道进程（procd respawn 应保持存活，掉了即异常）
+for _n in $HOT; do
+    if pgrep -f "client-$_n.json" >/dev/null 2>&1; then
+        record "bridge-$_n" "热备 $_n r-tunnel 隧道" 0
+    else
+        record "bridge-$_n" "热备 $_n r-tunnel 隧道进程掉线" 1
+    fi
+done
+
+# ② Tailscale 守护（socks5 腿命脉：全部 VPS 经它回国）
+if tailscale status 2>/dev/null | grep -qiE 'Logged out|Tailscale is stopped'; then
+    record "ts-daemon" "Tailscale 守护离线" 1
+elif tailscale status >/dev/null 2>&1; then
+    record "ts-daemon" "Tailscale 守护" 0
+else
+    record "ts-daemon" "Tailscale 不可用" 1
+fi
+
+# ③ Tailscale 离线 peer（某 VPS socks5 腿不可用）
+_off=$(tailscale status 2>/dev/null | awk 'tolower($0) ~ /offline/ {print $2}' | tr '\n' ' ')
+if [ -n "$_off" ]; then
+    record "ts-peers" "Tailscale 离线节点: $_off" 1
+else
+    record "ts-peers" "Tailscale 节点全在线" 0
+fi

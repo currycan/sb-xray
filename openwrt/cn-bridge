@@ -1,0 +1,157 @@
+#!/bin/sh
+# cn-bridge —— sb-xray 回国 reverse bridge 多节点拨号管理（OpenWrt / BusyBox ash）
+#
+# 读 /etc/cn-exit/nodes.list（每行：<名> <FQDN> <token>，# 注释与空行忽略），
+# 把每个被拨通的节点跑成独立的 xray-bridge-<名> procd 进程 + /etc/xray/client-<名>.json。
+# 热备常驻拨通由 cn-exit-setup.sh 初始化；冷备平时不拨，故障时一条命令顶上。
+#
+# 用法：
+#   cn-bridge list            列出所有节点 + 拨号/进程状态
+#   cn-bridge up <名>         拨通（下 client + 起进程，开机自启）；已拨则刷新 client
+#   cn-bridge down <名>       断开（停 + disable + 删 client/service）
+#   cn-bridge status          ESTABLISHED 概览 + 列表
+#   cn-bridge                 交互菜单
+#
+# 多进程的 api 端口自动错开（17900+节点序号），避免都监听 7979 冲突。
+# 兼容 BusyBox ash / POSIX sh —— 不用 bashism。
+
+NODES=/etc/cn-exit/nodes.list
+XDIR=/etc/xray
+RETRIES=3
+API_BASE=17900
+
+log()  { printf '[cn-bridge] %s\n' "$*"; }
+warn() { printf '[cn-bridge] WARN: %s\n' "$*" >&2; }
+die()  { printf '[cn-bridge] ERROR: %s\n' "$*" >&2; exit 1; }
+
+[ -f "$NODES" ] || die "节点清单不存在: $NODES（先运行 cn-exit-setup.sh 生成）"
+
+svc() { printf '/etc/init.d/xray-bridge-%s' "$1"; }
+cfg() { printf '%s/client-%s.json' "$XDIR" "$1"; }
+
+# node_lookup <名>：命中则设 N_NAME/N_DOMAIN/N_TOKEN/N_IDX，返回 0
+node_lookup() {
+    _want=$1; _i=0
+    while read -r _n _d _t; do
+        case "$_n" in ''|\#*) continue ;; esac
+        _i=$((_i + 1))
+        if [ "$_n" = "$_want" ]; then
+            N_NAME=$_n; N_DOMAIN=$_d; N_TOKEN=$_t; N_IDX=$_i
+            return 0
+        fi
+    done < "$NODES"
+    return 1
+}
+
+is_up()   { [ -x "$(svc "$1")" ]; }                      # 服务文件存在 = 意图拨通
+running() { pgrep -f "client-$1.json" >/dev/null 2>&1; } # 进程实际在跑
+
+download_client() {
+    # download_client <名> <domain> <token> <api_port>
+    _name=$1; _dom=$2; _tok=$3; _api=$4
+    _dest=$(cfg "$_name")
+    _url="https://${_dom}/sb-xray/reverse_bridge_client.json?token=${_tok}"
+    _n=0
+    while [ "$_n" -lt "$RETRIES" ]; do
+        _n=$((_n + 1))
+        log "下载 client($_n/$RETRIES): $_dom"
+        if wget -q -O "$_dest" "$_url" && [ -s "$_dest" ] && grep -q '{' "$_dest"; then
+            break
+        fi
+        [ "$_n" -ge "$RETRIES" ] && die "下载 client.json 失败: $_dom"
+        sleep 2
+    done
+    grep -q '${' "$_dest" && die "client.json 含占位符 —— 服务端未开 ENABLE_REVERSE 或 token 错误: $_name"
+    # 多进程错开 api 端口（模板 api inbound 固定 7979，多 bridge 同时跑会冲突）
+    sed -i "s/\"port\": *7979/\"port\": ${_api}/" "$_dest"
+    # 历史 bug 保险：reverse 的 inboundTag 必须是 r-tunnel
+    if grep -q '"reverse-bridge"' "$_dest" && grep -q 'inboundTag' "$_dest" && ! grep -q '"r-tunnel"' "$_dest"; then
+        sed -i 's/"inboundTag": \["reverse-bridge"\]/"inboundTag": ["r-tunnel"]/' "$_dest"
+    fi
+    if command -v xray >/dev/null 2>&1; then
+        xray run -test -config "$_dest" >/dev/null 2>&1 || warn "xray -test 未通过，请检查 $_dest"
+    fi
+}
+
+write_service() {
+    _name=$1; _s=$(svc "$_name"); _c=$(cfg "$_name")
+    cat > "$_s" <<EOF
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/xray run -config $_c
+    procd_set_param respawn
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+EOF
+    chmod +x "$_s"
+}
+
+cmd_up() {
+    node_lookup "$1" || die "未知节点: $1（cn-bridge list 查看）"
+    command -v xray >/dev/null 2>&1 || die "未安装 xray（先运行 cn-exit-setup.sh）"
+    is_up "$N_NAME" && log "$N_NAME 已拨通，刷新 client 并重启"
+    _api=$((API_BASE + N_IDX))
+    download_client "$N_NAME" "$N_DOMAIN" "$N_TOKEN" "$_api"
+    write_service "$N_NAME"
+    _s=$(svc "$N_NAME")
+    "$_s" enable 2>/dev/null
+    "$_s" restart 2>/dev/null
+    log "已拨通 $N_NAME ($N_DOMAIN, api=$_api)"
+}
+
+cmd_down() {
+    _name=$1
+    [ -n "$_name" ] || die "用法: cn-bridge down <名>"
+    is_up "$_name" || { log "$_name 未拨通"; return 0; }
+    _s=$(svc "$_name")
+    "$_s" stop 2>/dev/null
+    "$_s" disable 2>/dev/null
+    rm -f "$_s" "$(cfg "$_name")"
+    log "已断开 $_name"
+}
+
+cmd_list() {
+    printf '%-14s %-30s %-6s %s\n' 节点 域名 拨号 进程
+    while read -r _n _d _t; do
+        case "$_n" in ''|\#*) continue ;; esac
+        if is_up "$_n"; then
+            _u=up
+            if running "$_n"; then _p=running; else _p=stopped; fi
+        else
+            _u=down; _p=-
+        fi
+        printf '%-14s %-30s %-6s %s\n' "$_n" "$_d" "$_u" "$_p"
+    done < "$NODES"
+}
+
+cmd_status() {
+    _est=$(netstat -tn 2>/dev/null | grep -c ':443 .*ESTABLISHED')
+    log "到 VPS:443 的 ESTABLISHED 总数: $_est"
+    cmd_list
+}
+
+cmd_menu() {
+    cmd_list
+    echo
+    printf '操作 [u=拨通 d=断开 q=退出]: '
+    read -r _act
+    case "$_act" in
+        u|U) printf '节点名: '; read -r _nm; cmd_up "$_nm" ;;
+        d|D) printf '节点名: '; read -r _nm; cmd_down "$_nm" ;;
+        *) : ;;
+    esac
+}
+
+case "${1:-menu}" in
+    list)    cmd_list ;;
+    up)      [ -n "$2" ] || die "用法: cn-bridge up <名>"; cmd_up "$2" ;;
+    down)    cmd_down "$2" ;;
+    status)  cmd_status ;;
+    menu|'') cmd_menu ;;
+    *)       die "未知命令: $1（list|up|down|status|menu）" ;;
+esac

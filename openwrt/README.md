@@ -19,9 +19,10 @@
 | Tailscale | socks5 / balance | 下载二进制 + 写 `/etc/init.d/tailscale`，**固定 UDP 端口 41641** + kernel TUN；tailscale 防火墙 zone 与转发（lan 双向 + wan 出口）；`tailscale up` 通告 subnet routes + exit node |
 | 防火墙放行 | socks5 / balance | OpenClash 原生钩子把 Tailscale UDP 在 nftables mangle 链顶 `return` 绕过 tproxy；OpenClash 每次重启自动重跑 |
 | skip-auth | socks5 / balance | overwrite 钩子把 `100.64.0.0/10` 注入 mihomo `skip-auth-prefixes`，让 VPS 经 Tailscale 访问本机 SOCKS5(7891) 免认证 |
-| keepalive / UDP GRO | socks5 / balance | 每分钟 ping 对端缓解双重 NAT 空闲掉线；WAN 网卡开 `rx-udp-gro-forwarding` 提升转发吞吐 + hotplug 持久化 |
+| keepalive / UDP GRO | socks5 / balance | keepalive 每 ~15s ping 热备（cron 内 4 轮）保住 41641 出站映射，OpenClash 重启后防火墙钩子即时唤醒一轮、直连秒级恢复；WAN 网卡开 `rx-udp-gro-forwarding` 提升转发吞吐 + hotplug 持久化 |
 | 解耦 | 所有（有 OpenClash 时） | 给 OpenClash 加 `DOMAIN,<VPS>,DIRECT` + fake-ip 过滤，让 bridge 直连 VPS 真实 IP；未装 OpenClash 自动跳过 |
-| xray bridge | reverse / balance | 下载 xray + 带 token 拉取已渲染的落地机 `client.json` + 写 `/etc/init.d/xray-bridge` |
+| xray bridge | reverse / balance | 下载 xray + 安装 `cn-bridge` 拨号工具 + 生成节点清单 `/etc/cn-exit/nodes.list`；对热备 `BRIDGE_HOT` 各拨一条独立 `xray-bridge-<名>`（api 端口自动错开） |
+| socks5 对齐 | socks5 / balance | OpenClash 加 `IN-PORT,7891,DIRECT`，让 socks5 腿回国流量强制纯直出、对齐 r-tunnel 质量 |
 | 自检 | 所有 | 按模式裁剪的端到端验证 |
 
 ## 前置条件
@@ -138,4 +139,4 @@ uci commit network && uci commit firewall
 
 ## 为什么固定 41641 端口
 
-OpenWrt 多在双重 NAT 后、上游无 UPnP/NAT-PMP，Tailscale 直连靠 STUN 临时映射，随机端口空闲即老化掉线。固定端口 + 两侧 keepalive + 防火墙放行三者配合，让 OpenClash 重启后直连快速恢复，也为日后在上游路由器做 41641/UDP 端口转发铺路（端口转发后直连彻底稳定）。
+OpenWrt 多在双重 NAT 后，Tailscale 直连靠 STUN 临时映射，随机端口空闲即老化掉线。固定端口 41641 + 高频 keepalive（cron 内 ~15s 多轮，可对多个热备做冗余）+ 防火墙放行三者配合保住出站映射。OpenClash 重启会 flush 防火墙并打断直连，防火墙钩子在重注入 bypass 后立即唤醒一轮保活，使直连秒级恢复（不再等下一个 cron 周期）。VPS 为公网时 openwrt 主动 ping 即可重建直连，无需上游端口转发。

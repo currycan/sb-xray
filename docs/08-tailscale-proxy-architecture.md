@@ -563,15 +563,16 @@ tailscale ping <peer-ts-ip>             # 应返回 pong
 
 ### 6.7 空闲一段时间后 SOCKS5 失联
 
-- **现象**：长时间不用后，VPS 连本机 SOCKS5 超时；手动 `tailscale ping` 一下又好了。
-- **根因**：两个都在 NAT 后的节点，WireGuard 直连路径空闲后会回退，需要重新打洞。
-- **解法**：`install_keepalive_cron` 每分钟 `tailscale ping` 一次对端，维持隧道活性（角色④的实际应用）。
+- **现象**：长时间不用后，VPS 连本机 SOCKS5 超时；手动 `tailscale ping` 一下又好了。OpenClash 重启后这种失联尤其久（重启会 flush 防火墙、打断直连）。
+- **根因**：VPS 公网、OpenWrt 在 NAT 后，直连靠 OpenWrt 主动出站的 41641 映射；该映射空闲老化即回退 DERP，必须 OpenWrt 再次主动发包重建（反向 ping 无效——映射已老化，VPS 不知道 OpenWrt 新的公网映射地址）。
+- **解法**：`install_keepalive_cron` 生成 `/usr/bin/cn-ts-keepalive`，cron 内一分钟跑 4 轮（~15s 粒度）ping 热备列表保活；`KEEPALIVE_PEERS` 可填多个热备做冗余（EIM NAT 下保住 41641 映射即惠及全部 VPS）。OpenClash 防火墙钩子末尾追加 `cn-ts-keepalive once`，重启注入 bypass 后立即唤醒一轮，把直连恢复窗口从「等下一个 cron 分钟」压到秒级。
 
 ### 6.8 `myip.ipip.net` 测试陷阱
 
 - **现象**：测回国出口时用 `myip.ipip.net`，显示的是代理节点 IP（日本/美国），以为分流坏了。
 - **根因**：`myip.ipip.net` 的域名不在 `geosite:cn` 里，被 mihomo 当国外流量又走了一次代理。
 - **解法**：测回国出口用 `cip.cc`、`ip.cn` 这类命中 `geosite:cn` 的域名。
+- **彻底对齐**：`setup_socks5_force_direct` 注入 `IN-PORT,7891,DIRECT`，让经 SOCKS5 入站（cn-exit socks5 腿）的回国流量强制纯直出、不再二次分流，这类灰色域名也直接出家宽，与 reverse bridge 的 r-tunnel 腿质量一致。详见 [docs/09 §4.5 多节点高可用](09-xray-reverse-bridge.md)。
 
 ---
 

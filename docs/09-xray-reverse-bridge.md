@@ -313,6 +313,41 @@ chmod +x /etc/init.d/xray-bridge
 
 📘 客户端操作与方案一完全相同（客户端只负责把国内流量送到 VPS，具体走哪条回国链路由 portal 的 `CN_EXIT_MODE` 决定）：把订阅里的 **`国内流量`** 策略组从「直接连接」切到你的 sb-xray VPS 节点即可。人在国内时记得切回「直接连接」。
 
+### 4.5 多节点高可用：多公网 VPS + `cn-bridge` 拨号
+
+单条 bridge 是单点——那台 VPS 宕机，走它的回国就断。多公网部署让每台 VPS 都成为独立回国入口：家里 OpenWrt 对**热备**节点常驻拨通、**冷备**节点平时不拨、故障时一条命令顶上。
+
+🔧 **配置**（`openwrt/config.env`）：`BRIDGE_NODES` 列全部 VPS 节点池，`BRIDGE_HOT` 指定常驻热备：
+
+```sh
+# 每项 名:FQDN:token，空格分隔；token 为各 VPS show 输出 ?token= 后那段（可各异）
+BRIDGE_NODES="dc99:dc99.example.com:tokA jp:jp.example.com:tokB cn2:cn2.example.com:tokC"
+BRIDGE_HOT=dc99,jp     # 常驻拨通的热备；其余为冷备
+```
+
+`sh cn-exit-setup.sh` 会生成节点清单 `/etc/cn-exit/nodes.list`、安装 `cn-bridge` 工具，并对热备各拨一条独立 `xray-bridge-<名>` 进程（api 端口自动错开，避免多进程都监听 7979 冲突）。
+
+🔧 **`cn-bridge` 拨号工具**（运行时随时切换，不改任何 VPS 配置）：
+
+```sh
+cn-bridge list            # 列出全部节点 + 拨号/进程状态
+cn-bridge up cn2          # 把冷备 cn2 拨通（下 client + 起进程 + 开机自启）
+cn-bridge down cn2        # 断开（停 + disable + 删 client/service）
+cn-bridge status          # ESTABLISHED 概览 + 列表
+cn-bridge                 # 交互菜单
+```
+
+📘 **热备 / 冷备语义**：
+
+- **热备**（`BRIDGE_HOT`）：常驻拨通，有 r-tunnel 腿；`balance` 模式下 leastPing 通常优选它（freedom 直出、不经 OpenClash 二次分流，质量更纯净）。
+- **冷备**：未拨、没有 r-tunnel 腿，但只要它在 tailnet 里就仍有 **socks5 腿**（经 Tailscale 回国），`balance` 的 observatory 探测 r-tunnel 失败后**自动用 socks5 兜底——不黑洞**。故障时 `cn-bridge up <名>` 秒级升它为双腿。
+
+> ⚠️ 所有回国流量最终都从家里**同一条家宽上行**出去。多 VPS 是**入口冗余**（某台挂了切别台），**不增加**回国出口带宽。
+
+📘 **两腿质量对齐**：socks5 腿的回国流量到家里 OpenClash 后会被二次分流，灰色域名（如部分 IP 查询站）可能被判海外走代理出口而回国失败。脚本注入 `IN-PORT,7891,DIRECT` 规则，把经 SOCKS5 入站（7891）的回国流量强制纯直出，对齐 r-tunnel——长期只有 socks5 腿的冷备台也满质量。注意按入站端口区分、不能按来源 IP（socks5 来源与 exit-node 终端同为 Tailscale CGNAT `100.64.0.0/10`，按 IP 会误伤终端的海外流量）。
+
+🔧 **监控告警**：`cn-bridge-monitor`（cron 周期跑）探活热备 r-tunnel 隧道 + Tailscale 守护 / 离线 peer，连续失败去抖后 telegram 告警、恢复发通知。在 `config.env` 填 `ALERT_TG_TOKEN` / `ALERT_TG_CHAT` 启用（与 VPS shoutrrr 用同一个 bot 即可）。
+
 ---
 
 ## 5. 验证
