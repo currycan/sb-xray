@@ -329,7 +329,7 @@ docker exec sb-xray crontab -l | grep isp-retest
 
 | 变量 | 默认 | 作用 |
 |:---|:---|:---|
-| `CN_EXIT_MODE` | _空（派生）_ | 回国模式总开关；取值 `socks5` / `reverse` / `balance` / `off` |
+| `CN_EXIT_MODE` | `balance`（compose 默认；显式留空则按既有变量派生） | 回国模式总开关；取值 `socks5` / `reverse` / `balance` / `off` |
 | `CN_EXIT_SOCKS5_HOST` | _空_ | 回国 SOCKS5 地址（通常为 Tailscale IP）；`socks5` / `balance` 必填 |
 | `CN_EXIT_SOCKS5_PORT` | `7891` | 回国 SOCKS5 端口 |
 | `CN_EXIT_PROBE_URL` | `http://connect.rom.miui.com/generate_204` | `balance` 模式健康探测 URL（国内可达的 204 端点） |
