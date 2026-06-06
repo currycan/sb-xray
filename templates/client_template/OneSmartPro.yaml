@@ -151,6 +151,8 @@ proxy-groups:
 
 # ==================== 规则路由 ====================
 rules:
+  # 拦截 QUIC（UDP 443），强制回落 TCP 统一走分流出口
+  - AND,((NETWORK,UDP),(DST-PORT,443)),REJECT
   # 内网代理（所有 .lan 域名走反向隧道）
   - DOMAIN-SUFFIX,lan,人工智能
   # Tailscale 组网 IP 段
