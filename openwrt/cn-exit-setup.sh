@@ -100,18 +100,19 @@ mode_uses_tailscale() { [ "$CN_EXIT_MODE" = socks5 ] || [ "$CN_EXIT_MODE" = bala
 mode_uses_reverse()   { [ "$CN_EXIT_MODE" = reverse ] || [ "$CN_EXIT_MODE" = balance ]; }
 
 validate_config() {
-    # 节点来源：BRIDGE_NODES（多节点，名:域名:token 空格分隔）或 VPS_DOMAIN（单节点
-    # 旧用法），至少一种。
-    if [ -z "$BRIDGE_NODES" ] && [ -z "$VPS_DOMAIN" ]; then
-        die "需提供 BRIDGE_NODES（多节点）或 VPS_DOMAIN（单节点）"
+    # 节点来源：nodes.list 文件（NODES_FILE / 脚本同目录 nodes.list）、BRIDGE_NODES
+    # 内联，或单节点旧用法 VPS_DOMAIN，至少一种。
+    _nsrc="${NODES_FILE:-$(dirname "$0")/nodes.list}"
+    if [ ! -f "$_nsrc" ] && [ -z "$BRIDGE_NODES" ] && [ -z "$VPS_DOMAIN" ]; then
+        die "需提供节点清单文件（NODES_FILE / 同目录 nodes.list）、BRIDGE_NODES 或 VPS_DOMAIN"
     fi
     # 必填项按模式裁剪：socks5/balance 需 Tailscale 三项；reverse/balance 需 xray 版本
     _req=""
     mode_uses_tailscale && _req="$_req PEER_TS_IP TS_HOSTNAME TS_VERSION"
     mode_uses_reverse && _req="$_req XRAY_VERSION"
-    # 单节点旧用法（无 BRIDGE_NODES）的 reverse/balance 还需 SUBSCRIBE_TOKEN；
-    # 多节点的 token 已随 BRIDGE_NODES 每项提供。
-    if mode_uses_reverse && [ -z "$BRIDGE_NODES" ]; then
+    # 单节点旧用法（无 nodes 文件、无 BRIDGE_NODES）的 reverse/balance 还需
+    # SUBSCRIBE_TOKEN；多节点的 token 已随清单每项提供。
+    if mode_uses_reverse && [ -z "$BRIDGE_NODES" ] && [ ! -f "$_nsrc" ]; then
         _req="$_req SUBSCRIBE_TOKEN"
     fi
     _missing=""
@@ -561,10 +562,20 @@ setup_socks5_force_direct() {
 
 generate_nodes_list() {
     # 生成 /etc/cn-exit/nodes.list（每行 <名> <FQDN> <token>），供 cn-bridge 拨号
-    # 与 OpenClash 解耦遍历。来源：BRIDGE_NODES（多节点，每项 名:域名:token，空格
-    # 分隔）；无则兼容单节点旧用法 VPS_DOMAIN + SUBSCRIBE_TOKEN。
+    # 与 OpenClash 解耦遍历。来源优先级：① NODES_FILE 多行文件（推荐，默认脚本同目录
+    # nodes.list）；② BRIDGE_NODES 内联（名:域名:token 空格分隔）；③ 单节点旧用法
+    # VPS_DOMAIN + SUBSCRIBE_TOKEN。
     mkdir -p /etc/cn-exit
     _nl=/etc/cn-exit/nodes.list
+    _src="${NODES_FILE:-$(dirname "$0")/nodes.list}"
+    if [ -f "$_src" ] && [ "$_src" != "$_nl" ]; then
+        backup_file "$_nl"
+        cp "$_src" "$_nl"
+        chmod 600 "$_nl"
+        _cnt=$(awk '!/^#/&&NF{c++} END{print c+0}' "$_nl")
+        log "已从 $_src 装入节点清单（$_cnt 个节点）"
+        return 0
+    fi
     backup_file "$_nl"
     {
         printf '# sb-xray reverse bridge 节点清单（cn-exit-setup.sh 生成）\n'

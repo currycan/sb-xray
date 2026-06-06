@@ -84,12 +84,12 @@ EOF
 chmod 644 /etc/cron.d/cn-exit-keepalive
 
 # ── 4. 拉起容器 ───────────────────────────────────────────────────
-log "docker compose up -d"
+log "docker compose pull + up -d（顺带升级到最新镜像）"
 cd "$SBXRAY_DIR"
 if docker compose version >/dev/null 2>&1; then
-    docker compose up -d
+    docker compose pull && docker compose up -d
 else
-    docker-compose up -d
+    docker-compose pull && docker-compose up -d
 fi
 
 # ── 5. 自检 ───────────────────────────────────────────────────────
