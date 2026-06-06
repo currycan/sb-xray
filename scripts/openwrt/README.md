@@ -24,12 +24,12 @@
 
 ```mermaid
 flowchart LR
-    U[海外用户] --> X["VPS<br/>(xray, CN_EXIT_MODE=balance)"]
-    X -- "socks5 腿<br/>VPS 主动连，随时可用" --> TS[Tailscale 网络]
+    U["海外用户"] --> X["VPS<br/>(xray, CN_EXIT_MODE=balance)"]
+    X -- "socks5 腿<br/>VPS 主动连，随时可用" --> TS["Tailscale 网络"]
     TS --> OC["OpenWrt OpenClash<br/>SOCKS5 :7891"]
-    X -- "r-tunnel 腿<br/>质量更优，需 OpenWrt 先拨通" --> RT[xray reverse 隧道]
+    X -- "r-tunnel 腿<br/>质量更优，需 OpenWrt 先拨通" --> RT["xray reverse 隧道"]
     RT -. "OpenWrt 主动拨向 VPS" .-> B["OpenWrt<br/>xray-bridge"]
-    OC --> CN((家宽出口<br/>中国大陆))
+    OC --> CN(("家宽出口<br/>中国大陆"))
     B --> CN
 
     style CN fill:#e8f5e9,stroke:#2e7d32
@@ -42,11 +42,11 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A[回国流量到达 VPS] --> B{r-tunnel 腿健康?}
-    B -- 是 --> R[走 r-tunnel<br/>质量最优] --> OK((回国成功))
-    B -- 否 --> C{socks5 腿健康?}
-    C -- 是 --> S[走 socks5] --> OK
-    C -- 否 --> D[降级 VPS 本地直出<br/>绕路但不黑洞]
+    A["回国流量到达 VPS"] --> B{"r-tunnel 腿健康?"}
+    B -- 是 --> R["走 r-tunnel<br/>质量最优"] --> OK(("回国成功"))
+    B -- 否 --> C{"socks5 腿健康?"}
+    C -- 是 --> S["走 socks5"] --> OK
+    C -- 否 --> D["降级 VPS 本地直出<br/>绕路但不黑洞"]
 
     style OK fill:#e8f5e9,stroke:#2e7d32
     style D fill:#fff3e0,stroke:#ef6c00
@@ -66,7 +66,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Q1{路由器装了 OpenClash?} -- 否 --> MR["CN_EXIT_MODE=reverse"]
+    Q1{"路由器装了 OpenClash?"} -- 否 --> MR["CN_EXIT_MODE=reverse"]
     Q1 -- 是 --> Q2{"要双腿高可用?<br/>(推荐)"}
     Q2 -- 是 --> MB["CN_EXIT_MODE=balance"]
     Q2 -- 否 --> MS["CN_EXIT_MODE=socks5"]
@@ -80,13 +80,13 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    subgraph VPS 池（16 台配置完全一致，配一次永不改）
+    subgraph pool["VPS 池（16 台配置完全一致，配一次永不改）"]
         H1["dc99（热备）<br/>双腿：r-tunnel + socks5"]
         H2["jp（热备）<br/>双腿：r-tunnel + socks5"]
         C1["cn2（冷备）<br/>仅 socks5 腿，照样回国"]
         C2["…其余冷备<br/>仅 socks5 腿"]
     end
-    OW[OpenWrt<br/>cn-bridge 拨号]
+    OW["OpenWrt<br/>cn-bridge 拨号"]
     OW == "常驻拨通" ==> H1
     OW == "常驻拨通" ==> H2
     OW -. "故障时 cn-bridge up cn2<br/>秒级升双腿" .-> C1
