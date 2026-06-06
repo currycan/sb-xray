@@ -55,17 +55,19 @@ services:
       #   balance  socks5 + r-tunnel 主备，自动故障转移（需上述两者均就绪）
       #   off      不回国（CN 流量封禁）
       #   留空     按既有变量派生（向后兼容，建议显式设置）
-      - CN_EXIT_MODE=balance
+      # 回国项均支持 .env 覆盖（${VAR:-默认}）；多 VPS 统一用 .env 注入、compose 不动。
+      - CN_EXIT_MODE=${CN_EXIT_MODE:-balance}
       # balance 模式健康探测（observatory 直连出站探测，可覆盖默认）
-      - CN_EXIT_PROBE_URL=http://connect.rom.miui.com/generate_204
-      - CN_EXIT_PROBE_INTERVAL=30s
+      - CN_EXIT_PROBE_URL=${CN_EXIT_PROBE_URL:-http://connect.rom.miui.com/generate_204}
+      - CN_EXIT_PROBE_INTERVAL=${CN_EXIT_PROBE_INTERVAL:-30s}
       # reverse / balance 所需：VLESS reverse bridge（XRAY_REVERSE_UUID 自动生成并持久化；落地机配置随 show 输出下载链接）
-      - ENABLE_REVERSE=true
-      - REVERSE_DOMAINS=domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan # 通过 bridge 出的内网域名，逗号分隔
-      # socks5 / balance 所需：OpenWrt 的 Tailscale IP（tailscale ip 命令获取）+ OpenClash SOCKS5 端口
-      - ENABLE_SOCKS5_PROXY=true
-      - CN_EXIT_SOCKS5_HOST=$tsip
-      - CN_EXIT_SOCKS5_PORT=7891
+      - ENABLE_REVERSE=${ENABLE_REVERSE:-true}
+      # 通过 bridge 出的内网域名，逗号分隔；纯回国可在 .env 设 REVERSE_DOMAINS= 留空
+      - "REVERSE_DOMAINS=${REVERSE_DOMAINS:-domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan}"
+      # socks5 / balance 所需：OpenWrt 的 Tailscale IP（.env 里 tsip）+ OpenClash SOCKS5 端口
+      - ENABLE_SOCKS5_PROXY=${ENABLE_SOCKS5_PROXY:-true}
+      - CN_EXIT_SOCKS5_HOST=${tsip}
+      - CN_EXIT_SOCKS5_PORT=${CN_EXIT_SOCKS5_PORT:-7891}
       # shoutrrr 事件总线（完整说明见 docs/07-event-bus-shoutrrr.md）
       # 留空 = dry-run，仅写日志不外推；多通道追加 ";discord://..." 或 ";slack://..."（详见文档 §6）
       # ⚠ BOT_TOKEN 中的 ":" 必须 URL-encode 为 "%3A"；chat.id 私有为负数(-100...), 公开频道用 "name"(不带 @)

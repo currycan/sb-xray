@@ -250,6 +250,8 @@ docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
 # balance 预期：CN-exit(balance): selector=['cn-exit', 'r-tunnel'] leastPing
 ```
 
+🔧 **多 VPS 批量初始化**：每台 VPS 用 `scripts/vps-cn-exit-init.sh` 一键写 `.env`（回国项以 `${VAR}` 注入 docker-compose）、装 Tailscale 入网、配 VPS 侧 keepalive、拉起容器，嵌进你的 provisioning 即可。各台 `XRAY_REVERSE_UUID` 自动生成持久化、互不冲突；socks5 腿命脉是 Tailscale 链路，务必每台都入 tailnet。配一次永不改 env，回国拨号切换全在 OpenWrt 侧 `cn-bridge` 完成。
+
 ### 4.2 拿落地机配置下载链接
 
 🔧 portal 已把所有参数填好，渲染出一份可直接用的 bridge 配置。运行 `show` 取链接：
