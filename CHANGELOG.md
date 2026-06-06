@@ -10,8 +10,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [26.6.7] — 2026-06-07 · 回国出口多公网高可用（CN_EXIT_MODE balance + Tailscale + reverse bridge）
+
+> 汇总自 v26.4.22 以来的全部变更：主线是「海外回国」从单链路演进到**多公网双腿主备高可用**，伴随 S-UI 面板移除、文档体系重构与若干稳定性修复。
+
+### Added（新增）
+
+- **回国出口总开关 `CN_EXIT_MODE`（socks5 / reverse / balance / off）**：取代旧的「按 `CN_EXIT_SOCKS5_HOST`/`REVERSE_CN_EXIT` 隐式派生」。`balance` 把 SOCKS5（Tailscale/OpenClash）与 `r-tunnel`（VLESS reverse）两条回国腿挂 `leastPing` balancer + observatory 探活，自动故障转移、全断 fallback direct。路由改写见 `scripts/sb_xray/config_builder.py:_rewire_cn_rules`。
+- **多公网回国高可用（OpenWrt 侧）**：`sources/openwrt/cn-bridge` 拨号工具（list/up/down/status，per-node 独立 `xray-bridge-<名>` 进程、api 端口错开）+ `cn-bridge-monitor`（cron 探活热备 r-tunnel / Tailscale peer，去抖 telegram 告警）。节点池 `nodes.list`（`名 FQDN token`），`BRIDGE_HOT` 指定常驻热备、其余冷备靠 socks5 腿兜底（不黑洞）。
+- **VPS 侧一键初始化 `sources/vps/vps-cn-exit-init.sh`**：写回国 `.env`（docker-compose 以 `${VAR}` 引用）+ 装 Tailscale 入网 + 同步最新 `docker-compose.yml` + `compose pull/up` + 自检（硬失败非 0 退出、socks5 回国实测）。
+- **OpenWrt 一键 `sources/openwrt/cn-exit-setup.sh`**：按 `CN_EXIT_MODE` 分派，装 Tailscale（kernel TUN：subnet router + exit node + UDP GRO 转发优化）/ xray reverse bridge / OpenClash 解耦（VPS 域名 DIRECT + `IN-PORT,7891` 强制直出 + SOCKS skip-auth）+ keepalive 保活。
+- **VLESS Reverse Bridge（`ENABLE_REVERSE` + `REVERSE_DOMAINS`）**：零公网 IP 家宽落地机经 `r-tunnel` 反向挂载到 VPS，做内网穿透或回国出口；双 UUID 隔离（`XRAY_REVERSE_UUID` 禁作正向代理）。落地机模板 `templates/reverse_bridge/client.json`，`show` 渲染带 token 下载链接。
+- **事件总线 shoutrrr 多通道告警**：Xray `rules.webhook` → forwarder → shoutrrr CLI → Telegram/Discord/Slack/Gotify；`ban_bt` / `ban_geoip_cn` / `ban_ads` / `ban_private_ip` 四类事件，`SHOUTRRR_URLS` 空走 dry-run。详见 `docs/06`。
+
+### Changed（变更）
+
+- **默认 `CN_EXIT_MODE=balance`**：`docker-compose.yml` / `vps-cn-exit-init.sh` / `cn-exit-setup.sh` / `config.env.example` / `docs/04 §2.7` 统一为 balance 默认。
+- **移除 S-UI 面板**：构建 / 配置 / nginx / CI 全面剔除，Dockerfile 由四阶段收敛为三阶段，组件 11→10。
+- **客户端模板统一拦截 QUIC（UDP 443）**：防止 HTTP/3 绕过分流出口。
+- **geosite 数据源换 MetaCubeX**：根除 `geosite:cn` 的 `@cn` 海外 CDN（`dl.google.com` 等）污染导致 Google Play 等地区敏感应用从国内 IP 访问失效；并前置 `geosite:geolocation-!cn → direct` 海外直出护栏。
+- **文档体系重构**：05 VLESS Reverse 指南、06 事件总线、08 Reverse Bridge 回国架构重写为图文并茂（mermaid）；构建文档前移为 `00` 并补齐 S-UI 移除后的编号空缺；脚本目录迁入 `sources/{openwrt,vps}/` 并各配新手向 README；修正多处死链与显示编号。
+- **VPS/OpenWrt 脚本可靠性加固**：自检硬失败以非 0 退出码收尾（批量编排可筛坏节点）、时序敏感项（DERP 打洞 / OpenClash 重启）改重试软告警、`docker-compose.yml` 自动同步（修旧部署 `.env` 不生效）、`tailscale up` 限时防挂死、新增 `TS_AUTHKEY_FILE` / `SKIP_PULL` / `SKIP_COMPOSE_UPDATE` 开关。
+- **`common` 订阅轨移除 AnyTLS 节点**：mihomo / OpenClash / Karing 等通用客户端的 anytls outbound 在 mihomo `1.19.24` 及附近版本上出现 url-test 持续返回 `-1` 的回归（上游 commit `9613f02` 重构 22 个 outbound 的 `Base` 初始化路径，对 anytls 字段映射存在静默副作用）。`common` 从 7 条裁剪为 6 条，保留 Hysteria2 / VMess / XTLS-Reality / Xhttp+Reality直连 / 上行 Xhttp+TLS+CDN 下行 Xhttp+Reality / Xhttp+TLS+CDN 上下行不分离。AnyTLS 仍保留在 `/v2rayn` 主轨（v2rayN / sing-box 客户端实现可靠）。同步更新 `show` 输出（"6 协议"）、订阅单测与协议文档（§1.1 表格、§1.10 TUIC 备注、§1.11 AnyTLS 订阅轨标注）。
+- **兼容订阅轨重命名为 `common`**：原 `/v2rayn-compat` 分享链接改为 `/common`，`write_subscriptions()` 只生成 `v2rayn` + `common` 两个 base64 订阅文件。`common` 从原 9 条裁剪为 7 条：保留 Hysteria2 / AnyTLS / VMess / XTLS-Reality / Xhttp+Reality直连 / 上行 Xhttp+TLS+CDN 下行 Xhttp+Reality / Xhttp+TLS+CDN 上下行不分离，移除 TUIC 与 `上行Xhttp+Reality下行Xhttp+TLS+CDN`。同步更新 `show` 输出、订阅单测与协议文档。
+- **ISP 测速采样器重构（v2）**：跨境 SOCKS5 链路上，v1 的「单次 GET + 1 MiB 文件 + 5s 超时」系统性低估节点带宽 5–20 倍（生产观察：直连 463 Mbps，节点测得 0–21 Mbps）。根因是 TCP slow-start、TLS/SOCKS5 握手、小文件管道填不满三重叠加。
+  - v2 改用 `httpx.stream()` 流式读取：丢弃 `ISP_SPEED_WARMUP_SEC`（默认 1.5s）的 TCP 慢启动段 → 从**首字节之后**开始计时 → 在 `ISP_SPEED_WINDOW_SEC`（默认 8s）或 `ISP_SPEED_MAX_BYTES`（默认 256 MiB）封顶时停止 → 返回结构化 `SampleResult`。
+  - 失败不再静默 `0.0`：输出 `ok / connect_fail / timeout / low_speed / zero_body / proxy_dep_missing` 状态码。整批聚合成 `_ISP_SPEEDS_DIAG_JSON` 并附加到 `isp.speed_test.result` 事件。
+  - 新增 `ISP_SPEED_URL_MAP`（JSON `{tag: url}`）按 tag 覆盖探针 URL；`ISP_SPEED_LEGACY=true` 一键回退 v1。
+  - **兼容性**：`_ISP_SPEEDS_JSON` schema 仍是 `{tag: float}`，首次 cron 重测会因新旧值差距触发一次 `delta_exceeded` 重启 xray + sing-box（一次性事件）。
+
 ### Fixed（修复）
 
+- **Tailscale kernel TUN 迁移三处致命缺陷**：路由黑洞、state 丢失、重启后 daemon 停在 `Stopped` 不自恢复（`init.d` 开机自动 `tailscale up`）。
+- **隧道断导致 OpenClash 全节点健康检查失败**：`geosite:cn` 收录了 mihomo/OpenClash 默认探测域名 `full:www.gstatic.com`，隧道一断健康检查全挂、客户端节点集体掉线 —— 前置 `full:www.gstatic.com → direct` 豁免规避。
+- **reverse bridge 客户端 routing `inboundTag` 应为 `r-tunnel`**：原误写导致反向隧道流量无规则匹配被丢弃。
+- **既有文档死链与编号缺口**：修复多处跨文档死链、S-UI 文档删除后的编号顺延。
 - **xray supervisord autorestart 路径下因 stale UDS socket 死循环** —— 部分小内存节点观察到 xray 进程异常退出后,supervisord 自动拉起时 inbound 报 `bind: address already in use /dev/shm/udsxhttp-compat.sock`,容器进入 "进程 RUNNING 但 inbound 全挂" 的隐性故障(`supervisorctl status` 显示正常,订阅链路对外不可用)。手动 `docker restart` 可恢复(tmpfs 被销毁),但过段时间复发。
   - 根因:xray 启动时通过 `/dev/shm/uds*.sock` 监听 4 路 UDS inbound(XHTTP / XHTTP-compat / Reality / VMess+WS),崩溃时 sock 文件残留;supervisord `autorestart=true` 只是 `exec xray run`,不清理 stale socket;ISP switching 路径(`geo.py:_restart_xray_if_running`)虽显式 `glob unlink` 清理,但 autorestart 路径完全绕过。
   - 修复:新增 Python 启动器 `scripts/sb_xray/stages/xray_run.py`,在 `os.execvp("xray", …)` 之前清理 `/dev/shm/uds*.sock`;`templates/supervisord/daemon.ini` 的 `[program:xray]` 改为 `command=python3 /scripts/entrypoint.py xray-run`,使三条路径(autorestart / cron geo-update / ISP switching)统一从干净状态启动。`geo.py` 同步去重(改为单次 `supervisorctl restart xray`,清理交给启动器)。
