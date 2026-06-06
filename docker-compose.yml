@@ -48,7 +48,7 @@ services:
       - ENABLE_XUI=false # false: 关掉 x-ui 面板（省 ~35–55 MB）
       # - ENABLE_SUI=false  # s-ui removed
       - ENABLE_SHOUTRRR=true # false: 关掉 shoutrrr-forwarder（省 ~20–30 MB）
-      # ── 回国代理（socks5 见 docs/08-tailscale-proxy-architecture.md；reverse/balance 见 docs/09-xray-reverse-bridge.md）──
+      # ── 回国代理（socks5 见 docs/07-tailscale-proxy-architecture.md；reverse/balance 见 docs/08-xray-reverse-bridge.md）──
       # 回国出口主开关：显式选择 CN 流量（geoip/geosite:cn）走哪条回国链路
       #   socks5   经 SOCKS5（Tailscale/OpenClash）—— 需下方 CN_EXIT_SOCKS5_HOST
       #   reverse  经 r-tunnel（VLESS reverse bridge）—— 需 ENABLE_REVERSE=true + 国内 bridge
@@ -68,7 +68,7 @@ services:
       - ENABLE_SOCKS5_PROXY=${ENABLE_SOCKS5_PROXY:-true}
       - CN_EXIT_SOCKS5_HOST=${tsip}
       - CN_EXIT_SOCKS5_PORT=${CN_EXIT_SOCKS5_PORT:-7891}
-      # shoutrrr 事件总线（完整说明见 docs/07-event-bus-shoutrrr.md）
+      # shoutrrr 事件总线（完整说明见 docs/06-event-bus-shoutrrr.md）
       # 留空 = dry-run，仅写日志不外推；多通道追加 ";discord://..." 或 ";slack://..."（详见文档 §6）
       # ⚠ BOT_TOKEN 中的 ":" 必须 URL-encode 为 "%3A"；chat.id 私有为负数(-100...), 公开频道用 "name"(不带 @)
       - SHOUTRRR_URLS=${shoutrrr_urls} # e.g. telegram://123456789%3AABCdef...xyz@telegram?chats=-1001234567890

@@ -1,6 +1,6 @@
-# 05. 构建部署与版本发布指南
+# 00. 构建部署与版本发布指南
 
-> 本文档详细解析 SB-Xray Docker 镜像的完整构建流程，包括环境准备、自动化构建脚本、四阶段 Dockerfile 架构、常见构建问题，以及 Git Release 自动化版本发布机制。
+> 本文档详细解析 SB-Xray Docker 镜像的完整构建流程，包括环境准备、自动化构建脚本、三阶段 Dockerfile 架构、常见构建问题，以及 Git Release 自动化版本发布机制。
 
 ---
 
@@ -8,7 +8,7 @@
 
 1. [构建环境准备](#1-构建环境准备)
 2. [自动构建脚本](#2-自动构建脚本buildsh)
-3. [四阶段 Dockerfile 架构](#3-四阶段-dockerfile-架构)
+3. [三阶段 Dockerfile 架构](#3-三阶段-dockerfile-架构)
 4. [组件版本管理](#4-组件版本管理)
 5. [手动精细构建](#5-手动精细构建)
 6. [常见构建问题 FAQ](#6-常见构建问题-faq)
@@ -96,32 +96,29 @@ flowchart TD
 
 | 策略 | API 端点 | 适用组件 |
 |:---|:---|:---|
-| **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr、Mihomo、Http-Meta、Sub-Store、S-UI |
+| **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr、Mihomo、Http-Meta、Sub-Store |
 | **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100`（过滤 `rc/beta/alpha`） | Xray、Sing-box、3x-ui、Dufs、Cloudflared |
 
 `.github/workflows/daily-build.yml` 每日跑相同逻辑：调用 API → 计算 digests → 提交 `versions.json`。所以本地 `./build.sh` 和 CI 的最新产物始终位级一致。
 
 ---
 
-## 3. 四阶段 Dockerfile 架构
+## 3. 三阶段 Dockerfile 架构
 
-整个构建过程分为四个精心设计的阶段（Multi-Stage Build），最大程度地减小最终镜像体积。
+整个构建过程分为三个精心设计的阶段（Multi-Stage Build），最大程度地减小最终镜像体积。
 
 ```mermaid
 flowchart TD
     classDef stage1 fill:#74b9ff,stroke:#0984e3,stroke-width:2px,color:white
-    classDef stage2 fill:#fab1a0,stroke:#e17055,stroke-width:2px,color:white
     classDef stage3 fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:white
     classDef stage4 fill:#55efc4,stroke:#00b894,stroke-width:2px,color:black
 
     S1["阶段一: Sub-Store 构建层\nnode:alpine"]:::stage1
-    S2["阶段二: S-UI 前端构建层\nnode:alpine"]:::stage2
-    S3["阶段三: Golang 主构建层\ngolang:1-alpine"]:::stage3
-    S4["阶段四: 最终镜像层\ncurrycan/nginx:1.29.4"]:::stage4
+    S3["阶段二: Golang 主构建层\ngolang:1-alpine"]:::stage3
+    S4["阶段三: 最终镜像层\ncurrycan/nginx:1.29.4"]:::stage4
 
     S1 -->|"Sub-Store 前后端\n+ Shoutrrr\n+ Http-Meta\n+ Mihomo"| S4
-    S2 -->|"S-UI 前端静态资源"| S3
-    S3 -->|"x-ui 二进制\n+ s-ui 二进制\n+ sing-box\n+ xray\n+ dufs\n+ cloudflared\n+ crypctl"| S4
+    S3 -->|"x-ui 二进制\n+ sing-box\n+ xray\n+ dufs\n+ cloudflared\n+ crypctl"| S4
 
     S4 --> Final(("最终镜像\ncurrycan/sb-xray:latest"))
 ```
@@ -140,17 +137,7 @@ flowchart TD
 | **Sub-Store 后端** | sub-store-org/Sub-Store | 预编译 JS Bundle 下载 |
 | **Sub-Store 前端** | sub-store-org/Sub-Store-Front-End | **从源码构建** (pnpm build) |
 
-### 3.2 阶段二：S-UI 前端构建层
-
-**基础镜像**: `node:alpine`
-
-**构建过程**:
-1. 克隆 S-UI 后端仓库（含 Go 源码）
-2. 克隆 S-UI-Frontend 仓库
-3. `npm install && npm run build`
-4. 将编译后的 `dist/` 移入后端的 `web/html` 目录
-
-### 3.3 阶段三：Golang 主构建层
+### 3.2 阶段二：Golang 主构建层
 
 **基础镜像**: `golang:1-alpine`
 
@@ -164,13 +151,12 @@ flowchart TD
 | **Dufs** | 预编译下载 + UPX | ✅ |
 | **Cloudflared** | 预编译下载 + UPX | ✅ |
 | **X-UI (3x-ui)** | 从源码 `go build` + UPX | ✅ |
-| **S-UI** | 从源码 `go build` (含 QUIC/gRPC/ACME tags) + UPX | ✅ |
 | **Sing-box** | 预编译下载 + UPX | ✅ |
 | **Xray** | 预编译 ZIP 下载 + UPX | ✅ |
 
 > **UPX 压缩**：所有二进制文件使用 `upx --lzma --best` 极限压缩，减小 50-70% 体积。
 
-### 3.4 阶段四：最终镜像层
+### 3.3 阶段三：最终镜像层
 
 **基础镜像**: `currycan/nginx:1.29.4`（基于 Alpine 的自定义 Nginx）
 
@@ -213,7 +199,6 @@ jq -r 'to_entries[] | select(.key != "digests") | "\(.key): \(.value)"' versions
 | `http_meta` | `HTTP_META_VERSION` |
 | `sub_store_frontend` | `SUB_STORE_FRONTEND_VERSION` |
 | `sub_store_backend` | `SUB_STORE_BACKEND_VERSION` |
-| `s_ui` | `SUI_VERSION` |
 | `dufs` | `DUFS_VERSION` |
 | `cloudflared` | `CLOUDFLARED_VERSION` |
 | `x_ui` | `XUI_VERSION` |

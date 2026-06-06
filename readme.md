@@ -101,7 +101,7 @@ flowchart TD
 
 - **isp-auto 健康选优闭环**: 多 ISP SOCKS5 落地节点自动按带宽排序 + 运行时按 RTT 选最优；探测 URL 默认 Cloudflare 1 MiB 携带带宽信号（而非传统 0 字节 `generate_204`），被限速节点自然下沉；支持 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 按服务独立 balancer；每 6 小时 cron 周期重测，仅当节点组成或排序变化时重启守护进程。
 - **策略驱动 Fallback**: ISP 全部不可达时按 `ISP_FALLBACK_STRATEGY` 回退 —— 默认 `direct`，或 `block` 实现 fail-closed（适合 CN / HK / RU 拒绝静默走直连的场景）。
-- **回国双腿动态主备**: `CN_EXIT_MODE=balance` 把 reverse 隧道（`r-tunnel`）与 Tailscale SOCKS5（`cn-exit`）同挂一个 `leastPing` balancer，observatory 周期探测（默认 30s）、谁延迟低走谁——**没有写死的优先级**，r-tunnel 纯直出天然胜出为「主」、socks5 腿随时候补；任一腿断约一个探测周期内自动切换，两腿全断降级 `direct` 不黑洞，未拨隧道的冷备节点自动 100% 走 socks5 腿。机制详解见 [09. Reverse Bridge §3.2](./docs/09-xray-reverse-bridge.md#32-balance-模式cn_exit_modebalance主备故障转移)。
+- **回国双腿动态主备**: `CN_EXIT_MODE=balance` 把 reverse 隧道（`r-tunnel`）与 Tailscale SOCKS5（`cn-exit`）同挂一个 `leastPing` balancer，observatory 周期探测（默认 30s）、谁延迟低走谁——**没有写死的优先级**，r-tunnel 纯直出天然胜出为「主」、socks5 腿随时候补；任一腿断约一个探测周期内自动切换，两腿全断降级 `direct` 不黑洞，未拨隧道的冷备节点自动 100% 走 socks5 腿。机制详解见 [08. Reverse Bridge §3.2](./docs/08-xray-reverse-bridge.md#32-balance-模式cn_exit_modebalance主备故障转移)。
 - **自动化订阅节点清洗**: 系统内嵌 Sub-Store，在将节点下发给 Clash / Surge / Stash 客户端前自动执行地名标准化、挂载国旗 Emoji、过滤失效节点，提升客户端策略组分流精准度。
 
 > 完整运行时闭环架构图见 [01. 架构 §6.4](./docs/01-architecture-and-traffic.md#64-完整运行时闭环)；十余个可覆盖的 env 开关见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
@@ -114,15 +114,15 @@ flowchart TD
 
 | 模块分类                | 文档链接                                                                       | 内容简介与理论支撑                                                                                                     |
 | :---------------------- | :----------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| ⚙️ **构建部署指南**     | [**👉 00. 构建部署指南**](./docs/00-build-release.md)                          | 详解 `build.sh` 自动构建脚本、三阶段 Dockerfile 架构、10 个组件的版本管理策略与常见构建问题 FAQ。                      |
 | 🟢 **架构与原理剖析**   | [**👉 01. 系统架构与网络流量链路详解**](./docs/01-architecture-and-traffic.md) | 深度解析 Nginx 前置分流原理、微观 Unix Socket 链路、架构方案对比以及 `entrypoint.py`（Python PID 1，`run` / `show` 子命令）守护进程的五大生命周期扇区。      |
 | 🔵 **安全加固与协议**   | [**👉 02. 协议详解与安全加密体系**](./docs/02-protocols-and-security.md)       | 涵盖全部 9 种协议配置手册、MLKEM 后量子加密理论与实践、Reality Fallback 回落机制、ACME 证书管家以及 TUN 模式进阶指南。 |
 | 🟡 **调度中枢与客户端** | [**👉 03. 智能路由策略与全平台客户端接入**](./docs/03-routing-and-clients.md)  | 详解 OpenClash Policy-Priority 六维加权评分体系、Sub-Store 深层节点清洗引擎，以及动态 ISP 链式落地的底层实现。         |
 | 🔴 **系统运维与监控**   | [**👉 04. 运维管理与故障排查手册**](./docs/04-ops-and-troubleshooting.md)      | 包含多面板入口导航、订阅端点双重认证安全防扫描策略、证书运维以及应对 502/404/证书失效等故障的汇总排错指南。            |
-| ⚙️ **构建部署指南**     | [**👉 05. 构建部署指南**](./docs/05-build-release.md)                          | 详解 `build.sh` 自动构建脚本、四阶段 Dockerfile 架构、11 个组件的版本管理策略与常见构建问题 FAQ。                      |
-| 🔄 **内网穿透专题**     | [**👉 06. VLESS Reverse Proxy 部署指南**](./docs/06-reverse-proxy-guide.md)    | 家宽落地机反向挂载到 VPS 的端到端部署：portal 侧 `ENABLE_REVERSE` 开关、bridge 侧 simplified outbound 模板、双 UUID 隔离、故障排查与撤销流程。 |
-| 📣 **事件通知专题**     | [**👉 07. 事件总线：Xray webhook → shoutrrr**](./docs/07-event-bus-shoutrrr.md)          | 把"谁被 ban / 谁踩 BT / 谁走私网 IP"等 Xray 事件经 shoutrrr 实时推送到 Telegram / Discord / Slack / Gotify 的部署配置与排错指南。 |
-| 🛰️ **Tailscale 架构**  | [**👉 08. Tailscale 代理架构设计与配置**](./docs/08-tailscale-proxy-architecture.md) | 一台 OpenWrt 四个角色（cn-exit 回国 / exit node 出国分流 / subnet router 内网穿透 / 本机直连）的架构原理、流量图解、kernel TUN 与 OpenClash/fake-ip 配置详解，以及路由黑洞等真实踩坑实录。 |
-| 🔁 **Reverse Bridge 架构** | [**👉 09. Xray Reverse Bridge 回国架构设计与配置**](./docs/09-xray-reverse-bridge.md) | 用 Xray 反向代理做海外回国：portal/bridge 角色、`r-tunnel` 虚拟出站、`CN_EXIT_MODE` 四档开关与 socks5+r-tunnel 主备故障转移（balance）的架构原理、流量图解与踩坑实录。 |
+| 🔄 **内网穿透专题**     | [**👉 05. VLESS Reverse Proxy 部署指南**](./docs/05-reverse-proxy-guide.md)    | 家宽落地机反向挂载到 VPS 的端到端部署：portal 侧 `ENABLE_REVERSE` 开关、bridge 侧 simplified outbound 模板、双 UUID 隔离、故障排查与撤销流程。 |
+| 📣 **事件通知专题**     | [**👉 06. 事件总线：Xray webhook → shoutrrr**](./docs/06-event-bus-shoutrrr.md)          | 把"谁被 ban / 谁踩 BT / 谁走私网 IP"等 Xray 事件经 shoutrrr 实时推送到 Telegram / Discord / Slack / Gotify 的部署配置与排错指南。 |
+| 🛰️ **Tailscale 架构**  | [**👉 07. Tailscale 代理架构设计与配置**](./docs/07-tailscale-proxy-architecture.md) | 一台 OpenWrt 四个角色（cn-exit 回国 / exit node 出国分流 / subnet router 内网穿透 / 本机直连）的架构原理、流量图解、kernel TUN 与 OpenClash/fake-ip 配置详解，以及路由黑洞等真实踩坑实录。 |
+| 🔁 **Reverse Bridge 架构** | [**👉 08. Xray Reverse Bridge 回国架构设计与配置**](./docs/08-xray-reverse-bridge.md) | 用 Xray 反向代理做海外回国：portal/bridge 角色、`r-tunnel` 虚拟出站、`CN_EXIT_MODE` 四档开关与 socks5+r-tunnel 主备故障转移（balance）的架构原理、流量图解与踩坑实录。 |
 | 📜 **版本发布日志**     | [**👉 CHANGELOG（Keep a Changelog 格式）**](./CHANGELOG.md)                    | Added / Changed / Fixed / Removed / Security / Migration notes 全分类列表，附生产 E2E 验证证据与 30 秒回滚命令。|
 
 ---
@@ -224,15 +224,15 @@ sb-xray/
 │   ├── supervisord/          # Supervisor 进程管理配置模板
 │   └── …                     # Dufs / client_template / providers / proxies 等
 ├── docs/
+│   ├── 00-build-release.md                   # 构建部署与版本发布
 │   ├── 01-architecture-and-traffic.md        # 系统架构与全流量链路
 │   ├── 02-protocols-and-security.md          # 协议详解与安全加密
 │   ├── 03-routing-and-clients.md             # 路由决策与客户端分发
 │   ├── 04-ops-and-troubleshooting.md         # 运维与排障（含 env 全集、回国 CN_EXIT_MODE）
-│   ├── 05-build-release.md                   # 构建部署与版本发布
-│   ├── 06-reverse-proxy-guide.md             # VLESS Reverse Proxy 内网穿透部署
-│   ├── 07-event-bus-shoutrrr.md              # shoutrrr 事件总线指南
-│   ├── 08-tailscale-proxy-architecture.md    # Tailscale 代理架构（含 socks5 回国半边）
-│   └── 09-xray-reverse-bridge.md             # Xray Reverse Bridge 回国架构与 CN_EXIT_MODE
+│   ├── 05-reverse-proxy-guide.md             # VLESS Reverse Proxy 内网穿透部署
+│   ├── 06-event-bus-shoutrrr.md              # shoutrrr 事件总线指南
+│   ├── 07-tailscale-proxy-architecture.md    # Tailscale 代理架构（含 socks5 回国半边）
+│   └── 08-xray-reverse-bridge.md             # Xray Reverse Bridge 回国架构与 CN_EXIT_MODE
 ├── tests/                    # pytest 单元/集成测试（~380 用例）
 └── sources/                  # 静态资源与伪装站点素材
 ```
@@ -306,7 +306,7 @@ docker exec -it sb-xray bash
 
 ## 🛠️ 开发与跨平台构建 (Development)
 
-详细的构建说明请参阅 [**👉 05. 构建部署指南**](./docs/05-build-release.md)。
+详细的构建说明请参阅 [**👉 00. 构建部署指南**](./docs/00-build-release.md)。
 
 <details>
 <summary>点击查看快速构建命令</summary>

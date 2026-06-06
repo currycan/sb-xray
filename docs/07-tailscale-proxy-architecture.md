@@ -2,7 +2,7 @@
 
 本文把 OpenWrt 上 Tailscale 这套「一机多用」的代理网关讲透：它**同时**承担回国出口、出国分流、内网穿透三类流量，外加把路由器自己接进 Tailscale 私有网络。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
-> **本文与 [09. Xray Reverse Bridge 回国架构设计与配置](./09-xray-reverse-bridge.md) 的分工**：本文讲 Tailscale + OpenClash SOCKS5 这条回国链路（`CN_EXIT_MODE=socks5`）；09 讲 Xray 反向隧道那条链路（`CN_EXIT_MODE=reverse`）及两者主备的 balance 模式。两套方案怎么选见 09 的附录。
+> **本文与 [08. Xray Reverse Bridge 回国架构设计与配置](./08-xray-reverse-bridge.md) 的分工**：本文讲 Tailscale + OpenClash SOCKS5 这条回国链路（`CN_EXIT_MODE=socks5`）；08 讲 Xray 反向隧道那条链路（`CN_EXIT_MODE=reverse`）及两者主备的 balance 模式。两套方案怎么选见 08 的附录。
 
 ---
 
@@ -576,7 +576,7 @@ tailscale ping <peer-ts-ip>             # 应返回 pong
 - **现象**：测回国出口时用 `myip.ipip.net`，显示的是代理节点 IP（日本/美国），以为分流坏了。
 - **根因**：`myip.ipip.net` 的域名不在 `geosite:cn` 里，被 mihomo 当国外流量又走了一次代理。
 - **解法**：测回国出口用 `cip.cc`、`ip.cn` 这类命中 `geosite:cn` 的域名。
-- **彻底对齐**：`setup_socks5_force_direct` 注入 `IN-PORT,7891,DIRECT`，让经 SOCKS5 入站（cn-exit socks5 腿）的回国流量强制纯直出、不再二次分流，这类灰色域名也直接出家宽，与 reverse bridge 的 r-tunnel 腿质量一致。详见 [docs/09 §4.5 多节点高可用](09-xray-reverse-bridge.md)。
+- **彻底对齐**：`setup_socks5_force_direct` 注入 `IN-PORT,7891,DIRECT`，让经 SOCKS5 入站（cn-exit socks5 腿）的回国流量强制纯直出、不再二次分流，这类灰色域名也直接出家宽，与 reverse bridge 的 r-tunnel 腿质量一致。详见 [docs/08 §4.5 多节点高可用](08-xray-reverse-bridge.md)。
 
 ---
 
@@ -612,4 +612,4 @@ sh openwrt/install.sh
 
 ---
 
-> **相关文档**：[09. Xray Reverse Bridge 回国架构设计与配置](./09-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [06. VLESS Reverse Proxy（出境代理另一方案）](./06-reverse-proxy-guide.md)
+> **相关文档**：[08. Xray Reverse Bridge 回国架构设计与配置](./08-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [05. VLESS Reverse Proxy（出境代理另一方案）](./05-reverse-proxy-guide.md)

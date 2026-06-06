@@ -3,8 +3,8 @@
 本文把「**用 Xray 反向代理（reverse bridge）做海外回国**」这套链路讲透：境外设备访问大陆限定服务时，海外 VPS 把国内流量经一条**由家里主动建立**的加密隧道丢回大陆软路由，从家宽 IP 直出。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
 > **本文与相邻文档的分工**：
-> - [06. VLESS Reverse Proxy 部署指南](./06-reverse-proxy-guide.md) 讲 reverse 这套机制本身（portal/bridge、双 UUID、内网穿透）。
-> - [08. Tailscale 代理架构设计与配置](./08-tailscale-proxy-architecture.md) 讲**另一套**回国方案（Tailscale + OpenClash SOCKS5）。
+> - [05. VLESS Reverse Proxy 部署指南](./05-reverse-proxy-guide.md) 讲 reverse 这套机制本身（portal/bridge、双 UUID、内网穿透）。
+> - [07. Tailscale 代理架构设计与配置](./07-tailscale-proxy-architecture.md) 讲**另一套**回国方案（Tailscale + OpenClash SOCKS5）。
 > - 本文 09 专讲**用 reverse bridge 回国**：架构、流量图解、`CN_EXIT_MODE` 开关与主备故障转移、完整踩坑。两套回国方案怎么选见 §7.2。
 
 ---
@@ -112,7 +112,7 @@ flowchart TB
 
 | `CN_EXIT_MODE` | 国内流量出口 | 说明 | 本文相关 |
 |---|---|---|---|
-| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [08](./08-tailscale-proxy-architecture.md)） | 否 |
+| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [08](./07-tailscale-proxy-architecture.md)） | 否 |
 | `reverse` | `r-tunnel` 反向隧道 | **本方案** | ✅ §3.1 / §4 |
 | `balance` | `cn-exit` + `r-tunnel` 主备 | 两条链路并挂、自动故障转移 | ✅ §3.2 |
 | `off` | 封禁（不回国） | — | — |
@@ -230,7 +230,7 @@ flowchart LR
 # - REVERSE_DOMAINS=domain:lan   # 顺带做内网穿透时填；纯回国可留空
 ```
 
-🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [08](./08-tailscale-proxy-architecture.md)）：
+🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [08](./07-tailscale-proxy-architecture.md)）：
 
 ```yaml
 - CN_EXIT_MODE=balance
@@ -411,11 +411,11 @@ curl -x <本地客户端代理> http://cip.cc
 
 ### 7.1 与 reverse 内网穿透的关系
 
-📘 同一条 reverse 隧道既能做「回国出口」（本文，`CN_EXIT_MODE=reverse`/`balance`），也能做「内网穿透」（访问家里 NAS 等，配 `REVERSE_DOMAINS`）。两者可同时开：`geosite:cn` 走回国、`REVERSE_DOMAINS` 列出的内网域名走穿透，都经同一条 `r-tunnel`。内网穿透细节见 [06](./06-reverse-proxy-guide.md)。
+📘 同一条 reverse 隧道既能做「回国出口」（本文，`CN_EXIT_MODE=reverse`/`balance`），也能做「内网穿透」（访问家里 NAS 等，配 `REVERSE_DOMAINS`）。两者可同时开：`geosite:cn` 走回国、`REVERSE_DOMAINS` 列出的内网域名走穿透，都经同一条 `r-tunnel`。内网穿透细节见 [06](./05-reverse-proxy-guide.md)。
 
 ### 7.2 两套回国方案怎么选
 
-| 维度 | 方案一 Tailscale SOCKS5（[08](./08-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
+| 维度 | 方案一 Tailscale SOCKS5（[08](./07-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
 |---|---|---|
 | 大陆侧依赖 | OpenWrt + OpenClash + kmod-tun（kernel TUN） | OpenWrt 能跑 xray、能出站 443 即可 |
 | 公网 IP | 不需要 | 不需要 |

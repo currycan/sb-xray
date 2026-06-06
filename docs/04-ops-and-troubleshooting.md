@@ -346,7 +346,7 @@ docker exec sb-xray crontab -l | grep isp-retest
 | 3 | `cn-geosite` | `geosite:cn` | 回国出站 | 国内域名回国 |
 | 4 | `cn-ip` | `geoip:cn` | 回国出站 | 国内 IP 兜底回国 |
 
-> 第 2 层护栏配合 §5.5 的 MetaCubeX `geosite.dat`（其 `geosite:cn` 不含 `@cn` 标记的海外 CDN）双重确保 `dl.google.com` / `*.gvt1.com` 等不会被误送回国。架构原理与流量图解见 [09. Xray Reverse Bridge](./09-xray-reverse-bridge.md)；Tailscale 半边（`socks5` 链路）见 [08. Tailscale 代理架构](./08-tailscale-proxy-architecture.md)。
+> 第 2 层护栏配合 §5.5 的 MetaCubeX `geosite.dat`（其 `geosite:cn` 不含 `@cn` 标记的海外 CDN）双重确保 `dl.google.com` / `*.gvt1.com` 等不会被误送回国。架构原理与流量图解见 [08. Xray Reverse Bridge](./08-xray-reverse-bridge.md)；Tailscale 半边（`socks5` 链路）见 [07. Tailscale 代理架构](./07-tailscale-proxy-architecture.md)。
 
 ---
 

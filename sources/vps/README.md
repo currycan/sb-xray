@@ -43,7 +43,7 @@ flowchart LR
 | `CN_EXIT_MODE` | 可选 | 回国模式，默认 `balance` | — |
 | `REVERSE_DOMAINS` | 可选 | 经 bridge 出的内网域名（逗号分隔），多台建议统一 | — |
 | `VPS_DOMAIN` | 可选 | 本节点对外域名（写进 `.env` 的 `domain`） | — |
-| `SHOUTRRR_URLS` | 可选 | 事件总线告警 URL | 见 [docs/07](../../docs/07-event-bus-shoutrrr.md) |
+| `SHOUTRRR_URLS` | 可选 | 事件总线告警 URL | 见 [docs/06](../../docs/06-event-bus-shoutrrr.md) |
 
 ## 4. 快速开始
 
