@@ -411,7 +411,7 @@ curl -x <本地客户端代理> http://cip.cc
 
 ### 7.1 与 reverse 内网穿透的关系
 
-📘 同一条 reverse 隧道既能做「回国出口」（本文，`CN_EXIT_MODE=reverse`/`balance`），也能做「内网穿透」（访问家里 NAS 等，配 `REVERSE_DOMAINS`）。两者可同时开：`geosite:cn` 走回国、`REVERSE_DOMAINS` 列出的内网域名走穿透，都经同一条 `r-tunnel`。内网穿透细节见 [06](./05-reverse-proxy-guide.md)。
+📘 同一条 reverse 隧道既能做「回国出口」（本文，`CN_EXIT_MODE=reverse`/`balance`），也能做「内网穿透」（访问家里 NAS 等，配 `REVERSE_DOMAINS`）。两者可同时开：`geosite:cn` 走回国、`REVERSE_DOMAINS` 列出的内网域名走穿透，都经同一条 `r-tunnel`。内网穿透细节见 [05](./05-reverse-proxy-guide.md)。
 
 ### 7.2 两套回国方案怎么选
 
