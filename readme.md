@@ -101,6 +101,7 @@ flowchart TD
 
 - **isp-auto 健康选优闭环**: 多 ISP SOCKS5 落地节点自动按带宽排序 + 运行时按 RTT 选最优；探测 URL 默认 Cloudflare 1 MiB 携带带宽信号（而非传统 0 字节 `generate_204`），被限速节点自然下沉；支持 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 按服务独立 balancer；每 6 小时 cron 周期重测，仅当节点组成或排序变化时重启守护进程。
 - **策略驱动 Fallback**: ISP 全部不可达时按 `ISP_FALLBACK_STRATEGY` 回退 —— 默认 `direct`，或 `block` 实现 fail-closed（适合 CN / HK / RU 拒绝静默走直连的场景）。
+- **回国双腿动态主备**: `CN_EXIT_MODE=balance` 把 reverse 隧道（`r-tunnel`）与 Tailscale SOCKS5（`cn-exit`）同挂一个 `leastPing` balancer，observatory 周期探测（默认 30s）、谁延迟低走谁——**没有写死的优先级**，r-tunnel 纯直出天然胜出为「主」、socks5 腿随时候补；任一腿断约一个探测周期内自动切换，两腿全断降级 `direct` 不黑洞，未拨隧道的冷备节点自动 100% 走 socks5 腿。机制详解见 [09. Reverse Bridge §3.2](./docs/09-xray-reverse-bridge.md#32-balance-模式cn_exit_modebalance主备故障转移)。
 - **自动化订阅节点清洗**: 系统内嵌 Sub-Store，在将节点下发给 Clash / Surge / Stash 客户端前自动执行地名标准化、挂载国旗 Emoji、过滤失效节点，提升客户端策略组分流精准度。
 
 > 完整运行时闭环架构图见 [01. 架构 §6.4](./docs/01-architecture-and-traffic.md#64-完整运行时闭环)；十余个可覆盖的 env 开关见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
