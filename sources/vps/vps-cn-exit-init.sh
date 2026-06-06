@@ -9,6 +9,7 @@
 #   SBXRAY_DIR      sb-xray 部署目录（默认 /root/sb-xray）
 #   OPENWRT_TS_IP   家里 OpenWrt 的 Tailscale IP（必填 —— socks5 腿回国出口）
 #   TS_AUTHKEY      Tailscale reusable auth key（首次装 tailscale 必填；已在网可省）
+#   TS_AUTHKEY_FILE 改从文件读 authkey（TS_AUTHKEY 为空时生效，避免 key 进程表/历史泄露）
 #   TS_HOSTNAME     本机在 tailnet 的设备名（默认取 hostname）
 #   CN_EXIT_MODE    回国模式（默认 balance）
 #   REVERSE_DOMAINS 经 bridge 出的内网域名，逗号分隔（可选，16 台建议统一）
@@ -16,6 +17,10 @@
 #   SHOUTRRR_URLS   事件总线告警 URL（可选）
 #   COMPOSE_URL     docker-compose.yml 下载源（默认仓库 main 的 raw）
 #   SKIP_COMPOSE_UPDATE  设 1 跳过 compose 同步（默认 0，会拉最新覆盖）
+#   SKIP_PULL       设 1 跳过 docker compose pull（只 up -d，不升级镜像；默认 0）
+#
+# 退出码：自检全部通过 0；有硬失败（容器未起 / env 未生效 / Tailscale 未在网）非 0，
+# 便于批量编排检测坏节点。ping / socks5 探测为软告警，不影响退出码。
 #
 # 兼容 POSIX sh。
 
@@ -25,9 +30,20 @@ log()  { printf '[vps-init] %s\n' "$*"; }
 warn() { printf '[vps-init] WARN: %s\n' "$*" >&2; }
 die()  { printf '[vps-init] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# with_timeout <秒> <cmd...>：有 timeout 就限时跑，避免 tailscale up 等命令挂死阻塞 provisioning
+with_timeout() {
+    _t=$1; shift
+    if command -v timeout >/dev/null 2>&1; then timeout "$_t" "$@"; else "$@"; fi
+}
+
 SBXRAY_DIR="${SBXRAY_DIR:-/root/sb-xray}"
 CN_EXIT_MODE="${CN_EXIT_MODE:-balance}"
 TS_HOSTNAME="${TS_HOSTNAME:-$(hostname)}"
+
+# 支持从文件读 authkey（避免明文出现在远端进程表 / shell 历史）
+if [ -z "$TS_AUTHKEY" ] && [ -n "$TS_AUTHKEY_FILE" ] && [ -f "$TS_AUTHKEY_FILE" ]; then
+    TS_AUTHKEY=$(tr -d ' \t\r\n' < "$TS_AUTHKEY_FILE")
+fi
 
 # ── 校验 ──────────────────────────────────────────────────────────
 [ -d "$SBXRAY_DIR" ] || die "未找到 sb-xray 目录: $SBXRAY_DIR（先部署 sb-xray 再跑本脚本）"
@@ -70,8 +86,9 @@ fi
 if [ -n "$TS_AUTHKEY" ]; then
     log "tailscale up（hostname=$TS_HOSTNAME）"
     # --accept-dns=false：VPS 不需要 MagicDNS，避免改写本机 DNS 影响容器
-    tailscale up --authkey="$TS_AUTHKEY" --hostname="$TS_HOSTNAME" --accept-dns=false \
-        || warn "tailscale up 未成功，请手动检查（可能 authkey 失效）"
+    # with_timeout：authkey 失效时 tailscale up 会退回交互式登录而挂死，限时兜底
+    with_timeout 40 tailscale up --authkey="$TS_AUTHKEY" --hostname="$TS_HOSTNAME" --accept-dns=false \
+        || warn "tailscale up 未成功（authkey 失效 / 超时？），将在自检反映为 Tailscale 未在网"
 else
     log "未提供 TS_AUTHKEY，假定 tailscale 已在网，跳过 up"
 fi
@@ -98,9 +115,10 @@ else
     _tmp="$_cf.new"
     if curl -fsSL "$COMPOSE_URL" -o "$_tmp" && [ -s "$_tmp" ]; then
         if grep -q "CN_EXIT_MODE" "$_tmp"; then
-            [ -f "$_cf" ] && cp "$_cf" "$_cf.bak"
+            # 只在 .bak 不存在时备份，保住首次的原始 compose（重跑不被覆盖）
+            [ -f "$_cf" ] && [ ! -f "$_cf.bak" ] && cp "$_cf" "$_cf.bak"
             mv "$_tmp" "$_cf"
-            log "  docker-compose.yml 已更新（原文件备份为 docker-compose.yml.bak）"
+            log "  docker-compose.yml 已更新（原始版本保留在 docker-compose.yml.bak）"
         else
             rm -f "$_tmp"; warn "  下载的 compose 不含 CN_EXIT_MODE 引用,疑似有误,保留原文件"
         fi
@@ -110,35 +128,69 @@ else
 fi
 
 # ── 5. 拉起容器 ───────────────────────────────────────────────────
-log "docker compose pull + up -d（顺带升级到最新镜像）"
 cd "$SBXRAY_DIR"
-if docker compose version >/dev/null 2>&1; then
-    docker compose pull && docker compose up -d
+# SKIP_PULL=1：只 up -d 不升级镜像（想单独开回国、不动镜像版本时用）
+if [ "${SKIP_PULL:-0}" = "1" ]; then
+    log "docker compose up -d（SKIP_PULL=1，不升级镜像）"
+    if docker compose version >/dev/null 2>&1; then docker compose up -d; else docker-compose up -d; fi
 else
-    docker-compose pull && docker-compose up -d
+    log "docker compose pull + up -d（顺带升级到最新镜像）"
+    if docker compose version >/dev/null 2>&1; then
+        docker compose pull && docker compose up -d
+    else
+        docker-compose pull && docker-compose up -d
+    fi
 fi
 
 # ── 6. 自检 ───────────────────────────────────────────────────────
+# 硬失败（容器/env/tailscale）计入 _fails → 影响退出码，供批量编排判好坏节点；
+# ping / socks5 探测为软告警（打洞预热期可能暂时不通），不计退出码。
 log "── 自检 ──"
+_fails=0
 sleep 5
+
 if docker ps --filter name=sb-xray --format '{{.Status}}' | grep -qiE 'up|healthy'; then
     log "  [ OK ] sb-xray 容器运行中"
 else
-    warn "  [FAIL] sb-xray 容器未运行，检查 docker compose logs"
+    warn "  [FAIL] sb-xray 容器未运行，检查 docker compose logs"; _fails=$((_fails+1))
 fi
+
 if docker exec sb-xray sh -c 'env | grep -q "CN_EXIT_MODE='"$CN_EXIT_MODE"'"' 2>/dev/null; then
     log "  [ OK ] 容器内 CN_EXIT_MODE=$CN_EXIT_MODE 生效"
 else
-    warn "  [FAIL] 容器内 CN_EXIT_MODE 未生效（可能需 docker compose up --force-recreate）"
-fi
-if tailscale status >/dev/null 2>&1 && ! tailscale status 2>/dev/null | grep -qiE 'Logged out|stopped'; then
-    log "  [ OK ] Tailscale 在网"
-    tailscale ping -c 1 --timeout 5s "$OPENWRT_TS_IP" >/dev/null 2>&1 \
-        && log "  [ OK ] 到 OpenWrt $OPENWRT_TS_IP 的 Tailscale 链路通" \
-        || warn "  [FAIL] 暂时 ping 不通 OpenWrt（链路可能需打洞，稍后由 keepalive 自愈）"
-else
-    warn "  [FAIL] Tailscale 未在网"
+    warn "  [FAIL] 容器内 CN_EXIT_MODE 未生效（compose 未含引用？跑 docker compose up -d --force-recreate）"; _fails=$((_fails+1))
 fi
 
-log "=== 完成。回国出口由 OpenWrt 侧 cn-bridge 拨号控制（热备 r-tunnel + 本机 socks5 腿）==="
+if tailscale status >/dev/null 2>&1 && ! tailscale status 2>/dev/null | grep -qiE 'Logged out|stopped'; then
+    log "  [ OK ] Tailscale 在网"
+    # ping 重试：打洞/DERP 预热期首次常超时，重试几次避免误报
+    _pinged=0; _i=1
+    while [ "$_i" -le 3 ]; do
+        if tailscale ping -c 1 --timeout 6s "$OPENWRT_TS_IP" >/dev/null 2>&1; then _pinged=1; break; fi
+        _i=$((_i+1)); sleep 3
+    done
+    if [ "$_pinged" = 1 ]; then
+        log "  [ OK ] 到 OpenWrt $OPENWRT_TS_IP 的 Tailscale 链路通"
+    else
+        warn "  [warn] 暂时 ping 不通 OpenWrt（打洞/DERP 预热中，keepalive 会自愈，非硬失败）"
+    fi
+    # socks5 腿端到端实测：经 OpenWrt SOCKS5 访问 geosite:cn 回显站，看是否走家宽出口
+    if command -v curl >/dev/null 2>&1; then
+        _sp="${CN_EXIT_SOCKS5_PORT:-7891}"
+        _cnip=$(with_timeout 15 curl -x "socks5h://$OPENWRT_TS_IP:$_sp" -s -m 12 http://cip.cc 2>/dev/null \
+                | grep -iE '^(IP|地址)' | head -1 | tr -s ' \t' ' ')
+        if [ -n "$_cnip" ]; then
+            log "  [ OK ] socks5 腿回国实测：$_cnip"
+        else
+            warn "  [warn] socks5 腿暂未探到回国出口（OpenClash :$_sp 未就绪 / 预热中，非硬失败）"
+        fi
+    fi
+else
+    warn "  [FAIL] Tailscale 未在网（authkey 失效？socks5 腿不可用）"; _fails=$((_fails+1))
+fi
+
 log "提示：若容器内 env 未更新，跑一次 'docker compose up -d --force-recreate'"
+if [ "$_fails" -gt 0 ]; then
+    die "自检 $_fails 项硬失败 —— 本节点未就绪，请按上面 [FAIL] 排查"
+fi
+log "=== 完成。回国出口由 OpenWrt 侧 cn-bridge 拨号控制（热备 r-tunnel + 本机 socks5 腿）==="
