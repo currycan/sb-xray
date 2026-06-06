@@ -14,6 +14,8 @@
 #   REVERSE_DOMAINS 经 bridge 出的内网域名，逗号分隔（可选，16 台建议统一）
 #   VPS_DOMAIN      本节点对外域名（可选，写进 .env domain）
 #   SHOUTRRR_URLS   事件总线告警 URL（可选）
+#   COMPOSE_URL     docker-compose.yml 下载源（默认仓库 main 的 raw）
+#   SKIP_COMPOSE_UPDATE  设 1 跳过 compose 同步（默认 0，会拉最新覆盖）
 #
 # 兼容 POSIX sh。
 
@@ -83,7 +85,31 @@ cat > /etc/cron.d/cn-exit-keepalive <<EOF
 EOF
 chmod 644 /etc/cron.d/cn-exit-keepalive
 
-# ── 4. 拉起容器 ───────────────────────────────────────────────────
+# ── 4. 同步 docker-compose.yml（确保含最新回国 env 引用）────────────
+# 旧部署的 compose 可能不含 ${CN_EXIT_MODE} / ${tsip} 等引用，导致上面写的
+# .env 完全不生效（容器只拿到 Dockerfile 默认值）。默认从仓库拉最新 compose；
+# 节点专属配置都在 .env，compose 是模板，覆盖安全。SKIP_COMPOSE_UPDATE=1 可跳过。
+COMPOSE_URL="${COMPOSE_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/docker-compose.yml}"
+if [ "${SKIP_COMPOSE_UPDATE:-0}" = "1" ]; then
+    log "跳过 docker-compose.yml 更新（SKIP_COMPOSE_UPDATE=1）"
+else
+    log "同步 docker-compose.yml ← $COMPOSE_URL"
+    _cf="$SBXRAY_DIR/docker-compose.yml"
+    _tmp="$_cf.new"
+    if curl -fsSL "$COMPOSE_URL" -o "$_tmp" && [ -s "$_tmp" ]; then
+        if grep -q "CN_EXIT_MODE" "$_tmp"; then
+            [ -f "$_cf" ] && cp "$_cf" "$_cf.bak"
+            mv "$_tmp" "$_cf"
+            log "  docker-compose.yml 已更新（原文件备份为 docker-compose.yml.bak）"
+        else
+            rm -f "$_tmp"; warn "  下载的 compose 不含 CN_EXIT_MODE 引用,疑似有误,保留原文件"
+        fi
+    else
+        rm -f "$_tmp"; warn "  docker-compose.yml 下载失败,保留原文件（回国 env 可能不生效）"
+    fi
+fi
+
+# ── 5. 拉起容器 ───────────────────────────────────────────────────
 log "docker compose pull + up -d（顺带升级到最新镜像）"
 cd "$SBXRAY_DIR"
 if docker compose version >/dev/null 2>&1; then
@@ -92,7 +118,7 @@ else
     docker-compose pull && docker-compose up -d
 fi
 
-# ── 5. 自检 ───────────────────────────────────────────────────────
+# ── 6. 自检 ───────────────────────────────────────────────────────
 log "── 自检 ──"
 sleep 5
 if docker ps --filter name=sb-xray --format '{{.Status}}' | grep -qiE 'up|healthy'; then
