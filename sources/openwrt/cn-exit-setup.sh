@@ -22,7 +22,7 @@ die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 ok=0
 bad=0
 check() {
-    # check "<描述>" <命令...>；命令成功计 ok，失败计 bad
+    # check "<描述>" <命令...>；命令成功计 ok，失败计 bad（硬失败，影响退出码）
     _desc=$1
     shift
     if "$@" >/dev/null 2>&1; then
@@ -32,6 +32,24 @@ check() {
         printf '  [FAIL] %s\n' "$_desc"
         bad=$((bad + 1))
     fi
+}
+
+check_soft() {
+    # check_soft "<描述>" <命令...>：时序敏感项（DERP 打洞预热 / OpenClash 重启后
+    # 异步注入规则），重试若干次；仍失败只 warn，不计 bad、不影响退出码。
+    _desc=$1
+    shift
+    _n=1
+    while [ "$_n" -le 4 ]; do
+        if "$@" >/dev/null 2>&1; then
+            printf '  [ OK ] %s\n' "$_desc"
+            return 0
+        fi
+        _n=$((_n + 1))
+        sleep 3
+    done
+    printf '  [warn] %s（时序未就绪，keepalive/OpenClash 稍后自愈，可重跑 verify）\n' "$_desc"
+    return 0
 }
 
 backup_file() {
@@ -704,8 +722,8 @@ verify() {
         check "WAN UDP GRO 已优化" sh -c "ethtool -k \$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print \$2}') 2>/dev/null | grep -q 'rx-udp-gro-forwarding: on'"
         check "已通告 routes ${TS_ADVERTISE_ROUTES}" sh -c "tailscale debug prefs 2>/dev/null | grep -q '${TS_ADVERTISE_ROUTES}'"
         check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
-        check "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
-        check "防火墙 bypass 规则已注入" sh -c "test \$(nft list ruleset 2>/dev/null | grep -c tailscale-bypass) -ge 1"
+        check_soft "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
+        check_soft "防火墙 bypass 规则已注入" sh -c "test \$(nft list ruleset 2>/dev/null | grep -c tailscale-bypass) -ge 1"
         check "tailscale 开机自启" /etc/init.d/tailscale enabled
     fi
     if mode_uses_reverse; then
@@ -754,8 +772,12 @@ main() {
         install_xray_bridge
     fi
     setup_monitor_cron
-    verify
-    log "=== 完成 ==="
+    if verify; then
+        log "=== 完成 ==="
+    else
+        warn "=== 完成：自检存在硬失败，请按上面 [FAIL] 排查（时序软项见 [warn]，可稍后重跑 verify）==="
+        exit 1
+    fi
 }
 
 main "$@"

@@ -399,7 +399,20 @@ curl -x <本地客户端代理> http://cip.cc
 
 ### 6.4 balance 模式：确认 r-tunnel 真被选中过
 
-🔬 由于 §3.2 的能力边界，balance 部署后**必须**确认 `r-tunnel` 确实参与了均衡，而非永远只走 `cn-exit`：停掉 SOCKS5 那条（或临时把 OpenClash 停掉）观察回国是否仍通（说明在走 r-tunnel）；反之停 bridge 观察是否切到 SOCKS5。两个方向都验证过，才算主备成立。若发现 `r-tunnel` 始终不被探测命中，退回单链路 `reverse` / `socks5`。
+🔬 由于 §3.2 的能力边界，balance 部署后**必须**确认 `r-tunnel` 确实参与了均衡，而非永远只走 `cn-exit`。两种验证：
+
+**① 非侵入（推荐先做）**——看两条腿是否都在承载流量。portal 上查 xray 统计：
+
+```sh
+docker exec sb-xray xray api statsquery --server=127.0.0.1:7978 2>/dev/null \
+  | grep -E 'reverse@portal.bridge|cn-exit>>>traffic'
+# 期望：user>>>reverse@portal.bridge>>>traffic（r-tunnel 腿）与
+#       outbound>>>cn-exit>>>traffic（socks5 腿）的 uplink/downlink 均 > 0 且随使用增长
+```
+
+> `r-tunnel` 是运行时虚拟出站、不在 `xr.json` 静态出站里，故 `xray api bi` 可能报 `unknown service RoutingService`（容器只开 StatsService）；用 `statsquery` 看 `reverse@portal.bridge` 用户流量即可佐证 bridge 已连上并在传数据。
+
+**② 侵入（故障转移演练）**——停一条腿看是否自动切换：停 bridge（`cn-bridge down <名>`，r-tunnel 断）观察回国是否仍通（切到 SOCKS5）；反之停 OpenClash（SOCKS5 断）观察是否仍通（走 r-tunnel）。两个方向都验证过，才算主备成立。若 `r-tunnel` 始终不被探测命中，退回单链路 `reverse` / `socks5`。
 
 ### 6.5 测试陷阱
 
