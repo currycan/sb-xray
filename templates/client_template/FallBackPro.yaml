@@ -202,6 +202,7 @@ rules:
   - RULE-SET,Twitter / Domain,推特社交
   - RULE-SET,Telegram / Domain,电报消息
   - RULE-SET,TelegramIP / IP,电报消息,no-resolve
+  - DST-PORT,5222,电报消息
   - RULE-SET,WhatsApp / Domain,WhatsApp
   - RULE-SET,Facebook / Domain,Facebook
   - RULE-SET,FacebookIP / IP,Facebook,no-resolve
