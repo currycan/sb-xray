@@ -24,7 +24,29 @@ log()  { printf '[cn-bridge] %s\n' "$*"; }
 warn() { printf '[cn-bridge] WARN: %s\n' "$*" >&2; }
 die()  { printf '[cn-bridge] ERROR: %s\n' "$*" >&2; exit 1; }
 
-[ -f "$NODES" ] || die "节点清单不存在: $NODES（先运行 cn-exit-setup.sh 生成）"
+usage() {
+    cat <<'USAGE'
+用法: cn-bridge [list|up <名>|down <名>|status|menu|-h|--help]
+
+sb-xray 回国 reverse bridge 多节点拨号管理。读 /etc/cn-exit/nodes.list
+（每行: <名> <FQDN> <token>，# 注释与空行忽略），每个拨通的节点对应独立的
+xray-bridge-<名> procd 服务 + /etc/xray/client-<名>.json。
+
+子命令:
+  list        列出所有节点 + 拨号/进程状态
+  up <名>     拨通（下载 client + 起服务 + 开机自启）；已拨则刷新 client 并重启
+  down <名>   断开（停服务 + disable + 删 client/service）
+  status      到 VPS:443 的 ESTABLISHED 概览 + 节点列表
+  menu        交互菜单（无参数时默认进入）
+
+说明: 热备常驻拨通由 cn-exit-setup.sh 初始化；冷备平时不拨，故障时 up 一条顶上。
+多进程 api 端口自动错开（17900+节点序号）。节点清单由 cn-exit-setup.sh 生成。
+USAGE
+}
+
+case "${1:-}" in -h|--help|help) usage; exit 0 ;; esac
+
+[ -f "$NODES" ] || die "节点清单不存在: ${NODES}（先运行 cn-exit-setup.sh 生成）"
 
 svc() { printf '/etc/init.d/xray-bridge-%s' "$1"; }
 cfg() { printf '%s/client-%s.json' "$XDIR" "$1"; }
@@ -153,5 +175,5 @@ case "${1:-menu}" in
     down)    cmd_down "$2" ;;
     status)  cmd_status ;;
     menu|'') cmd_menu ;;
-    *)       die "未知命令: $1（list|up|down|status|menu）" ;;
+    *)       die "未知命令: $1（list|up|down|status|menu，-h 查看用法）" ;;
 esac

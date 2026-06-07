@@ -12,6 +12,29 @@
 # 去抖：per-key 计数文件，连续失败达阈值才告警；恢复后发通知并清状态。
 # 兼容 BusyBox ash / POSIX sh —— 不用 bashism。
 
+usage() {
+    cat <<'USAGE'
+用法: cn-bridge-monitor [-h|--help]
+
+sb-xray 回国双腿探活告警。由 cn-exit-setup.sh 安装并加入 cron 周期调用
+（无参数运行 = 执行一轮检查）。配置读 /etc/cn-exit/monitor.env:
+  TG_TOKEN       telegram bot token（空 = 只记录、不告警）
+  TG_CHAT        telegram chat id
+  HOT            热备节点名（空格分隔），检查其 r-tunnel 隧道进程
+  MON_THRESHOLD  连续失败多少次才告警（去抖，默认 3）
+
+检查项: ① 热备 r-tunnel 隧道进程；② Tailscale 守护（socks5 腿命脉）；
+        ③ Tailscale 离线 peer（某 VPS 的 socks5 腿不可用）。
+去抖状态存 /tmp/cn-mon/（per-key 计数），恢复后发通知并清状态。
+USAGE
+}
+
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    '') : ;;
+    *) printf '[cn-mon] ERROR: 未知参数: %s（-h|--help 查看用法）\n' "$1" >&2; exit 1 ;;
+esac
+
 CONF=/etc/cn-exit/monitor.env
 [ -f "$CONF" ] && . "$CONF"
 STATE=/tmp/cn-mon
@@ -35,7 +58,7 @@ record() {
     else
         _c=$(cat "$_cf" 2>/dev/null || echo 0); _c=$((_c + 1)); echo "$_c" > "$_cf"
         if [ "$_c" -ge "$THRESH" ] && [ ! -f "$_af" ]; then
-            notify "⚠️ 回国告警：$_desc（连续 ${_c} 次探测失败）"; touch "$_af"
+            notify "⚠️ 回国告警：${_desc}（连续 ${_c} 次探测失败）"; touch "$_af"
         fi
     fi
 }
