@@ -231,7 +231,7 @@ flowchart TB
 | 行为 | 实现 |
 |---|---|
 | **事件类型识别** | 取 `X-Event` 请求头；缺失则退回 URL 路径（`/ban_bt` → `ban_bt`），再退回 `unknown` |
-| **消息拼装** | 标题 = `"{SHOUTRRR_TITLE_PREFIX} {event}"`；正文 = payload 每个字段一行 `key: value` |
+| **消息拼装** | 4 个内置 ban 事件 → 人话摘要：标题 = `"{SHOUTRRR_TITLE_PREFIX} 🚫 BT 下载已拦截"` 等中文标题，正文 = 「用户 X 尝试连接 Y」+ 来源/入站/时间（空字段整行省略，`ts` 转本地时间）；未登记的事件 → 标题 = `"{SHOUTRRR_TITLE_PREFIX} {event}"`，正文 = 每字段一行 `key: value`（剔除空值、`ts` 转可读） |
 | **多 URL 发送** | **同一事件的多条 URL 顺序发送**（`for url in urls`），每条独立 `try` + 10s 超时；单条失败 `continue`，不影响后续 |
 | **多事件并发** | `ThreadingHTTPServer`——不同事件各开线程处理，互不阻塞 |
 | **token 安全** | 日志只记 URL 的 **scheme**（`telegram`/`discord`），从不打印完整 URL |
@@ -494,7 +494,20 @@ docker exec sb-xray curl -sS http://127.0.0.1:18085/healthz   # 200 + body "ok"
 
 ## 9. 事件 payload 字段说明
 
-📘 JSON body 由 Xray [PR #5722](https://github.com/XTLS/Xray-core/pull/5722) 定义，forwarder 原样透传到通知正文（每字段一行 `key: value`）：
+📘 JSON body 由 Xray [PR #5722](https://github.com/XTLS/Xray-core/pull/5722) 定义。4 个内置 ban 事件的通知正文是从中提炼的人话摘要（`email` 取 `@` 前段、`source` 去端口、`ts` 转本地时间，空字段省略），收到的效果形如：
+
+```text
+[sb-xray] 🚫 BT 下载已拦截
+
+用户 user01 尝试连接
+tracker.example.org:6881
+
+来源: 198.51.100.42
+入站: reality-443 · vless/tcp
+时间: 06-07 22:31:40
+```
+
+未登记的事件（如 §5 验证用的 `manual.test`）退回每字段一行 `key: value`（剔除空值、`ts` 转可读）。payload 原始字段：
 
 | 字段 | 含义 | 示例 |
 |------|------|------|
