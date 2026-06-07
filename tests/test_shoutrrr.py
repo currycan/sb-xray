@@ -7,8 +7,10 @@ import json
 import socket
 import threading
 import time
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 
+import pytest
 from sb_xray import shoutrrr
 
 
@@ -16,6 +18,91 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+_FULL_BAN_PAYLOAD = {
+    "email": "user01@vless",
+    "level": "0",
+    "protocol": "vless",
+    "network": "tcp",
+    "source": "198.51.100.42:51234",
+    "destination": "tracker.example.org:6881",
+    "routeTarget": "",
+    "originalTarget": "tracker.example.org:6881",
+    "inboundTag": "reality-443",
+    "inboundName": "",
+    "inboundLocal": "",
+    "outboundTag": "block",
+    "ts": 1749307900,
+}
+
+
+def test_format_message_known_ban_event_summarises_payload():
+    title, body = shoutrrr._format_message("ban_bt", _FULL_BAN_PAYLOAD, "[p]")
+    assert title == "[p] 🚫 BT 下载已拦截"
+    assert "用户 user01 尝试连接" in body
+    assert "tracker.example.org:6881" in body
+    # source shown without port
+    assert "来源: 198.51.100.42" in body
+    assert ":51234" not in body
+    assert "入站: reality-443 · vless/tcp" in body
+    expected_ts = datetime.fromtimestamp(1749307900).strftime("%m-%d %H:%M:%S")
+    assert f"时间: {expected_ts}" in body
+    # noise fields must not leak into the summary
+    assert "level" not in body
+    assert "routeTarget" not in body
+    assert "outboundTag" not in body
+
+
+@pytest.mark.parametrize(
+    ("event", "expected_title"),
+    [
+        ("ban_bt", "🚫 BT 下载已拦截"),
+        ("ban_geoip_cn", "🇨🇳 国内目标访问已拦截"),
+        ("ban_ads", "🛡️ 广告/追踪已拦截"),
+        ("ban_private_ip", "🔒 内网地址访问已拦截"),
+    ],
+)
+def test_format_message_titles_for_all_ban_events(event, expected_title):
+    title, _body = shoutrrr._format_message(event, _FULL_BAN_PAYLOAD, "[sb-xray]")
+    assert title == f"[sb-xray] {expected_title}"
+
+
+def test_format_message_omits_lines_for_missing_fields():
+    title, body = shoutrrr._format_message(
+        "ban_ads", {"email": "user02@trojan", "ts": "not-a-number"}, "[p]"
+    )
+    assert title == "[p] 🛡️ 广告/追踪已拦截"
+    assert "用户 user02" in body
+    # no destination / source / inbound / unparsable ts → those lines vanish
+    assert "尝试连接" not in body
+    assert "来源:" not in body
+    assert "入站:" not in body
+    assert "时间:" not in body
+
+
+def test_format_message_known_event_empty_payload_falls_back_to_event_name():
+    _title, body = shoutrrr._format_message("ban_bt", {}, "[p]")
+    assert body == "ban_bt"
+
+
+def test_format_message_unknown_event_keeps_kv_dump_without_blanks():
+    payload = {"email": "demo", "routeTarget": "", "inboundName": None, "ts": 1749307900}
+    title, body = shoutrrr._format_message("manual.test", payload, "[p]")
+    assert title == "[p] manual.test"
+    assert "email: demo" in body
+    # blank/None values are dropped
+    assert "routeTarget" not in body
+    assert "inboundName" not in body
+    # ts becomes human-readable
+    expected_ts = datetime.fromtimestamp(1749307900).strftime("%m-%d %H:%M:%S")
+    assert f"ts: {expected_ts}" in body
+    assert "1749307900" not in body
+
+
+def test_format_message_unknown_event_keeps_unparsable_ts_verbatim():
+    _title, body = shoutrrr._format_message("manual.test", {"ts": "oops"}, "[p]")
+    assert "ts: oops" in body
 
 
 def test_parse_urls_splits_on_semicolons():
@@ -77,10 +164,10 @@ def test_send_invokes_shoutrrr_once_per_url(monkeypatch, caplog):
         assert cmd[0] == "shoutrrr"
         assert cmd[1] == "send"
         assert "--title" in cmd
-        assert cmd[cmd.index("--title") + 1] == "[p] ban_ads"
+        assert cmd[cmd.index("--title") + 1] == "[p] 🛡️ 广告/追踪已拦截"
         body = cmd[cmd.index("--message") + 1]
-        assert "email: x" in body
-        assert "source: 1.2.3.4" in body
+        assert "用户 x" in body
+        assert "来源: 1.2.3.4" in body
 
     # success path should log scheme (not token) + event
     messages = [r.getMessage() for r in caplog.records]

@@ -28,12 +28,23 @@ import logging
 import os
 import shlex
 import subprocess
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
 DEFAULT_PORT: Final[int] = 18085
 DEFAULT_TITLE_PREFIX: Final[str] = "[sb-xray]"
 _SHOUTRRR_TIMEOUT_SEC: Final[int] = 10
+
+# X-Event → 人话标题。命中的事件用摘要正文（见 _format_message），
+# 未登记的事件退回 key:value 列表兜底，新事件不至于变成乱码。
+_BAN_TITLES: Final[dict[str, str]] = {
+    "ban_bt": "🚫 BT 下载已拦截",
+    "ban_geoip_cn": "🇨🇳 国内目标访问已拦截",
+    "ban_ads": "🛡️ 广告/追踪已拦截",
+    "ban_private_ip": "🔒 内网地址访问已拦截",
+}
+_TS_FORMAT: Final[str] = "%m-%d %H:%M:%S"
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +55,66 @@ def _parse_urls(raw: str | None) -> list[str]:
     return [u for u in raw.split(";") if u.strip()]
 
 
+def _format_ts(value: object) -> str | None:
+    """Unix 秒 → 本地时间（容器 TZ）；解析不了返回 None，绝不抛异常。"""
+    try:
+        return datetime.fromtimestamp(int(value)).strftime(_TS_FORMAT)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, str]:
+    """把 webhook payload 拼成人话 (title, body)。
+
+    已知 ban 事件 → emoji 标题 + 摘要正文（谁连了什么 + 来源/入站/时间），
+    空值字段整行省略；未知事件 → 原 key:value 列表，但剔除空值、ts 转可读。
+    """
+    if event in _BAN_TITLES:
+        title = f"{title_prefix} {_BAN_TITLES[event]}"
+        user = str(payload.get("email") or "").split("@", 1)[0]
+        destination = str(payload.get("destination") or "")
+        blocks: list[str] = []
+        if user and destination:
+            blocks.append(f"用户 {user} 尝试连接\n{destination}")
+        elif user:
+            blocks.append(f"用户 {user}")
+        elif destination:
+            blocks.append(f"目标 {destination}")
+
+        details: list[str] = []
+        source = str(payload.get("source") or "")
+        if source:
+            details.append(f"来源: {source.rsplit(':', 1)[0]}")
+        inbound = str(payload.get("inboundTag") or "")
+        transport = "/".join(
+            str(payload.get(k) or "") for k in ("protocol", "network") if payload.get(k)
+        )
+        if inbound and transport:
+            details.append(f"入站: {inbound} · {transport}")
+        elif inbound:
+            details.append(f"入站: {inbound}")
+        ts_readable = _format_ts(payload.get("ts"))
+        if ts_readable:
+            details.append(f"时间: {ts_readable}")
+        if details:
+            blocks.append("\n".join(details))
+        # payload 全空时给个非空正文，避免 shoutrrr 拒发空消息
+        return title, "\n\n".join(blocks) or event
+
+    title = f"{title_prefix} {event}"
+    lines: list[str] = []
+    for k, v in payload.items():
+        if v is None or v == "":
+            continue
+        if k == "ts":
+            readable = _format_ts(v)
+            if readable:
+                lines.append(f"ts: {readable}")
+                continue
+        lines.append(f"{k}: {v}")
+    return title, "\n".join(lines) or event
+
+
 def _send(urls: list[str], title_prefix: str, event: str, payload: dict) -> None:
     if not urls:
         logger.info(
@@ -52,8 +123,7 @@ def _send(urls: list[str], title_prefix: str, event: str, payload: dict) -> None
             json.dumps(payload, ensure_ascii=False),
         )
         return
-    title = f"{title_prefix} {event}"
-    body = "\n".join(f"{k}: {v}" for k, v in payload.items())
+    title, body = _format_message(event, payload, title_prefix)
     for url in urls:
         # URL 只用 scheme 作为日志识别符,不暴露 token
         url_scheme = url.split("://", 1)[0] if "://" in url else "?"
