@@ -19,6 +19,32 @@ log()  { printf '[install] %s\n' "$*"; }
 warn() { printf '[install] WARN: %s\n' "$*" >&2; }
 die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
+usage() {
+    cat <<'USAGE'
+用法: sh cn-exit-setup.sh [-h|--help]
+
+sb-xray OpenWrt 回国出口（CN exit）一键配置。幂等可重跑，按 CN_EXIT_MODE 选方案:
+  socks5    仅装 Tailscale（kernel TUN + subnet router + exit node），VPS 经
+            OpenClash SOCKS5 回国的落地
+  reverse   仅装 xray reverse bridge 落地机（主动拨向 VPS 建反向隧道）
+  balance   两者都装（VPS 侧 leastPing 主备故障转移，默认/推荐）
+
+配置来源（config.env 存在时覆盖同名环境变量；CONFIG=<path> 可改路径）:
+  cp config.env.example config.env && vi config.env && sh cn-exit-setup.sh
+  或内联: CN_EXIT_MODE=reverse VPS_DOMAIN=x.com SUBSCRIBE_TOKEN=xx sh cn-exit-setup.sh
+
+关键变量（完整说明见 config.env.example）:
+  节点清单    NODES_FILE(默认同目录 nodes.list) / BRIDGE_NODES / VPS_DOMAIN+SUBSCRIBE_TOKEN
+  Tailscale   PEER_TS_IP TS_HOSTNAME TS_VERSION TS_PORT(默认 41641) TS_ADVERTISE_ROUTES
+  reverse     XRAY_VERSION BRIDGE_HOT；监控 ALERT_TG_TOKEN ALERT_TG_CHAT
+  其他        RELOAD_OPENCLASH=1（完成后自动重启 OpenClash）ARCH_OVERRIDE=arm64|amd64
+
+前置: fw4/nftables 的 OpenWrt；socks5/balance 模式需已装 OpenClash。
+完成后自动自检（verify）：硬失败非 0 退出，时序软项只 warn 可稍后重跑复查。
+配套工具: cn-bridge（隧道拨号管理）、cn-bridge-monitor（探活告警），见 README.md。
+USAGE
+}
+
 ok=0
 bad=0
 check() {
@@ -108,7 +134,7 @@ load_config() {
     DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
     case "$CN_EXIT_MODE" in
         socks5|reverse|balance) : ;;
-        *) die "CN_EXIT_MODE 非法: $CN_EXIT_MODE（应为 socks5|reverse|balance）" ;;
+        *) die "CN_EXIT_MODE 非法: ${CN_EXIT_MODE}（应为 socks5|reverse|balance）" ;;
     esac
     log "配置来源: $_cfg_src (CN_EXIT_MODE=$CN_EXIT_MODE)"
 }
@@ -138,7 +164,7 @@ validate_config() {
         eval "_val=\$$_v"
         [ -n "$_val" ] || _missing="$_missing $_v"
     done
-    [ -z "$_missing" ] || die "缺少必填项 (CN_EXIT_MODE=$CN_EXIT_MODE):$_missing（用 config.env 或内联环境变量提供）"
+    [ -z "$_missing" ] || die "缺少必填项 (CN_EXIT_MODE=$CN_EXIT_MODE):${_missing}（用 config.env 或内联环境变量提供）"
 
     # 轻量格式校验（仅 warn，不阻断）
     if [ -n "$VPS_DOMAIN" ]; then
@@ -179,7 +205,7 @@ detect_arch() {
             TS_ARCH=amd64
             XRAY_ZIP=Xray-linux-64.zip ;;
         *)
-            die "不支持的架构: $_m（可用 config 的 ARCH_OVERRIDE=arm64|amd64 覆盖）" ;;
+            die "不支持的架构: ${_m}（可用 config 的 ARCH_OVERRIDE=arm64|amd64 覆盖）" ;;
     esac
     log "架构: $_m -> tailscale=$TS_ARCH xray=$XRAY_ZIP"
 }
@@ -472,6 +498,41 @@ EOF
     log "当前 tailscale-bypass 规则数: $_cnt"
 }
 
+setup_tailscale_persistent_bypass() {
+    # 上面钩子注入的 mangle return 规则随 openclash_mangle* 链在 OpenClash 重启时
+    # 被 flush，钩子要到启动 Step 6 才重新注入 —— 窗口期（~20s）tailscaled 的 UDP
+    # 被打标进 TUN，mihomo EIN NAT 绑同源端口 ${TS_PORT} 与 tailscaled 冲突
+    # （listenLocalConn address already in use 刷屏 + 直连退化 DERP）。
+    # 兜底：fw4 把 /etc/nftables.d/*.nft 持久 include 进 inet fw4 表，OpenClash
+    # 只 flush 自己的 openclash_* 链不会动它。挂在 mangle(-150) 之后（-149）把
+    # ${TS_PORT} 流量的 fwmark 清零；output 链用 route 类型，改 mark 触发重路由
+    # 回主表，不再进 utun。只匹配 OpenClash 的 fwmark 0x162（hardcode，OpenClash
+    # 多年固定值 → ip rule lookup 354），不能写 mark != 0 —— 那会误清 tailscaled
+    # 自身的 0x80000 防环路标记。窗口期之外无 0x162 标记，规则不命中、零开销。
+    _inc=/etc/nftables.d/99-cn-exit-tailscale.nft
+    mkdir -p /etc/nftables.d
+    backup_file "$_inc"
+    cat > "$_inc" <<EOF
+# sb-xray cn-exit-setup.sh 生成：tailscaled UDP ${TS_PORT} 持久绕过（OpenClash 重启窗口期兜底）
+chain cn_exit_ts_output {
+    type route hook output priority -149; policy accept;
+    meta mark 0x162 udp sport ${TS_PORT} counter meta mark set 0 comment "tailscale-bypass-persist"
+    meta mark 0x162 udp dport ${TS_PORT} counter meta mark set 0 comment "tailscale-bypass-persist"
+}
+chain cn_exit_ts_prerouting {
+    type filter hook prerouting priority -149; policy accept;
+    meta mark 0x162 udp sport ${TS_PORT} counter meta mark set 0 comment "tailscale-bypass-persist"
+    meta mark 0x162 udp dport ${TS_PORT} counter meta mark set 0 comment "tailscale-bypass-persist"
+}
+EOF
+    /etc/init.d/firewall reload >/dev/null 2>&1
+    if nft list chain inet fw4 cn_exit_ts_output >/dev/null 2>&1; then
+        log "持久 bypass 链已生效: cn_exit_ts_output/cn_exit_ts_prerouting (UDP ${TS_PORT})"
+    else
+        warn "持久 bypass 链未生效 —— 检查 fw4 是否 include /etc/nftables.d（fw4 print 排查）"
+    fi
+}
+
 # ── reverse bridge 与 OpenClash 解耦 ──────────────────────────────
 
 # ── mihomo SOCKS 入站放行 Tailscale 免认证 ───────────────────────
@@ -610,7 +671,7 @@ generate_nodes_list() {
     } > "$_nl"
     chmod 600 "$_nl"
     _cnt=$(awk '!/^#/&&NF{c++} END{print c+0}' "$_nl")
-    log "已生成节点清单 $_nl（$_cnt 个节点）"
+    log "已生成节点清单 ${_nl}（$_cnt 个节点）"
 }
 
 install_cn_bridge() {
@@ -724,6 +785,7 @@ verify() {
         check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
         check_soft "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
         check_soft "防火墙 bypass 规则已注入" sh -c "test \$(nft list ruleset 2>/dev/null | grep -c tailscale-bypass) -ge 1"
+        check "持久 bypass 链已加载 (nftables.d)" nft list chain inet fw4 cn_exit_ts_output
         check "tailscale 开机自启" /etc/init.d/tailscale enabled
     fi
     if mode_uses_reverse; then
@@ -763,6 +825,7 @@ main() {
         setup_tailscale
         install_keepalive_cron
         setup_tailscale_firewall_bypass
+        setup_tailscale_persistent_bypass
         setup_socks_skip_auth
         setup_socks5_force_direct   # socks5 入站回国流量强制 direct，对齐 r-tunnel
     fi
@@ -780,4 +843,8 @@ main() {
     fi
 }
 
-main "$@"
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    '') main ;;
+    *) die "未知参数: $1（-h|--help 查看用法）" ;;
+esac
