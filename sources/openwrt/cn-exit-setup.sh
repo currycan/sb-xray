@@ -799,6 +799,11 @@ verify() {
             check "热备 $_bn client 无占位符" sh -c "! grep -q '\${' /etc/xray/client-$_bn.json 2>/dev/null"
         done
     fi
+    # lan_ac_traffic enabled='1' 时 OpenClash 仅拦截 FakeIP 段流量，裸 IP 直连
+    # （Telegram 原生客户端等不查 DNS 的应用）绕过代理出墙被黑洞；该开关在
+    # LuCI 上易被误开，且症状隐蔽（域名通、裸 IP 不通），此处兜底拦截。
+    check "OpenClash 未开启「仅代理 FakeIP」绕过 (lan_ac_traffic)" \
+        sh -c "[ \"\$(uci -q get 'openclash.@lan_ac_traffic[0].enabled' 2>/dev/null)\" != '1' ]"
 
     printf '\n[cn-exit] 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
     if [ "$bad" -gt 0 ]; then

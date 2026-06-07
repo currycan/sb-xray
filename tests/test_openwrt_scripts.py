@@ -122,3 +122,15 @@ def test_setup_verify_covers_persistent_bypass() -> None:
     """verify() 自检必须包含持久链存在性检查。"""
     src = _SETUP.read_text(encoding="utf-8")
     assert "nft list chain inet fw4 cn_exit_ts_output" in src
+
+
+def test_setup_verify_guards_openclash_fakeip_only_bypass() -> None:
+    """verify() 必须自检 OpenClash 的 lan_ac_traffic 绕过开关未被打开。
+
+    该开关 enabled='1' 时 OpenClash 仅拦截 FakeIP 段（198.19.0.0/16）流量，
+    裸 IP 直连（Telegram 原生客户端等不查 DNS 的应用）会绕过代理直接出墙
+    被黑洞——症状是「域名流量通、裸 IP 流量不通」，极难排查。
+    """
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "openclash.@lan_ac_traffic[0].enabled" in src
+    assert "lan_ac_traffic" in src
