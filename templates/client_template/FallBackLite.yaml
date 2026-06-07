@@ -177,6 +177,7 @@ rules:
   - RULE-SET,Twitter / Domain,国外流量
   - RULE-SET,Telegram / Domain,国外流量
   - RULE-SET,TelegramIP / IP,国外流量,no-resolve
+  - DST-PORT,5222,国外流量
   - RULE-SET,WhatsApp / Domain,国外流量
   - RULE-SET,Facebook / Domain,国外流量
   - RULE-SET,FacebookIP / IP,国外流量,no-resolve
