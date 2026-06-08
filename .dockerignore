@@ -14,6 +14,7 @@ release.sh
 
 # ── Git 相关 ──────────────────────────────────────────────────────────────────
 .git/
+.github/
 .gitignore
 .gitattributes
 
@@ -23,12 +24,14 @@ release.sh
 .gemini/
 .idea/
 .vscode/
+.credentials/
 .editorconfig
 .prettierignore
 
 # ── 文档与说明 ────────────────────────────────────────────────────────────────
 CLAUDE.md
 docs/
+references/
 *.md
 **/*.md
 
