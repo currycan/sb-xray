@@ -10,7 +10,7 @@
   "sing_box": "1.13.13",
   "xray": "26.3.27",
   "digests": {
-    "mihomo_amd64_sha256": "fb3e34c55844f389ff54679e5a3aec331d5ec38006c20f8dcc476fb47768a58f",
+    "mihomo_amd64_sha256": "36850c946615f5c712946b62dbbbd06f6941d6d8a7543b315198bcb24ada3ea9",
     "mihomo_arm64_sha256": "87db0c6660a9557a901b5750f997967e71d8c0af07ea1d1dd4d04c28da7f7e6f",
     "http_meta_bundle_sha256": "9d2201d3c56c8aba404315ffdecd773dc7be6bd46e61d8cdf568d081d234acf2",
     "http_meta_tpl_sha256": "6f3ecf199ae9a5014b0090a46b0dfc16c64e4fc45350880726a56ecb652dd16c",
