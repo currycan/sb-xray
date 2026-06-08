@@ -207,6 +207,8 @@ jq -r 'to_entries[] | select(.key != "digests") | "\(.key): \(.value)"' versions
 
 配套的二进制 SHA256 校验值存于 `versions.json` 的 `digests` 字段（由 CI 同步刷新），Dockerfile 通过 build-arg 传入并在下载阶段强制校验。任何 digest 缺失都会导致 `build.sh` 直接退出。
 
+> **per-arch 资源名陷阱**：amd64 的 mihomo 用 **`-compatible`** 资源（兼容老 CPU），digest 的计算来源必须与 Dockerfile 下载用**完全相同**的资源名，否则校验失败。详见 [Q8](#q8-amd64-构建在-mihomo-sha256-校验处失败)。
+
 ### 4.2 版本覆盖
 
 可通过环境变量强制指定版本：
@@ -338,6 +340,36 @@ docker run --rm currycan/sb-xray:latest bash -c "
 1. 确认 UPX 压缩正常执行
 2. 确认使用 `--no-cache` 的 `apk add`
 3. 多阶段构建已自动丢弃中间层
+
+### Q8: amd64 构建在 mihomo SHA256 校验处失败
+
+**现象**: amd64 构建在下载 mihomo 这步报 `/tmp/mihomo.gz: FAILED` / `sha256sum: WARNING: 1 of 1 computed checksums did NOT match`，而 arm64 构建正常。
+
+**原因**: amd64 的 mihomo 使用 **`-compatible`** 资源（`mihomo-linux-amd64-compatible-v${VER}.gz`）。通用 amd64 资源是按 x86-64-v3 微架构优化的，在 SSE4.2 等 **≤x86-64-v2 老 CPU** 上会触发非法指令崩溃；`-compatible` 资源专为兼容老 CPU 而编。
+
+SHA digest 的计算来源必须与 Dockerfile 实际下载用**完全相同**的资源名。以下三处的 amd64 资源名必须严格一致，任一处误用通用 `mihomo-linux-amd64-v${VER}.gz` 而其余用 `-compatible`，算出的 build-arg SHA 就与实下文件不符，导致下载阶段 `sha256sum -c` 失败：
+
+| 位置 | 作用 | amd64 资源名 |
+|---|---|---|
+| `Dockerfile` | 下载并校验 | `mihomo-linux-amd64-compatible-v${VER}.gz` |
+| `build.sh`（`refresh` 模式 `get_asset_digest`） | 本地刷新算 digest | `mihomo-linux-amd64-compatible-v${VER}.gz` |
+| `.github/workflows/daily-build.yml`（check job `digest`） | CI 算 digest 并写回 `versions.json` | `mihomo-linux-amd64-compatible-v${VER}.gz` |
+
+> arm64 没有 `-compatible` 变体，三处统一用通用 `mihomo-linux-arm64-v${VER}.gz`。
+
+**解决 / 自检**: 确认三处的 amd64 资源名一致（输出应全部带 `-compatible`）：
+
+```bash
+grep -oE 'mihomo-linux-amd64[^"]*\.gz' Dockerfile build.sh .github/workflows/daily-build.yml
+# 期望：三行均为 mihomo-linux-amd64-compatible-v${...}.gz
+```
+
+校验运行镜像里的 mihomo 在目标 CPU 上确实可执行（尤其老 CPU 节点）：
+
+```bash
+docker exec sb-xray /sub-store/http-meta/http-meta -v
+# 期望：打印 "Mihomo Meta v... linux amd64 ..." 且退出码为 0（非法指令会非 0 退出）
+```
 
 ---
 
