@@ -112,3 +112,42 @@ def test_isp_retest_env_var_invalid_disables(
     sbcron.install_crontab(cron_file=target)
     content = target.read_text(encoding="utf-8")
     assert "isp-retest" not in content
+
+
+def test_installs_substore_check_default(tmp_path: Path) -> None:
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "30 4 * * * /scripts/entrypoint.py substore-check" in content
+    assert content.count("substore-check") == 1
+
+
+def test_substore_check_env_custom_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SUBSTORE_CHECK_CRON", "0 5 * * *")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "0 5 * * * /scripts/entrypoint.py substore-check" in content
+
+
+def test_substore_check_disabled_with_empty_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SUBSTORE_CHECK_CRON", "")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "substore-check" not in content
+    assert "geo-update" in content
+
+
+def test_substore_check_replaces_stale_entry(tmp_path: Path) -> None:
+    target = tmp_path / "crontab"
+    target.write_text(
+        "0 1 * * * /scripts/entrypoint.py substore-check >> /var/log/x.log 2>&1\n",
+        encoding="utf-8",
+    )
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert content.count("substore-check") == 1
+    assert "30 4 * * *" in content

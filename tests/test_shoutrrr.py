@@ -161,6 +161,24 @@ def test_format_message_speed_test_marks_failed_tag():
     assert "✗ proxy-la-isp  0 Mbps  (超时 0/2)" in body
 
 
+def test_format_message_substore_failure_lists_failed_subs():
+    payload = {
+        "event": "substore.sub_fetch.failed",
+        "failed": 2,
+        "total": 10,
+        "items": [
+            {"name": "ssrdog", "airport": True, "reason": "HTTP 403"},
+            {"name": "node-jp", "airport": False, "reason": "0 节点"},
+        ],
+    }
+    title, body = shoutrrr._format_message("substore.sub_fetch.failed", payload, "[sb-xray:dc99-3]")
+    assert title == "[sb-xray:dc99-3] 🔴 订阅拉取失败"
+    assert "✗ ssrdog (机场) — HTTP 403" in body
+    assert "✗ node-jp — 0 节点" in body
+    assert "共 2/10 条失败" in body
+    assert "event:" not in body
+
+
 def test_post_uses_payload_event_when_no_header(caplog):
     caplog.set_level("INFO", logger="sb_xray.shoutrrr")
     with _ServerThread() as srv:

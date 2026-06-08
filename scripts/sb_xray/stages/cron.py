@@ -1,13 +1,16 @@
 """Root crontab install (entrypoint.sh:main_init step 14 equivalent).
 
-Manages two periodic entries:
+Manages three periodic entries:
 
 1. **geo-update** (daily 03:00) — refresh GeoIP / GeoSite rule-sets.
 2. **isp-retest** (every N hours, driven by ``ISP_RETEST_INTERVAL_HOURS``,
    0 disables) — re-measure ISP bandwidth and hot-reconfigure the
    balancer if composition or top-1 tag changed.
+3. **substore-check** (daily, driven by ``SUBSTORE_CHECK_CRON``, default
+   ``30 4 * * *``, empty disables) — produce every remote Sub-Store
+   subscription and alert if any fails to fetch.
 
-Both entries are installed idempotently: each rewrite strips prior
+All entries are installed idempotently: each rewrite strips prior
 copies before appending, so upgrading a running container converges
 to the current shape without manual ``crontab -e``.
 """
@@ -24,6 +27,8 @@ _DEFAULT_CRON = Path("/var/spool/cron/crontabs/root")
 _GEO_ENTRY = "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
 _GEO_MARKER = "geo-update"
 _ISP_MARKER = "isp-retest"
+_SUBSTORE_MARKER = "substore-check"
+_SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
 
 
 def _hours_to_cron_spec(hours: int) -> str:
@@ -48,6 +53,19 @@ def _isp_retest_entry(hours: int) -> str | None:
         return None
     spec = _hours_to_cron_spec(hours)
     return f"{spec} /scripts/entrypoint.py isp-retest >> /var/log/isp_retest.log 2>&1"
+
+
+def _substore_check_entry() -> str | None:
+    """Daily Sub-Store fetch health check; ``SUBSTORE_CHECK_CRON=""`` disables.
+
+    The env value, when set, is a full cron spec (5 fields); unset falls
+    back to the daily default.
+    """
+    raw = os.environ.get("SUBSTORE_CHECK_CRON")
+    spec = _SUBSTORE_DEFAULT_CRON if raw is None else raw.strip()
+    if not spec:
+        return None
+    return f"{spec} /scripts/entrypoint.py substore-check >> /var/log/substore_check.log 2>&1"
 
 
 def _read_hours_env() -> int:
@@ -79,17 +97,23 @@ def install_crontab(
     """
     hours = _read_hours_env() if isp_hours is None else isp_hours
     isp_entry = _isp_retest_entry(hours)
+    substore_entry = _substore_check_entry()
 
     cron_file.parent.mkdir(parents=True, exist_ok=True)
     existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
     lines = [
         ln
         for ln in existing.splitlines()
-        if _GEO_MARKER not in ln and "geo_update.sh" not in ln and _ISP_MARKER not in ln
+        if _GEO_MARKER not in ln
+        and "geo_update.sh" not in ln
+        and _ISP_MARKER not in ln
+        and _SUBSTORE_MARKER not in ln
     ]
     lines.append(geo_entry)
     if isp_entry is not None:
         lines.append(isp_entry)
+    if substore_entry is not None:
+        lines.append(substore_entry)
     cleaned = "\n".join(lines).rstrip() + "\n"
     cron_file.write_text(cleaned, encoding="utf-8")
     cron_file.chmod(0o600)

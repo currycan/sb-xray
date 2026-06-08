@@ -236,6 +236,7 @@ docker compose restart
 | `ISP_RETEST_INTERVAL_HOURS` | `6` | 周期性带宽重测 cron 间隔；`0` 禁用 |
 | `ISP_RETEST_DELTA_PCT` | `15` | 重测后触发 daemon restart 的最小速率变化百分比；`999` 实质禁用重启 |
 | `ISP_RETEST_ENABLED` | `true` | 即使 cron 已安装,也可以通过此开关让子命令 no-op |
+| `SUBSTORE_CHECK_CRON` | `30 4 * * *` | 每日产出全部 remote 订阅做拉取自检的 cron 表达式；任一订阅失败（HTTP 非 2xx 或 0 节点）即发 `substore.sub_fetch.failed` 告警；置空 `""` 禁用 |
 | `ISP_PER_SERVICE_SB` | `false` | 开启后 sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 生成独立 `isp-auto-<service>` urltest balancer,各自用该服务的真实域名探测;xray 因 observatory 单例不受影响 |
 | `ISP_FALLBACK_STRATEGY` | `direct` | `direct`(静默直连) / `block`(fail-closed,CN / HK / RU 建议) |
 | `ISP_SPEED_CACHE_TTL_MIN` | `60` | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
