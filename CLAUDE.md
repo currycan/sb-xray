@@ -60,6 +60,17 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Verified, Not Imagined
+
+**Everything you state must be grounded in evidence you actually checked — never in assumption.**
+
+- Separate what you observed from what you inferred. Assert only what you verified.
+- Before stating something as true, confirm it: run the command, read the file, check the source.
+- If you can't verify it yet, say so — mark it unverified rather than asserting it.
+- When new evidence contradicts an earlier claim, retract it explicitly in the same turn.
+
+The test: for every claim, could you point to what you checked to back it? If not, verify it or don't assert it.
+
 ---
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, clarifying questions come before implementation rather than after mistakes, and every claim is verified rather than assumed.
