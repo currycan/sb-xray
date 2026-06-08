@@ -104,6 +104,31 @@ def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
     return title, "\n\n".join(blocks)
 
 
+def _format_substore_failure(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """substore.sub_fetch.failed → 哪几条订阅今日拉取失败 + 失败原因。"""
+    title = f"{title_prefix} 🔴 订阅拉取失败"
+    items = payload.get("items")
+    lines: list[str] = []
+    if isinstance(items, list):
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "?")
+            tag = " (机场)" if it.get("airport") else ""
+            reason = str(it.get("reason") or "")
+            line = f"✗ {name}{tag}"
+            if reason:
+                line += f" — {reason}"
+            lines.append(line)
+    blocks: list[str] = []
+    if lines:
+        blocks.append("\n".join(lines))
+    failed, total = payload.get("failed"), payload.get("total")
+    if isinstance(failed, int) and isinstance(total, int):
+        blocks.append(f"共 {failed}/{total} 条失败")
+    return title, "\n\n".join(blocks) or "订阅拉取失败"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,6 +154,8 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
     """
     if event == "isp.speed_test.result":
         return _format_speed_test(payload, title_prefix)
+    if event == "substore.sub_fetch.failed":
+        return _format_substore_failure(payload, title_prefix)
     if event in _BAN_TITLES:
         title = f"{title_prefix} {_BAN_TITLES[event]}"
         user = str(payload.get("email") or "").split("@", 1)[0]

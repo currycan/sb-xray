@@ -153,6 +153,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
 
     sub.add_parser(
+        "substore-check",
+        help="Produce every remote Sub-Store subscription; alert on fetch failures (cron entry).",
+    )
+
+    sub.add_parser(
         "xray-run",
         help="Clean stale UDS sockets in /dev/shm, then exec xray (supervisord-managed).",
     )
@@ -714,6 +719,11 @@ def main(argv: list[str] | None = None) -> int:
         from sb_xray.stages import isp_retest
 
         return isp_retest.run()
+
+    if args.command == "substore-check":
+        from sb_xray import substore_check
+
+        return substore_check.run_check_and_report()
 
     if args.command == "xray-run":
         from sb_xray.stages import xray_run
