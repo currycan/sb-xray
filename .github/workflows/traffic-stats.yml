@@ -36,6 +36,11 @@ jobs:
         env:
           TRAFFIC_ACTION_TOKEN: ${{ secrets.TRAFFIC_ACTION_TOKEN }}
 
+      # 上一步是 Docker action，以 root 创建 traffic/ 目录与 CSV；
+      # 交还属主，否则后续 runner 用户无法在该目录写入 PNG
+      - name: Normalize traffic dir ownership
+        run: sudo chown -R "$(id -u):$(id -g)" traffic
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
