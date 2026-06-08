@@ -355,7 +355,7 @@ else
     HTTP_META_BUNDLE_SHA=$(get_asset_digest xream/http-meta "$HTTP_META_V" "http-meta.bundle.js")
     HTTP_META_TPL_SHA=$(get_asset_digest xream/http-meta "$HTTP_META_V" "tpl.yaml")
     SUB_STORE_BACKEND_SHA=$(get_asset_digest sub-store-org/Sub-Store "$SUB_STORE_BACKEND_V" "sub-store.bundle.js")
-    MIHOMO_AMD64_SHA=$(get_asset_digest MetaCubeX/mihomo "v$MIHOMO_V" "mihomo-linux-amd64-v${MIHOMO_V}.gz")
+    MIHOMO_AMD64_SHA=$(get_asset_digest MetaCubeX/mihomo "v$MIHOMO_V" "mihomo-linux-amd64-compatible-v${MIHOMO_V}.gz")
     MIHOMO_ARM64_SHA=$(get_asset_digest MetaCubeX/mihomo "v$MIHOMO_V" "mihomo-linux-arm64-v${MIHOMO_V}.gz")
     DUFS_AMD64_SHA=$(get_asset_digest sigoden/dufs "v$DUFS_V" "dufs-v${DUFS_V}-x86_64-unknown-linux-musl.tar.gz")
     DUFS_ARM64_SHA=$(get_asset_digest sigoden/dufs "v$DUFS_V" "dufs-v${DUFS_V}-arm-unknown-linux-musleabihf.tar.gz")

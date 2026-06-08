@@ -42,18 +42,21 @@ RUN set -ex; \
   echo "${HTTP_META_TPL_SHA256}  /sub-store/http-meta/tpl.yaml" | sha256sum -c -
 
 # --- Mihomo ---
+# amd64 使用 -compatible（GOAMD64=v1）构建：裸 amd64 资产是 v3 微架构，
+# 在 ≤x86-64-v2 的 VPS（如仅 sse4_2 的机器）上无法运行，会导致 http-meta 的
+# mihomo 订阅转换失效。arm64 无此问题，沿用常规资产。
 ARG MIHOMO_VERSION="1.19.24"
 ARG MIHOMO_AMD64_SHA256=""
 ARG MIHOMO_ARM64_SHA256=""
 RUN set -ex; \
   case "${TARGETARCH}" in \
-    amd64) EXPECTED_SHA="${MIHOMO_AMD64_SHA256}";; \
-    arm64) EXPECTED_SHA="${MIHOMO_ARM64_SHA256}";; \
+    amd64) EXPECTED_SHA="${MIHOMO_AMD64_SHA256}"; MIHOMO_ASSET="mihomo-linux-amd64-compatible-v${MIHOMO_VERSION}.gz";; \
+    arm64) EXPECTED_SHA="${MIHOMO_ARM64_SHA256}"; MIHOMO_ASSET="mihomo-linux-arm64-v${MIHOMO_VERSION}.gz";; \
     *)     echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
   esac; \
   [ -n "${EXPECTED_SHA}" ] || { echo "ERROR: MIHOMO_$(echo "${TARGETARCH}" | tr a-z A-Z)_SHA256 build-arg required"; exit 1; }; \
   curl -fsSL --retry 5 --retry-delay 5 -o /tmp/mihomo.gz \
-    "https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VERSION}/mihomo-linux-${TARGETARCH}-v${MIHOMO_VERSION}.gz"; \
+    "https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VERSION}/${MIHOMO_ASSET}"; \
   echo "${EXPECTED_SHA}  /tmp/mihomo.gz" | sha256sum -c -; \
   gzip -d -c /tmp/mihomo.gz > /tmp/http-meta; \
   rm -f /tmp/mihomo.gz; \
