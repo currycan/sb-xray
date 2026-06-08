@@ -200,7 +200,7 @@ jobs:
           HTTP_META_BUNDLE_SHA=$(digest xream/http-meta "$V_HTTP_META" http-meta.bundle.js)
           HTTP_META_TPL_SHA=$(digest xream/http-meta "$V_HTTP_META" tpl.yaml)
           SUB_STORE_BACKEND_SHA=$(digest sub-store-org/Sub-Store "$V_SUB_BACK" sub-store.bundle.js)
-          MIHOMO_AMD64_SHA=$(digest MetaCubeX/mihomo "v$V_MIHOMO" "mihomo-linux-amd64-v${V_MIHOMO}.gz")
+          MIHOMO_AMD64_SHA=$(digest MetaCubeX/mihomo "v$V_MIHOMO" "mihomo-linux-amd64-compatible-v${V_MIHOMO}.gz")
           MIHOMO_ARM64_SHA=$(digest MetaCubeX/mihomo "v$V_MIHOMO" "mihomo-linux-arm64-v${V_MIHOMO}.gz")
           DUFS_AMD64_SHA=$(digest sigoden/dufs "v$V_DUFS" "dufs-v${V_DUFS}-x86_64-unknown-linux-musl.tar.gz")
           DUFS_ARM64_SHA=$(digest sigoden/dufs "v$V_DUFS" "dufs-v${V_DUFS}-arm-unknown-linux-musleabihf.tar.gz")
