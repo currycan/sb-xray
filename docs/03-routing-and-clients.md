@@ -492,6 +492,49 @@ flowchart TD
 
 **调试重命名结果**：在 Sub-Store 脚本编辑界面点击"预览"，可实时看到每个节点的清洗前后对比。
 
+### 3.6 接入「仅限国内 IP」的机场订阅
+
+部分机场对**订阅链接的拉取请求**按来源 IP 做了限制，只允许国内 IP 访问。海外 VPS 上的 Sub-Store 直接拉取会被拒——典型表现：预览报「禁止访问」/ HTTP 403，或产出 0 节点。这类机场的拉取要同时过**两道门**：
+
+| 门 | 现象 | 解法 |
+| :--- | :--- | :--- |
+| **来源 IP** | 非国内 IP 被拒 | 让拉取走国内出口 |
+| **客户端标识** | 裸 `curl` 的 UA 被 403 | 带一个 clash 系 User-Agent |
+
+项目自带国内出口——回国 socks5（`socks5://<OpenWrt Tailscale IP>:7891`，经 OpenWrt 家宽直出，是国内住宅 IP；详见 [07](./07-tailscale-proxy-architecture.md)）。容器 `network_mode: host`，可直达该 socks5。
+
+**配置步骤**（Sub-Store 网页，逐条受限机场订阅）：
+
+1. **代理/策略**：`socks5://<OpenWrt Tailscale IP>:7891`——必须带 `socks5://` 前缀：7891 是 mihomo 的 socks 端口，裸 `host:port` 会被当 HTTP 代理而握手失败。
+2. **透传请求的 User-Agent**：`clash-verge/v2.0.0`（或其他 clash 系 UA）。
+3. 保存后点「预览」实拉一次，看到节点列表即成。
+
+> 配置经 Sub-Store 的 gist 同步带到所有节点；所有 VPS 在同一 tailnet 上、可达同一 OpenWrt，故任一节点的 Sub-Store 都能用这条出口拉取。
+>
+> ⚠️ **不要用全局 `SUB_STORE_BACKEND_DEFAULT_PROXY`**——那会把本机自有订阅也一并绕去家宽，没必要且放大对家宽的依赖。只给受限机场订阅**单独**配 proxy 即可。
+
+### 3.7 订阅拉取自检与失败告警
+
+机场订阅可能因 token 过期、机场改策略、国内出口中断等**悄悄拉取失败、节点变空**而无人察觉。容器内置每日自检兜底：
+
+- **机制**：`substore-check` 子命令（cron 每日跑）枚举 Sub-Store 里所有远端（`source=remote`）订阅，逐条按各自的 proxy/UA 实际产出一次（`GET /download/<name>?target=JSON`），判定失败 = HTTP 非 2xx **或** 0 节点。
+- **告警**：仅当有订阅失败时发一条可读告警到 Telegram（全过则静默，no news = good news）。事件 `substore.sub_fetch.failed`，走统一事件总线，详见 [06](./06-event-bus-shoutrrr.md)。
+
+告警样式：
+
+```text
+[sb-xray:dc99-3.ansandy.com] 🔴 订阅拉取失败
+
+✗ ssrdog (机场) — HTTP 403
+✗ 多宝 — HTTP 500
+
+共 2/10 条失败
+```
+
+（「机场」标记 = 该订阅配了 proxy，自动识别，无需维护名单。）
+
+**调节**：`SUBSTORE_CHECK_CRON` 控制频率（默认 `30 4 * * *` 每日 04:30，置空 `""` 禁用）；告警通道复用 `SHOUTRRR_URLS`（未配则仅写容器日志）。详见 [04](./04-ops-and-troubleshooting.md) 环境变量参考。
+
 ---
 
 ## 4. 客户端模板对比与接入方式
