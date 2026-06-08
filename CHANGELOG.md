@@ -10,6 +10,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed（修复）
+
+- **mihomo amd64 改用 `-compatible` 构建（兼容 ≤x86-64-v2 老 CPU）**：通用 amd64 mihomo 二进制按 x86-64-v3 微架构优化，在 SSE4.2 等老 CPU 的 VPS（如 dc99-3）上触发非法指令崩溃，容器内 `http-meta` 进程起不来、Sub-Store 机场订阅拉取失效。统一改用 `mihomo-linux-amd64-compatible-v${VER}.gz`：
+  - `Dockerfile` / `build.sh`（refresh 模式 `get_asset_digest`）/ `versions.json` 切到 compatible 资源与对应 SHA256（PR #21）。
+  - **CI digest 漏改修复**：`.github/workflows/daily-build.yml` 的 check job 仍以通用 `mihomo-linux-amd64-v${VER}.gz` 计算 digest 并覆盖 `versions.json`，与 Dockerfile 实下的 compatible 文件 SHA 不符，导致 amd64 构建在 `sha256sum -c` 阶段失败（run 27128783528）。check job 的 amd64 digest 资源名同步为 compatible（PR #24）。arm64 无 compatible 变体，三处统一保留通用 `mihomo-linux-arm64-v${VER}.gz`。
+  - 构建坑固化进 `docs/00 §6 Q8`（Dockerfile / build.sh / daily-build.yml 三处资源名一致表 + `grep` 自检 + `http-meta -v` 目标 CPU 验证，PR #25）。
+  - 验证：强制重建成功（linux/amd64 + linux/arm64 双架构）；16 台生产节点滚动升级后全部 healthy，`docker exec sb-xray /sub-store/http-meta/http-meta -v` 全队退出码 0。
+
 ## [26.6.7] — 2026-06-07 · 回国出口多公网高可用（CN_EXIT_MODE balance + Tailscale + reverse bridge）
 
 > 汇总自 v26.4.22 以来的全部变更：主线是「海外回国」从单链路演进到**多公网双腿主备高可用**，伴随 S-UI 面板移除、文档体系重构与若干稳定性修复。
