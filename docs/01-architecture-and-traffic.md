@@ -112,7 +112,7 @@ flowchart TD
         AppVMess["Xray VMess 协议"]:::xray
         AppWeb["伪装站点 / 404"]:::app
         AppXUI["X-UI 管理面板"]:::app
-        AppSUI["S-UI 管理面板"]:::app
+        AppSUI["S-UI 管理面板<br/>(已移除)"]:::app
         AppFiles["Dufs 文件服务"]:::app
     end
 
@@ -192,7 +192,7 @@ flowchart TD
     NginxWeb -- "/xhttp (gRPC)" --> Xhttp["Xray XHTTP 安全隧道"]:::xray
     NginxWeb -- "/vmess (WebSocket)" --> VMess["Xray VMess CDN 兼容节点"]:::xray
     NginxWeb -- "/xui" --> XUI["X-UI 协议管理面板"]:::app
-    NginxWeb -- "/sui" --> SUI["S-UI 监控面板"]:::app
+    NginxWeb -- "/sui" --> SUI["S-UI 监控面板<br/>(已移除)"]:::app
     NginxWeb -- "/myfiles" --> Dufs["Dufs 私密文件网盘"]:::app
     NginxWeb -- "其他路径" --> FakeWeb["伪装站点 / 404"]:::app
 ```
