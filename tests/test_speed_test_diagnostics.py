@@ -83,6 +83,8 @@ def test_measure_detailed_mixed_statuses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("ISP_SPEED_LEGACY", raising=False)
+    # Isolate aggregation from the transient-retry feature (tested separately).
+    monkeypatch.setenv("ISP_SPEED_SAMPLE_RETRIES", "0")
     results = iter(
         [
             st.SampleResult(mbps=80.0, status="ok", bytes_read=10_000_000, window_sec=1.0),
@@ -107,6 +109,36 @@ def test_measure_detailed_mixed_statuses(
     assert diag["ok"] == 2
     assert diag["total"] == 3
     assert "timeout" in diag["statuses"]
+
+
+def test_transient_timeout_is_retried_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient timeout that clears on retry should count as a healthy ok
+    sample, not drag the node toward 'down'."""
+    monkeypatch.delenv("ISP_SPEED_LEGACY", raising=False)
+    monkeypatch.setenv("ISP_SPEED_SAMPLE_RETRIES", "1")
+    results = iter(
+        [
+            st.SampleResult(mbps=0.0, status="timeout", bytes_read=0, window_sec=0.0),
+            st.SampleResult(mbps=70.0, status="ok", bytes_read=9_000_000, window_sec=1.0),
+        ]
+    )
+
+    class _C:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(st, "_stream_measure", lambda *a, **kw: next(results))
+    monkeypatch.setattr(st, "_httpx_client", lambda **_: _C())
+
+    mbps, diag = st.measure_detailed("https://x/", samples=1)
+    assert diag["status"] == "ok"
+    assert diag["ok"] == 1
+    assert mbps == 70.0
 
 
 # ---------------------------------------------------------------------------

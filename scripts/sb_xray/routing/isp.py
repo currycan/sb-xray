@@ -12,7 +12,27 @@ from sb_xray.network import is_restricted_region
 
 logger = logging.getLogger(__name__)
 
-_SMOOTH_THRESHOLD_MBPS: Final[float] = 100.0
+# 8K-smooth verdict threshold. Default 60 Mbps aligns with the speed_test
+# rating ladder's 8K tier (_THRESH_8K); the old hardcoded 100 was unreachable
+# for a single-connection cross-border SOCKS5 path, so the verdict was almost
+# permanently "not smooth". Override per deployment via ISP_8K_SMOOTH_MBPS.
+_SMOOTH_THRESHOLD_MBPS: Final[float] = 60.0
+
+
+def _smooth_threshold_mbps() -> float:
+    raw = os.environ.get("ISP_8K_SMOOTH_MBPS", "").strip()
+    if not raw:
+        return _SMOOTH_THRESHOLD_MBPS
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(
+            "invalid ISP_8K_SMOOTH_MBPS=%r — falling back to %.0f",
+            raw,
+            _SMOOTH_THRESHOLD_MBPS,
+        )
+        return _SMOOTH_THRESHOLD_MBPS
+
 
 # Probe configuration. Cloudflare's 1 MiB `__down` endpoint is the new
 # default: it is globally CDN-fronted, returns HTTP 200, and streams a
@@ -146,6 +166,13 @@ def process_single_isp(
     return xray, sb
 
 
+# NOTE: dead lines (0 Mbps / connect_fail) are deliberately KEPT in the
+# selector. Runtime ``leastPing`` + ``fallbackTag: direct`` (xray) and the
+# ``direct`` tail member (sing-box urltest) skip them live and degrade
+# gracefully when *all* lines are down — whereas filtering them out would (a)
+# make a flaky line's 0↔alive flapping churn the reload trigger, and (b) make
+# the ``isp-auto`` balancer vanish on an all-dead measurement, leaving
+# ${ISP_OUT}=isp-auto / *_OUT references dangling → "outbound not found".
 def _sort_tags_desc(speeds: dict[str, float]) -> list[str]:
     return [t for t, _ in sorted(speeds.items(), key=lambda kv: kv[1], reverse=True)]
 
@@ -414,7 +441,7 @@ def apply_isp_routing_logic(ctx: RoutingContext) -> IspDecision:
         isp_tag = "direct"
 
     ref_speed = ctx.proxy_max_speed if isp_tag != "direct" else ctx.direct_speed
-    is_smooth = ref_speed > _SMOOTH_THRESHOLD_MBPS
+    is_smooth = ref_speed > _smooth_threshold_mbps()
     return IspDecision(isp_tag=isp_tag, is_8k_smooth=is_smooth)
 
 

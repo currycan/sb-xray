@@ -560,7 +560,7 @@ flowchart LR
 | 出站节点数 | 全部 ISP 节点（按速度降序排列） |
 | 运行时检测 | sing-box `urltest` / xray `observatory` 按 `ISP_PROBE_INTERVAL`（默认 1m）持续探测 |
 | ISP 故障回退 | sing-box urltest 的 `outbounds` 末尾追加 fallback tag；xray balancer `fallbackTag` 同源 |
-| 周期性重测 | cron 每 `ISP_RETEST_INTERVAL_HOURS`（默认 6h）重跑带宽测试,仅组成/排序变化时重启 daemon |
+| 周期性重测 | cron 每 `ISP_RETEST_INTERVAL_HOURS`（默认 6h，分钟位按 hostname 打散错峰）重跑带宽测试,仅已配置线路集/路由类别变化时重启 daemon |
 | 路由指向 | sing-box: `outbound: "isp-auto"`；xray: 动态生成 `balancerTag` / `outboundTag` |
 
 #### 双内核健康检测机制对比
@@ -638,9 +638,9 @@ flowchart TB
         direction TB
         C0["每 ISP_RETEST_INTERVAL_HOURS<br/>（默认 6h）<br/>cron 触发<br/>/scripts/entrypoint.py isp-retest"]:::cron
         C0 --> C1["run_isp_speed_tests(force=True)"]:::cron
-        C1 --> Diff{"新速度 vs 旧 _ISP_SPEEDS_JSON<br/>组成变 / top-1 tag 变 /<br/>delta > ISP_RETEST_DELTA_PCT?"}:::cron
-        Diff -- "是" --> Reload["重新渲染 sb.json + xr.json<br/>supervisorctl restart xray sing-box<br/>emit isp.retest.completed"]:::cron
-        Diff -- "否" --> NoOp["emit isp.retest.noop<br/>不重启 daemon<br/>（纯 RTT 波动留给 urltest 在线处理）"]:::cron
+        C1 --> Diff{"新速度 vs STATUS_FILE 旧 _ISP_SPEEDS_JSON<br/>已配置线路集变 /<br/>路由类别 direct↔proxy 变?"}:::cron
+        Diff -- "是" --> Reload["补跑 media 探针恢复 *_OUT<br/>重新渲染 sb.json + xr.json<br/>supervisorctl restart xray sing-box<br/>emit isp.retest.completed"]:::cron
+        Diff -- "否" --> NoOp["emit isp.retest.noop<br/>不重启 daemon<br/>（纯带宽排名/RTT 波动留给 leastPing 在线处理）"]:::cron
         Reload -.-> RT
         NoOp -.-> RT
     end

@@ -17,8 +17,10 @@ to the current shape without manual ``crontab -e``.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import socket
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -31,27 +33,47 @@ _SUBSTORE_MARKER = "substore-check"
 _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
 
 
-def _hours_to_cron_spec(hours: int) -> str:
+def _hours_to_cron_spec(hours: int, minute: int = 0) -> str:
     """Map an hours-between-runs into the minute+hour cron fields.
 
     - 24 mod hours == 0 → use ``*/hours`` (handles 1/2/3/4/6/8/12/24)
     - otherwise → emit an explicit comma-separated hour list from 0
       repeated every ``hours``, stopping before 24. E.g. hours=5 →
       ``0 0,5,10,15,20 * * *`` (the last interval wraps to midnight).
+
+    ``minute`` sets the minute field (default 0) — see :func:`_jitter_minute`.
     """
     if hours <= 0:
         raise ValueError(f"hours must be > 0, got {hours}")
     hours = min(hours, 24)
     if 24 % hours == 0:
-        return f"0 */{hours} * * *"
+        return f"{minute} */{hours} * * *"
     slots = list(range(0, 24, hours))
-    return f"0 {','.join(str(h) for h in slots)} * * *"
+    return f"{minute} {','.join(str(h) for h in slots)} * * *"
+
+
+def _jitter_minute() -> int:
+    """Per-node deterministic retest minute in ``[0, 59]``.
+
+    Every node shares the same upstream ISP proxies, so a fixed ``0 */Nh``
+    schedule makes the whole fleet probe them in the same second — a
+    self-inflicted thundering herd that depresses every node's reading at
+    once and fires a fleet-wide "sluggish" false alarm. Hashing the hostname
+    spreads the fleet across the hour deterministically (no persistence, no
+    collisions to track). ``ISP_RETEST_JITTER=false`` restores minute 0 for
+    debugging / single-node deployments.
+    """
+    if os.environ.get("ISP_RETEST_JITTER", "true").strip().lower() == "false":
+        return 0
+    host = socket.gethostname() or "sb-xray"
+    digest = hashlib.sha1(host.encode("utf-8")).hexdigest()
+    return int(digest, 16) % 60
 
 
 def _isp_retest_entry(hours: int) -> str | None:
     if hours <= 0:
         return None
-    spec = _hours_to_cron_spec(hours)
+    spec = _hours_to_cron_spec(hours, _jitter_minute())
     return f"{spec} /scripts/entrypoint.py isp-retest >> /var/log/isp_retest.log 2>&1"
 
 

@@ -51,7 +51,10 @@ def test_custom_entry(tmp_path: Path) -> None:
     assert "*/15 * * * * /scripts/entrypoint.py geo-update" in target.read_text(encoding="utf-8")
 
 
-def test_installs_isp_retest_entry_default_6h(tmp_path: Path) -> None:
+def test_installs_isp_retest_entry_default_6h(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
     target = tmp_path / "crontab"
     sbcron.install_crontab(cron_file=target, isp_hours=6)
     content = target.read_text(encoding="utf-8")
@@ -67,7 +70,10 @@ def test_isp_retest_disabled_with_zero(tmp_path: Path) -> None:
     assert "geo-update" in content
 
 
-def test_isp_retest_non_divisor_hours_uses_comma_spec(tmp_path: Path) -> None:
+def test_isp_retest_non_divisor_hours_uses_comma_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
     target = tmp_path / "crontab"
     sbcron.install_crontab(cron_file=target, isp_hours=5)
     content = target.read_text(encoding="utf-8")
@@ -80,9 +86,53 @@ def test_hours_to_cron_spec_cases() -> None:
     assert sbcron._hours_to_cron_spec(24) == "0 */24 * * *"
     assert sbcron._hours_to_cron_spec(5) == "0 0,5,10,15,20 * * *"
     assert sbcron._hours_to_cron_spec(7) == "0 0,7,14,21 * * *"
+    # explicit minute is honoured (jitter path)
+    assert sbcron._hours_to_cron_spec(6, 37) == "37 */6 * * *"
+    assert sbcron._hours_to_cron_spec(5, 12) == "12 0,5,10,15,20 * * *"
 
 
-def test_isp_retest_replaces_stale_entry(tmp_path: Path) -> None:
+def test_jitter_minute_disabled_is_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    assert sbcron._jitter_minute() == 0
+
+
+def test_jitter_minute_is_deterministic_per_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ISP_RETEST_JITTER", raising=False)
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "dc99-3")
+    first = sbcron._jitter_minute()
+    second = sbcron._jitter_minute()
+    assert first == second  # deterministic for a given host
+    assert 0 <= first <= 59
+
+
+def test_jitter_minute_differs_across_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ISP_RETEST_JITTER", raising=False)
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "cstonecloud")
+    a = sbcron._jitter_minute()
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "racknerd")
+    b = sbcron._jitter_minute()
+    # Two real fleet hostnames must not collide on the same minute slot.
+    assert a != b
+
+
+def test_install_default_jitters_isp_minute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default (no ISP_RETEST_JITTER) must NOT pin isp-retest to minute 0."""
+    monkeypatch.delenv("ISP_RETEST_JITTER", raising=False)
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "dc99-3")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target, isp_hours=6)
+    isp_line = next(
+        ln for ln in target.read_text(encoding="utf-8").splitlines() if "isp-retest" in ln
+    )
+    minute = int(isp_line.split()[0])
+    assert minute == sbcron._jitter_minute()
+    assert isp_line.split()[1] == "*/6"
+
+
+def test_isp_retest_replaces_stale_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
     target = tmp_path / "crontab"
     target.write_text(
         "0 */12 * * * /scripts/entrypoint.py isp-retest >> /var/log/isp_retest.log 2>&1\n",
@@ -98,6 +148,7 @@ def test_isp_retest_env_var_drives_interval(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ISP_RETEST_INTERVAL_HOURS", "8")
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
     target = tmp_path / "crontab"
     sbcron.install_crontab(cron_file=target)
     content = target.read_text(encoding="utf-8")

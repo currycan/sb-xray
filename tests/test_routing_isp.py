@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sb_xray.routing import isp
 
 # ---- process_single_isp -----------------------------------------------------
@@ -229,26 +230,35 @@ def test_branch_residential_unrestricted_direct() -> None:
 # ---- apply_isp_routing_logic: IS_8K_SMOOTH ---------------------------------
 
 
-def test_smooth_true_when_proxy_over_100mbps() -> None:
+def test_smooth_true_when_proxy_over_threshold() -> None:
+    # Default threshold is now 60 Mbps (aligned with the 8K rating tier).
     d = isp.apply_isp_routing_logic(
         _ctx(
             ip_type="hosting",
             fastest_proxy_tag="proxy-aws",
-            proxy_max_speed=150.0,
+            proxy_max_speed=80.0,
         )
     )
     assert d.is_8k_smooth is True
 
 
-def test_smooth_false_when_proxy_under_100mbps() -> None:
+def test_smooth_false_when_proxy_under_threshold() -> None:
     d = isp.apply_isp_routing_logic(
         _ctx(
             ip_type="hosting",
             fastest_proxy_tag="proxy-cn2",
-            proxy_max_speed=80.0,
+            proxy_max_speed=50.0,
         )
     )
     assert d.is_8k_smooth is False
+
+
+def test_smooth_threshold_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ISP_8K_SMOOTH_MBPS", "120")
+    d = isp.apply_isp_routing_logic(
+        _ctx(ip_type="hosting", fastest_proxy_tag="proxy-aws", proxy_max_speed=80.0)
+    )
+    assert d.is_8k_smooth is False  # 80 < 120 override
 
 
 def test_smooth_uses_direct_speed_when_tag_direct() -> None:

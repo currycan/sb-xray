@@ -10,8 +10,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed（变更）
+
+- **ISP 测速与选路优化（消除全队"不流畅"误报 + 杜绝无谓重启）**：电报里 16 台节点集体报「8K ⚠️ 不流畅」（proxy-us-isp ~5 Mbps）经实测是**测量假象**——同一上游代理裸 curl 单连接达 95–146 Mbps，生产函数与 curl 同时刻吻合。根因是全队 `0 */6` cron 在整点同一秒压同两个共享上游代理，自造惊群。本次系统性优化：
+  - **错峰重测**：retest cron 分钟位按 `sha1(hostname) % 60` 打散（如 `52 */6` 而非 `0 */6`），16 台散布全小时、互不踩踏。`ISP_RETEST_JITTER=false` 可关。
+  - **测量更稳健**：默认采样 3 次（`ISP_SPEED_SAMPLES` 此前被代码忽略，现已生效）、瞬时 `connect_fail`/`timeout` 单样本重试一次（`ISP_SPEED_SAMPLE_RETRIES`）、`n≥3` 取中位数抗离群。
+  - **选路解耦排序与重启**：xray `leastPing` 本就按实时 RTT 选线、无视 selector 顺序，故纯带宽排名波动不再触发重启——仅「已配置节点增删」或「路由类别 direct↔proxy 切换」才 rebuild+重启。flaky 线 `0↔alive` 横跳**不触发重启**：死/慢线保留在 selector（含全部已配置节点），交给运行期 `leastPing` + `fallbackTag/direct` 尾部成员实时绕开、全死时优雅退 direct——比剔除它们更稳（剔除会让横跳 churn 重启、且全死时 `isp-auto` 消失致引用悬空）。主选加跨轮滞回（`ISP_LEADER_HYSTERESIS`，默认 1.15）。
+  - **告警边沿触发**：仅在首次/评级翻转/可用成员变化/选线变化时推 Telegram，纯抖动静默，终结每 6h 刷屏。
+  - **8K 评级校准**：判定阈值 100→60 Mbps 对齐内部评级梯子（`ISP_8K_SMOOTH_MBPS` 可覆盖）；Telegram 不再显示二元「⚠️ 不流畅」，改显评级梯子标签（如「评级: 流畅 4K，8K 可能卡顿」）。
+  - 废弃：`ISP_RETEST_DELTA_PCT` 不再被读取，设置无任何效果（重启触发改为成员/路由类别变化）。带宽变化幅度仍写入 `ISP_LAST_RETEST_DELTA_PCT` + 事件 payload 作遥测，不触发重启。
+
 ### Fixed（修复）
 
+- **经 anytls/tuic 的媒体流量全断（Google/OpenAI/Netflix/YouTube/Claude/TikTok…）**：`isp-retest` 触发配置重渲染时，sing-box `sb.json` 的媒体路由占位符 `${GEMINI_OUT}`/`${CHATGPT_OUT}`/`${ISP_OUT}` 等未被替换、原样写入运行配置 → sing-box `outbound not found` 丢包。根因：`*_OUT` 媒体路由变量仅在启动期媒体探针阶段写入 `os.environ`，而 cron retest 是全新进程从不恢复它们。修复两层：
+  - **正确性**：`isp_retest.run()` 在重渲染前补跑 media 探针恢复 `*_OUT`，并按 boot 同样的 `HAS_ISP_NODES` 推导补回 `ISP_OUT`（电商 amazon/paypal/ebay 及 social/tiktok 规则用）——它不是 media 探针项，不补则两核都退成 direct、电商走数据中心 IP 触发风控（`scripts/sb_xray/stages/isp_retest.py:_restore_media_routing`）。
+  - **纵深防御**：sb.json 渲染后对任何残留 `${*_OUT}` 一律兜底为 `direct` 并告警（`config_builder.py:_patch_unresolved_service_outs`），杜绝任何未来重渲染路径再退化成字面量——与 xray 服务路由 `outbounds.get(name) or "direct"` 的优雅回退对齐。
+- **`isp-retest` 每 6 小时无条件重启 xray/sing-box**：`_ISP_SPEEDS_JSON` 从不持久化到 STATUS_FILE，cron retest（全新进程）只能与**启动期冻结的环境快照**比对 → 永远 `delta=100%` → 每次重测都重启守护进程、掐断全部连接。修复：测速结果持久化进 STATUS_FILE，重载判据改为「已配置成员/路由类别变化」（见上「选路解耦」）。
 - **mihomo amd64 改用 `-compatible` 构建（兼容 ≤x86-64-v2 老 CPU）**：通用 amd64 mihomo 二进制按 x86-64-v3 微架构优化，在 SSE4.2 等老 CPU 的 VPS（如 dc99-3）上触发非法指令崩溃，容器内 `http-meta` 进程起不来、Sub-Store 机场订阅拉取失效。统一改用 `mihomo-linux-amd64-compatible-v${VER}.gz`：
   - `Dockerfile` / `build.sh`（refresh 模式 `get_asset_digest`）/ `versions.json` 切到 compatible 资源与对应 SHA256（PR #21）。
   - **CI digest 漏改修复**：`.github/workflows/daily-build.yml` 的 check job 仍以通用 `mihomo-linux-amd64-v${VER}.gz` 计算 digest 并覆盖 `versions.json`，与 Dockerfile 实下的 compatible 文件 SHA 不符，导致 amd64 构建在 `sha256sum -c` 阶段失败（run 27128783528）。check job 的 amd64 digest 资源名同步为 compatible（PR #24）。arm64 无 compatible 变体，三处统一保留通用 `mihomo-linux-arm64-v${VER}.gz`。
