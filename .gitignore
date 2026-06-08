@@ -16,6 +16,7 @@ ag_output_*.txt
 .gemini/
 .gstack/
 .superpowers/
+.credentials/
 scripts/__pycache__/
 
 # Python
