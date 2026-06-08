@@ -155,7 +155,7 @@ vim docker-compose.yml    # 改好以下 3 项后保存
 > - `network_mode: host` — 直连宿主机网络栈，绕过 Docker NAT 带来的 UDP 性能损耗与 QUIC / Hysteria2 端口跳跃限制
 > - `mem_limit: 460m` — 小内存 VPS 的安全围栏，防止 xray VSZ 暴涨触发宿主级 OOM；节点内存 ≥ 2 GB 时可放宽或移除
 > - `ulimits.nofile: 65536` — 高并发连接下避免 "too many open files"
-> - `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` — 小内存节点降载开关，每个组件注释里标了内存回收量
+> - `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` — 小内存节点降载开关，每个组件注释里标了内存回收量（`ENABLE_SUI` 对应的 s-ui 面板已不再内置）
 > - `tty: true` — 保留终端分配，便于 `docker exec sb-xray bash` 交互排障
 
 **3. 一键启动引擎**
@@ -183,7 +183,7 @@ docker compose up -d
 | **AI 路由** | `GEMINI_DIRECT` | 空 | `true` / `false` / 空（自动探测） |
 | **节点后缀** | `NODE_SUFFIX` | 空 | 附加到所有生成节点名尾部（如 ` ✈ 高速`） |
 | **日志** | `LOG_LEVEL` / `SB_LOG_LEVEL` | `warning` / `INFO` | xray / sing-box 用前者，Python entrypoint 用后者，刻意分离 |
-| **降载开关** | `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true` | 小内存节点按需关闭可省 20–200 MB |
+| **降载开关** | `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（`ENABLE_XUI` 在 `docker-compose.yml` 默认 `false`） | 小内存节点按需关闭可省 20–200 MB；x-ui 面板开箱默认不启用，需用时在 `docker-compose.yml` 改 `ENABLE_XUI=true`；`ENABLE_SUI` 已废弃（s-ui 不再内置） |
 | **资源** | `GOMEMLIMIT` / `GOGC` | `320MiB` / `50` | Go 四件套共享 GC 上限 |
 | **事件总线** | `SHOUTRRR_URLS` | 空 | 留空 = 仅写本地日志；填 Telegram / Discord URL 推送 |
 | **`isp-auto` 优化** | `ISP_PROBE_URL` / `ISP_PER_SERVICE_SB` / `ISP_FALLBACK_STRATEGY` / `ISP_RETEST_INTERVAL_HOURS` 等 | 有默认 | 开箱即用，按需调优见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选) |
@@ -339,8 +339,8 @@ docker exec -it sb-xray bash
 
 | 项目                    | 作用                               | 链接                                                                                      |
 | :---------------------- | :--------------------------------- | :---------------------------------------------------------------------------------------- |
-| **3x-ui**               | Xray 可视化管理面板 (X-UI)         | [MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui)                                       |
-| **S-UI**                | Sing-box 可视化管理面板            | [alireza0/s-ui](https://github.com/alireza0/s-ui)                                         |
+| **3x-ui**               | Xray 可视化管理面板 (X-UI，开箱默认不启用) | [MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui)                                       |
+| **S-UI**                | Sing-box 可视化管理面板（已不再内置） | [alireza0/s-ui](https://github.com/alireza0/s-ui)                                         |
 | **Sub-Store**           | 订阅源聚合、节点清洗与转换平台     | [sub-store-org/Sub-Store](https://github.com/sub-store-org/Sub-Store)                     |
 | **Sub-Store-Front-End** | Sub-Store 前端界面                 | [sub-store-org/Sub-Store-Front-End](https://github.com/sub-store-org/Sub-Store-Front-End) |
 | **Http-Meta**           | Sub-Store 的 HTTP 后端元数据处理器 | [xream/http-meta](https://github.com/xream/http-meta)                                     |
