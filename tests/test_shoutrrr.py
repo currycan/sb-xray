@@ -208,6 +208,52 @@ def test_format_message_substore_failure_lists_failed_subs():
     assert "event:" not in body
 
 
+_RETEST_PAYLOAD = {
+    "event": "isp.retest.completed",
+    "reason": "composition_changed",
+    "old_top_tag": "proxy-la-isp",
+    "new_top_tag": "proxy-us-isp",
+    "delta_pct": 100.0,
+    "restarted": True,
+}
+
+
+def test_format_message_retest_completed_switch_is_readable():
+    title, body = shoutrrr._format_message(
+        "isp.retest.completed", _RETEST_PAYLOAD, "[sb-xray:dc99-3]"
+    )
+    assert title == "[sb-xray:dc99-3] 🔄 ISP 线路已更新"
+    assert "线路切换: proxy-la-isp → proxy-us-isp" in body
+    assert "原因: 节点集合变化" in body
+    assert "已重启 xray/sing-box 生效" in body
+    # raw key:value dump must be gone — this is the whole point of the formatter
+    assert "reason: composition_changed" not in body
+    assert "delta_pct" not in body
+    assert "restarted" not in body
+    assert "event:" not in body
+
+
+def test_format_message_retest_completed_first_run_shows_no_arrow():
+    """Empty old_top (first run / lost snapshot) → headline without an arrow."""
+    payload = {**_RETEST_PAYLOAD, "old_top_tag": ""}
+    _title, body = shoutrrr._format_message("isp.retest.completed", payload, "[p]")
+    assert "当前线路: proxy-us-isp" in body
+    assert "→" not in body
+
+
+def test_format_message_retest_completed_class_flip_not_restarted():
+    payload = {
+        **_RETEST_PAYLOAD,
+        "reason": "routing_class_changed",
+        "old_top_tag": "direct",
+        "restarted": False,
+    }
+    _title, body = shoutrrr._format_message("isp.retest.completed", payload, "[p]")
+    assert "线路切换: direct → proxy-us-isp" in body
+    assert "原因: 路由模式切换（直连 ↔ 代理）" in body
+    assert "未重启（启动阶段）" in body
+
+
 def test_post_uses_payload_event_when_no_header(caplog):
     caplog.set_level("INFO", logger="sb_xray.shoutrrr")
     with _ServerThread() as srv:
