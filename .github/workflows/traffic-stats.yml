@@ -1,0 +1,54 @@
+name: Repository Traffic Stats
+
+on:
+  schedule:
+    # 每天 UTC 2:17 (北京时间 10:17) 执行；错峰避开 daily-build
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: traffic-stats
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 工作区根目录检出 traffic 孤儿分支：CSV 在此累积，提交也回推到此分支
+      - name: Checkout traffic data branch
+        uses: actions/checkout@v4
+        with:
+          ref: traffic
+
+      # 渲染脚本只存在于默认分支，单独检出到子目录供本次运行调用
+      - name: Checkout render script from default branch
+        uses: actions/checkout@v4
+        with:
+          path: .ci-src
+
+      # 拉取 clones/views 流量数据并累积写入 ./traffic/*.csv（突破 GitHub 14 天保留限制）
+      - name: Collect repository traffic
+        uses: sangonzal/repository-traffic-action@v.0.1.6
+        env:
+          TRAFFIC_ACTION_TOKEN: ${{ secrets.TRAFFIC_ACTION_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Render clone traffic trend chart
+        run: |
+          python -m pip install --quiet matplotlib
+          python .ci-src/.github/scripts/render_traffic.py
+
+      - name: Commit traffic data and chart
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: "traffic/*"
+          message: "chore: update repository traffic stats"
+          default_author: github_actions

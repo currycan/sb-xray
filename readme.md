@@ -12,6 +12,16 @@
     <a href="https://hub.docker.com/r/currycan/sb-xray">
       <img src="https://img.shields.io/docker/pulls/currycan/sb-xray?style=flat-square&color=00B4D8" alt="Docker Pulls">
     </a>
+    <a href="https://github.com/currycan/sb-xray/stargazers">
+      <img src="https://img.shields.io/github/stars/currycan/sb-xray?style=flat-square&color=FFB703" alt="GitHub Stars">
+    </a>
+    <a href="https://github.com/currycan/sb-xray/network/members">
+      <img src="https://img.shields.io/github/forks/currycan/sb-xray?style=flat-square&color=9D4EDD" alt="GitHub Forks">
+    </a>
+    <a href="https://github.com/currycan/sb-xray/issues">
+      <img src="https://img.shields.io/github/issues/currycan/sb-xray?style=flat-square&color=10B981" alt="GitHub Issues">
+    </a>
+    <img src="https://img.shields.io/github/last-commit/currycan/sb-xray?style=flat-square&color=lightgrey" alt="Last Commit">
     <img src="https://img.shields.io/badge/Platform-linux%2Famd64%20%7C%20linux%2Farm64-lightgrey?style=flat-square" alt="Platform">
     <a href="https://github.com/XTLS/Xray-core">
       <img src="https://img.shields.io/badge/Engine-Xray--core--v26.4.x-9D4EDD?style=flat-square" alt="Xray-core">
@@ -393,6 +403,16 @@ docker exec -it sb-xray bash
 | **GFW SS MITM 攻击**    | 流量主动探测安全性分析           | [net4people/bbs#526](https://github.com/net4people/bbs/issues/526)                                   |
 | **Nginx Stream SNI**    | Stream 模块 SNI 预读技术         | [ngx_stream_ssl_preread_module](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) |
 | **Unix Domain Socket**  | 进程间高效通信 (IPC) 规范        | POSIX.1-2001 `unix(7)`                                                                               |
+
+## 📈 项目活跃度 (Project Traffic)
+
+下图展示本仓库每日 **克隆流量** 趋势（总克隆数与独立克隆者），由定时任务自动抓取 GitHub Traffic 数据并持续累积，直观反映项目的真实影响力与活跃度。
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/currycan/sb-xray/traffic/traffic/clones.png" alt="Repository Clone Traffic">
+</div>
+
+> 数据每日自动刷新；图表初期数据点较少，随时间累积将逐步丰满。
 
 ## 📄 许可协议 (License)
 
