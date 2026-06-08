@@ -220,22 +220,22 @@ def test_v2rayn_subscription_includes_all_ten_lines(env: None) -> None:
     assert lines[6].startswith("vless://") and "Xhttp+Reality直连" in lines[6]
 
 
-def test_common_subscription_has_six_lines(env: None) -> None:
+def test_common_subscription_has_eight_lines(env: None) -> None:
     sub_text = sub.build_common_subscription()
     lines = sub_text.split("\n")
-    # part1_common (3) + part2_common (3) = 6
-    assert len(lines) == 6
+    # part1_common (5: hy2, tuic, anytls, vmess, vless-vision) + part2_common (3) = 8
+    assert len(lines) == 8
     assert lines[0].startswith("hysteria2://")
-    assert lines[1].startswith("vmess://")
-    assert lines[2].startswith("vless://") and "flow=xtls-rprx-vision" in lines[2]
-    assert "Xhttp+Reality直连" in lines[3]
-    assert "上行Xhttp+TLS+CDN下行Xhttp+Reality" in lines[4]
-    assert "Xhttp+TLS+CDN上下行不分离" in lines[5]
-    assert not any(ln.startswith("tuic://") for ln in lines)
-    assert not any(ln.startswith("anytls://") for ln in lines)
+    assert lines[1].startswith("tuic://")
+    assert lines[2].startswith("anytls://")
+    assert lines[3].startswith("vmess://")
+    assert lines[4].startswith("vless://") and "flow=xtls-rprx-vision" in lines[4]
+    assert "Xhttp+Reality直连" in lines[5]
+    assert "上行Xhttp+TLS+CDN下行Xhttp+Reality" in lines[6]
+    assert "Xhttp+TLS+CDN上下行不分离" in lines[7]
     assert not any("上行Xhttp+Reality下行Xhttp+TLS+CDN" in ln for ln in lines)
     # main-only H3 link must NOT be in common track
     assert not any("Xhttp-H3+BBR" in ln for ln in lines)
     # common XHTTP variants must all use mode=packet-up or encryption=none
-    for ln in lines[3:]:
+    for ln in lines[5:]:
         assert "encryption=none" in ln
