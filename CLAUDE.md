@@ -60,6 +60,22 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. State Facts, Not Guesses
+
+**Every claim about system state must trace to a command you actually ran — never to inference.**
+
+A fact is something you observed in real output. An inference is something you reasoned your way to. Never present an inference as a fact.
+
+This applies hardest to external/system state: architecture, versions, image digests, what's deployed, host identities, counts, file contents, who-runs-what.
+
+- When evidence is ambiguous (two different image IDs, an unexpected count, a surprising name), **verify the cause before explaining it.** Do not invent a tidy story that fits the pattern — e.g. seeing 5 hosts with a different short image ID and declaring "those 5 are arm64" without checking. Run `uname -m`, read the RepoDigest, inspect the binary. Then state what you found.
+- Prefer authoritative identifiers over circumstantial ones: RepoDigest over short image ID, `docker inspect` over a guess, the actual file over memory.
+- If you must hypothesize before you can verify, **label it** ("guess, unverified") and verify before anyone relies on it.
+- If a later observation contradicts an earlier claim, **stop and retract it explicitly in the same turn.** A wrong claim left standing is worse than no claim.
+- Numbers, names, and lists are facts, not flavor. Don't fabricate node names, counts, or mappings to make a summary look complete.
+
+The test: for every factual sentence, could you point to the exact command output that backs it? If not, run the command or mark the claim unverified.
+
 ---
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, clarifying questions come before implementation rather than after mistakes, and every factual claim traces to real command output rather than a plausible guess.
