@@ -201,6 +201,36 @@ def _restore_service_outs(snapshot: dict[str, str | None]) -> None:
             os.environ[key] = value
 
 
+# Any ``${NAME_OUT}`` reference (CHATGPT_OUT / NETFLIX_OUT / ISP_OUT / …).
+_SERVICE_OUT_PLACEHOLDER = re.compile(r"\$\{[A-Za-z_]+_OUT\}")
+
+
+def _patch_unresolved_service_outs(path: Path) -> None:
+    """Defense-in-depth: rewrite any ``${*_OUT}`` that survived envsubst to
+    ``direct``.
+
+    The media-routing ``*_OUT`` vars only live in ``os.environ`` after the
+    boot media stage. Any render path that runs in a fresh process without
+    them (notably the cron ``isp-retest`` reload) would otherwise bake a
+    literal ``${GEMINI_OUT}`` into sb.json, and sing-box drops the matching
+    traffic with ``outbound not found``. This guard guarantees a graceful
+    ``direct`` fallback regardless of caller — mirroring how the xray service
+    rules already fall back via ``outbounds.get(name) or "direct"``.
+    """
+    if not path.is_file():
+        return
+    text = path.read_text(encoding="utf-8")
+    patched, n = _SERVICE_OUT_PLACEHOLDER.subn("direct", text)
+    if n:
+        logger.warning(
+            "%s: %d 个未解析的 ${*_OUT} 占位符已兜底为 direct"
+            "（media 路由环境缺失——检查 reload 路径是否漏跑 media 探针）",
+            path.name,
+            n,
+        )
+        path.write_text(patched, encoding="utf-8")
+
+
 def _render_sing_box_templates(workdir: Path) -> None:
     template_dir = _TEMPLATES / "sing-box"
     dest_dir = workdir / "sing-box"
@@ -215,7 +245,9 @@ def _render_sing_box_templates(workdir: Path) -> None:
         _override_service_outs_for_sb()
     try:
         for tpl in sorted(template_dir.glob("*.json")):
-            _render_json(tpl, dest_dir / tpl.name)
+            dest = dest_dir / tpl.name
+            _render_json(tpl, dest)
+            _patch_unresolved_service_outs(dest)
     finally:
         if snapshot is not None:
             _restore_service_outs(snapshot)

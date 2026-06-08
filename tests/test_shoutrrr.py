@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import datetime
 from http.server import ThreadingHTTPServer
+from unittest.mock import MagicMock
 
 import pytest
 from sb_xray import shoutrrr
@@ -134,7 +135,9 @@ def test_format_message_speed_test_result_is_readable():
     title, body = shoutrrr._format_message("isp.speed_test.result", _SPEED_PAYLOAD, "[sb-xray:jp]")
     assert title == "[sb-xray:jp] 📊 ISP 测速结果"
     assert "选定线路: proxy-us-isp · 5.17 Mbps" in body
-    assert "8K: ⚠️ 不流畅" in body
+    # rating ladder replaces the old binary 8K verdict (5.17 Mbps → 网络较慢)
+    assert "评级: 网络较慢" in body
+    assert "8K: ⚠️ 不流畅" not in body
     assert "直连基准: 302.91 Mbps" in body
     assert "✓ proxy-us-isp  5.17 Mbps" in body
     assert "✓ proxy-la-isp  1.31 Mbps" in body
@@ -156,9 +159,35 @@ def test_format_message_speed_test_marks_failed_tag():
         },
     }
     _title, body = shoutrrr._format_message("isp.speed_test.result", payload, "[p]")
-    assert "8K: ✅ 流畅" in body
+    # display is rating-based on fastest_mbps (5.0 → 网络较慢), not the
+    # internal is_8k_smooth flag.
+    assert "评级: 网络较慢" in body
     assert "✓ proxy-us-isp  5 Mbps" in body
     assert "✗ proxy-la-isp  0 Mbps  (超时 0/2)" in body
+
+
+def test_send_skips_non_notable_speed_test(monkeypatch, caplog):
+    """notify=false speed_test results must not invoke shoutrrr."""
+    import logging
+
+    called = MagicMock()
+    monkeypatch.setattr(shoutrrr.subprocess, "run", called)
+    payload = {**_SPEED_PAYLOAD, "notify": False}
+    with caplog.at_level(logging.INFO):
+        shoutrrr._send(
+            ["telegram://token@telegram?chats=1"], "[p]", "isp.speed_test.result", payload
+        )
+    called.assert_not_called()
+    assert "skipping push" in caplog.text
+
+
+def test_send_pushes_notable_speed_test(monkeypatch):
+    """notify=true (or absent) must reach the shoutrrr CLI."""
+    run = MagicMock(return_value=MagicMock(returncode=0, stderr="", stdout=""))
+    monkeypatch.setattr(shoutrrr.subprocess, "run", run)
+    payload = {**_SPEED_PAYLOAD, "notify": True}
+    shoutrrr._send(["telegram://token@telegram?chats=1"], "[p]", "isp.speed_test.result", payload)
+    run.assert_called_once()
 
 
 def test_format_message_substore_failure_lists_failed_subs():

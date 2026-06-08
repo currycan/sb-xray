@@ -50,7 +50,7 @@ flowchart TD
 > - `ISP_PROBE_URL` — probe URL 默认 Cloudflare 1 MiB，携带带宽信号
 > - `ISP_PER_SERVICE_SB=true` — sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 各配独立 balancer
 > - `ISP_FALLBACK_STRATEGY=block` — 受限地区 fail-closed
-> - `ISP_RETEST_INTERVAL_HOURS` — 默认 6h 周期重测,组成变化才重启 daemon
+> - `ISP_RETEST_INTERVAL_HOURS` — 默认 6h 周期重测,仅已配置线路集/路由类别变化才重启 daemon（分钟位按 hostname 打散错峰，见 `ISP_RETEST_JITTER`）
 > - `ISP_SPEED_CACHE_TTL_MIN` — 冷启动 TTL 缓存(默认 60 min) + 后台异步刷新
 >
 > 完整运行时闭环架构图见 [docs/01-architecture-and-traffic.md §6.4](./01-architecture-and-traffic.md#64-完整运行时闭环); env 变量与典型组合见 [docs/04-ops-and-troubleshooting.md §2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
@@ -113,7 +113,7 @@ flowchart LR
         A --> B["选出最快 ISP → ISP_TAG\n记录全部 ISP 速度到 ISP_SPEEDS"]
         B --> INJ["注入全部 ISP 节点出站\n（按速度降序排列）"]
         INJ --> UT["生成 urltest / balancer\nisp-auto 健康选优出站"]
-        B --> C{"最优代理速度\n> 100 Mbps?"}
+        B --> C{"最优代理速度\n> 60 Mbps?"}
         C -- "是" --> D["IS_8K_SMOOTH = true"]
         C -- "否" --> E["IS_8K_SMOOTH = false"]
         F["VPS 直连测速\n（住宅VPS直出场景）"] --> G{"IP_TYPE=isp\n且 > 100 Mbps?"}
@@ -168,8 +168,8 @@ flowchart LR
 [选路] 原则: 受限地区/非住宅IP→需代理解锁; 住宅IP+非受限→直连兜底
 [选路] 非住宅 IP (hosting)，需 ISP 代理解锁流媒体/AI
 [选路] 使用最优 ISP 代理: proxy-kr-isp (76.56 Mbps)
-[选路] IS_8K_SMOOTH: 出口=proxy-kr-isp | 参考速度=76.56 Mbps | 阈值=100 Mbps → false  → 无质量标签
-[选路] ✓ 最终决策: ISP_TAG=proxy-kr-isp | IS_8K_SMOOTH=false
+[选路] IS_8K_SMOOTH: 出口=proxy-kr-isp | 参考速度=76.56 Mbps | 阈值=60 Mbps → true  → good 标签
+[选路] ✓ 最终决策: ISP_TAG=proxy-kr-isp | IS_8K_SMOOTH=true
 [选路] ════════════════════════════════════════════
 [阶段 4] 生成客户端/服务端配置片段...
 [ISP] 注入出站: proxy-kr-isp (76.56 Mbps)
@@ -182,8 +182,8 @@ flowchart LR
 
 | 标签      | 触发条件                                                     | 含义                                                 | OpenClash 加分 |
 | :-------- | :----------------------------------------------------------- | :--------------------------------------------------- | :------------: |
-| `✈ good`  | ISP 代理激活 + 代理速度 > 100 Mbps                           | 通过 SOCKS5 代理实现 8K 流畅，适合所有需要解锁的业务 |    **+10**     |
-| `✈ super` | VPS 本身 IP 为住宅类型（`IP_TYPE=isp`）+ 直连速度 > 100 Mbps | VPS 直出即为原生家宽，无需代理即可 8K，稀缺最高质量  |    **+30**     |
+| `✈ good`  | ISP 代理激活 + 代理速度 > 60 Mbps（`ISP_8K_SMOOTH_MBPS` 可调）  | 通过 SOCKS5 代理实现 8K 流畅，适合所有需要解锁的业务 |    **+10**     |
+| `✈ super` | VPS 本身 IP 为住宅类型（`IP_TYPE=isp`）+ 直连速度 > 60 Mbps   | VPS 直出即为原生家宽，无需代理即可 8K，稀缺最高质量  |    **+30**     |
 
 > **关键设计理念**：ISP SOCKS5 代理的目的是**解锁 geo 限制**（ChatGPT/Netflix 等）。选路决策链如下：
 >
@@ -193,15 +193,17 @@ flowchart LR
 >
 > `_is_restricted_region` 仅作日志修饰，不单独控制分支走向；IP 类型（`IP_TYPE`）与地区限制同级参与条件评估。
 >
-> **运行时保障**：即使启动时选中的 ISP 在运行期间故障，Sing-box `urltest` / Xray `observatory` 会在下次探测（`ISP_PROBE_INTERVAL`，默认 1 分钟）后自动切换到存活节点或回退（`ISP_FALLBACK_STRATEGY`，默认 `direct`；`block` 实现 fail-closed），避免流量黑洞。每 `ISP_RETEST_INTERVAL_HOURS`（默认 6h）会周期性重跑带宽测试、仅当组成/排序变化时重渲染配置并重启内核。
+> **运行时保障**：即使启动时选中的 ISP 在运行期间故障，Sing-box `urltest` / Xray `observatory` 会在下次探测（`ISP_PROBE_INTERVAL`，默认 1 分钟）后自动切换到存活节点或回退（`ISP_FALLBACK_STRATEGY`，默认 `direct`；`block` 实现 fail-closed），避免流量黑洞。每 `ISP_RETEST_INTERVAL_HOURS`（默认 6h）会周期性重跑带宽测试，仅当已配置线路集或路由类别（direct↔proxy）变化时才重渲染配置并重启内核；纯带宽排名波动与单线 0↔alive 横跳交给运行期 `leastPing` 在线处理。
 
 #### 8K 判定阈值
 
 | 速度        | 能力                 | 标签生成                         |
 | :---------- | :------------------- | :------------------------------- |
-| ≥ 100 Mbps  | 8K HDR/60fps 流畅    | IS_8K_SMOOTH=true → 生成质量标签 |
-| 25–100 Mbps | 4K 流畅，8K 可能卡顿 | IS_8K_SMOOTH=false → 无质量标签  |
+| ≥ 60 Mbps   | 8K 流畅              | IS_8K_SMOOTH=true → 生成质量标签 |
+| 25–60 Mbps  | 4K 流畅，8K 可能卡顿 | IS_8K_SMOOTH=false → 无质量标签  |
 | < 25 Mbps   | 1080P 勉强           | IS_8K_SMOOTH=false → 无质量标签  |
+
+> 阈值默认 60 Mbps（`ISP_8K_SMOOTH_MBPS` 可调），与内部评级梯子 8K 档对齐——旧值 100 对跨境单连接 SOCKS5 几乎不可达。
 
 ---
 

@@ -32,6 +32,7 @@ _DEFAULT_WINDOW_SEC: Final[float] = 8.0
 _DEFAULT_MAX_BYTES: Final[int] = 256 * 1024 * 1024
 _DEFAULT_CHUNK_BYTES: Final[int] = 64 * 1024
 _DEFAULT_SAMPLE_TIMEOUT_SEC: Final[float] = 20.0
+_DEFAULT_SAMPLE_RETRIES: Final[int] = 1
 
 
 @dataclass(frozen=True)
@@ -208,40 +209,74 @@ def _stream_measure(
     )
 
 
+# Sample statuses that are worth one immediate retry: a transient connection
+# blip or a mid-transfer timeout often clears on a second attempt, whereas
+# low_speed / zero_body reflect a real (if poor) measurement.
+_TRANSIENT_STATUSES: Final[frozenset[str]] = frozenset({"connect_fail", "timeout"})
+
+
+def _stream_measure_with_retry(
+    client: httpx.Client,
+    url: str,
+    *,
+    retries: int,
+    **kwargs: object,
+) -> SampleResult:
+    """Run :func:`_stream_measure`, retrying once (by default) on a transient
+    failure so a single connection blip on a healthy proxy does not get the
+    whole node written off as down.
+    """
+    result = _stream_measure(client, url, **kwargs)  # type: ignore[arg-type]
+    attempt = 0
+    while result.status in _TRANSIENT_STATUSES and attempt < retries:
+        attempt += 1
+        logger.info("采样瞬时失败(%s)，重试第 %d 次", result.status, attempt)
+        result = _stream_measure(client, url, **kwargs)  # type: ignore[arg-type]
+    return result
+
+
 def _truncated_mean_with_stability(
     samples_bps: list[float],
 ) -> tuple[float, float, str]:
-    """Port of entrypoint.sh §9 truncated-mean + stddev + stability label.
+    """Robust central tendency + stddev + stability label.
 
-    Returns ``(trimmed_mean_mbps, stddev_mbps, label)`` where ``label`` is
-    one of ``[稳定]`` (CV<0.2), ``[轻微波动]`` (CV<0.5), ``[波动较大]``.
-    Empty input yields ``(0.0, 0.0, "[稳定]")`` to stay side-effect free.
+    For ``n>=3`` the central value is the **median** — it rejects a single
+    slow/fast outlier sample outright, which matters on the jittery
+    cross-border SOCKS5 paths these proxies live on. (At ``n==3`` the median
+    equals the old truncated mean, so existing n=3 behaviour is preserved;
+    at ``n>=5`` the median is strictly more outlier-resistant.) For ``n<3``
+    it falls back to the plain mean.
+
+    Returns ``(central_mbps, stddev_mbps, label)`` where ``label`` is one of
+    ``[稳定]`` (CV<0.2), ``[轻微波动]`` (CV<0.5), ``[波动较大]``. Empty input
+    yields ``(0.0, 0.0, "[稳定]")`` to stay side-effect free.
     """
     n = len(samples_bps)
     if n == 0:
         return 0.0, 0.0, "[稳定]"
 
-    ordered = sorted(samples_bps)
-    # Bash: n>=3 drops min+max; otherwise keeps everything.
-    trimmed = ordered[1:-1] if n >= 3 else ordered
-
     def _to_mbps(bps: float) -> float:
         return bps * 8 / 1024 / 1024
 
-    trimmed_mean_mbps = sum(_to_mbps(v) for v in trimmed) / len(trimmed)
-    all_mbps = [_to_mbps(v) for v in samples_bps]
+    all_mbps = sorted(_to_mbps(v) for v in samples_bps)
+    if n >= 3:
+        mid = n // 2
+        central = all_mbps[mid] if n % 2 else (all_mbps[mid - 1] + all_mbps[mid]) / 2
+    else:
+        central = sum(all_mbps) / n
+
     full_mean = sum(all_mbps) / n
     variance = sum((v - full_mean) ** 2 for v in all_mbps) / n
     stddev = variance**0.5
 
-    cv = stddev / trimmed_mean_mbps if trimmed_mean_mbps > 0 else 0.0
+    cv = stddev / central if central > 0 else 0.0
     if cv < 0.2:
         label = "[稳定]"
     elif cv < 0.5:
         label = "[轻微波动]"
     else:
         label = "[波动较大]"
-    return round(trimmed_mean_mbps, 2), round(stddev, 2), label
+    return round(central, 2), round(stddev, 2), label
 
 
 def _resolve_tag_probe_url(tag: str, fallback: str) -> str:
@@ -430,9 +465,10 @@ def measure(
             if legacy:
                 bps = _sample_once(client, url)
             else:
-                result = _stream_measure(
+                result = _stream_measure_with_retry(
                     client,
                     url,
+                    retries=_env_int("ISP_SPEED_SAMPLE_RETRIES", _DEFAULT_SAMPLE_RETRIES),
                     warmup_sec=_env_float("ISP_SPEED_WARMUP_SEC", _DEFAULT_WARMUP_SEC),
                     window_sec=_env_float("ISP_SPEED_WINDOW_SEC", _DEFAULT_WINDOW_SEC),
                     max_bytes=_env_int("ISP_SPEED_MAX_BYTES", _DEFAULT_MAX_BYTES),
@@ -534,9 +570,10 @@ def measure_detailed(
 
         results: list[SampleResult] = []
         for _ in range(samples):
-            result = _stream_measure(
+            result = _stream_measure_with_retry(
                 client,
                 url,
+                retries=_env_int("ISP_SPEED_SAMPLE_RETRIES", _DEFAULT_SAMPLE_RETRIES),
                 warmup_sec=effective_warmup,
                 window_sec=_env_float("ISP_SPEED_WINDOW_SEC", _DEFAULT_WINDOW_SEC),
                 max_bytes=_env_int("ISP_SPEED_MAX_BYTES", _DEFAULT_MAX_BYTES),
@@ -636,7 +673,10 @@ class IspSpeedContext:
 # ============================================================================
 
 _SPEED_TEST_URL: Final[str] = "https://speed.cloudflare.com/__down?bytes=25000000"
-_SPEED_SAMPLES_DEFAULT: Final[int] = 2
+# 3 samples give a median that rejects a single slow/fast outlier on the
+# jittery cross-border SOCKS5 paths these proxies live on. Was 2 (no median
+# possible); bumped together with the v2 sampler hardening.
+_SPEED_SAMPLES_DEFAULT: Final[int] = 3
 _KEEP_ON_CACHE_HIT_MBPS: Final[float] = 999.0
 
 
@@ -671,6 +711,39 @@ def _discover_isp_nodes() -> list[tuple[str, str, str, str, str]]:
 
 def _status_file() -> Path:
     return Path(os.environ.get("STATUS_FILE", "/.env/status"))
+
+
+# Strictly-positive Mbps marks a tag as "usable"; 0.0 means every sample
+# failed (connect_fail / timeout / low_speed), i.e. a dead line that must not
+# steer routing or linger in the balancer selector.
+_USABLE_MIN_MBPS: Final[float] = 0.0
+_DEFAULT_LEADER_HYSTERESIS: Final[float] = 1.15
+
+
+def _usable_speed_tags(speeds: dict[str, float]) -> set[str]:
+    """Tags whose measured speed clears the usable floor (strictly > 0)."""
+    return {t for t, v in speeds.items() if v > _USABLE_MIN_MBPS}
+
+
+def _read_status_snapshot() -> dict[str, str]:
+    """Parse ``export KEY='VALUE'`` lines from STATUS_FILE into a flat dict.
+
+    Returns ``{}`` on any read/parse failure so callers degrade to "no prior
+    state" (which is the safe, notify-on-first-run default). Shares the line
+    grammar with :func:`_try_speed_cache_hit`.
+    """
+    path = _status_file()
+    if not path.is_file():
+        return {}
+    snapshot: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^export (\w+)=['\"]?(.*?)['\"]?$", line.strip())
+            if m:
+                snapshot[m.group(1)] = m.group(2)
+    except OSError:
+        return {}
+    return snapshot
 
 
 def _write_status_line(key: str, value: str) -> None:
@@ -745,10 +818,18 @@ _STALE_ENV_KEYS: Final[tuple[str, ...]] = (
 
 
 def _resolve_sample_count(samples: int | None) -> int:
-    """Pick the sample count from CLI arg, env, or default."""
+    """Pick the sample count from CLI arg, env, or default.
+
+    ``ISP_SPEED_SAMPLES`` is the canonical knob (the rest of the v2 sampler
+    env is ``ISP_SPEED_*``); ``SPEED_SAMPLES`` is kept as a legacy alias so
+    existing deployments keep working. Previously only ``SPEED_SAMPLES`` was
+    read, so a deployment setting ``ISP_SPEED_SAMPLES`` was silently ignored.
+    """
     if samples is not None:
         return samples
-    return int(os.environ.get("SPEED_SAMPLES", _SPEED_SAMPLES_DEFAULT))
+    if os.environ.get("ISP_SPEED_SAMPLES", "").strip():
+        return _env_int("ISP_SPEED_SAMPLES", _SPEED_SAMPLES_DEFAULT)
+    return _env_int("SPEED_SAMPLES", _SPEED_SAMPLES_DEFAULT)
 
 
 def _try_cache_hit(cached_tag: str) -> bool:
@@ -862,26 +943,107 @@ def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
     return ctx
 
 
+def _leader_with_hysteresis(
+    ctx: IspSpeedContext, prev_speeds: dict[str, float]
+) -> tuple[str | None, float]:
+    """Apply cross-run hysteresis to the fastest-tag pick.
+
+    The within-run ``IspSpeedContext`` already names a winner, but on jittery
+    proxies the raw argmax flips between retests on sub-percent noise. To keep
+    the *reported* leader stable, we retain the **previous** run's leader
+    unless this run's winner beats it by ``ISP_LEADER_HYSTERESIS`` (default
+    1.15 = 15%). The previous leader must still be usable this run to be kept.
+
+    Returns ``(tag, speed)`` — ``ctx``'s own winner when there is no eligible
+    incumbent. Note this only stabilises the headline/verdict; live routing is
+    handled by xray ``leastPing`` regardless of this pick.
+    """
+    if not ctx.fastest_tag or not prev_speeds:
+        return ctx.fastest_tag, ctx.fastest_speed
+    prev_leader = max(prev_speeds.items(), key=lambda kv: kv[1])[0]
+    if prev_leader == ctx.fastest_tag:
+        return ctx.fastest_tag, ctx.fastest_speed
+    incumbent_speed = ctx.speeds.get(prev_leader, 0.0)
+    if incumbent_speed <= _USABLE_MIN_MBPS:
+        return ctx.fastest_tag, ctx.fastest_speed
+    margin = _env_float("ISP_LEADER_HYSTERESIS", _DEFAULT_LEADER_HYSTERESIS)
+    if ctx.fastest_speed <= incumbent_speed * margin:
+        logger.info(
+            "leader 滞回: 保留上轮 %s (%.2f Mbps)，挑战者 %s (%.2f) 未超 %.0f%% 余量",
+            prev_leader,
+            incumbent_speed,
+            ctx.fastest_tag,
+            ctx.fastest_speed,
+            (margin - 1) * 100,
+        )
+        return prev_leader, incumbent_speed
+    return ctx.fastest_tag, ctx.fastest_speed
+
+
+def _should_notify(
+    *,
+    prev: dict[str, str],
+    new_speeds: dict[str, float],
+    new_isp_tag: str,
+    new_fastest_mbps: float,
+) -> bool:
+    """Edge-trigger: only push a Telegram alert on a *notable* change.
+
+    Notable = first-ever result, usable-membership change (a line went up or
+    down), selected-tag change, or a rating-tier flip (e.g. 4K→1080P). Pure
+    bandwidth jitter that leaves all of these unchanged stays silent, killing
+    the every-retest spam.
+    """
+    prev_raw = prev.get("_ISP_SPEEDS_JSON", "").strip()
+    if not prev_raw:
+        return True
+    try:
+        prev_speeds = {str(k): float(v) for k, v in _json.loads(prev_raw).items()}
+    except (ValueError, TypeError):
+        return True
+    if _usable_speed_tags(prev_speeds) != _usable_speed_tags(new_speeds):
+        return True
+    if prev.get("ISP_TAG", "") != new_isp_tag:
+        return True
+    prev_fastest = max(prev_speeds.values(), default=0.0)
+    return rate(prev_fastest) != rate(new_fastest_mbps)
+
+
 def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
     """Feed the routing logic and export the decision to env + STATUS_FILE."""
     from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
 
-    os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(ctx.speeds)
+    # Snapshot the *previous* persisted state before we overwrite it — drives
+    # both leader hysteresis and the notify edge-trigger below. Read from
+    # STATUS_FILE (not env) so it works in the fresh cron-retest process.
+    prev = _read_status_snapshot()
+    prev_speeds: dict[str, float] = {}
+    prev_raw = prev.get("_ISP_SPEEDS_JSON", "").strip()
+    if prev_raw:
+        try:
+            prev_speeds = {str(k): float(v) for k, v in _json.loads(prev_raw).items()}
+        except (ValueError, TypeError):
+            prev_speeds = {}
+
+    speeds_json = _json_speeds(ctx.speeds)
+    os.environ["_ISP_SPEEDS_JSON"] = speeds_json
+    # Persist the primary speeds map so the *next* retest compares against the
+    # real previous result instead of the frozen boot-time env snapshot — the
+    # bug that made every retest report delta=100% and restart needlessly.
+    _write_status_line("_ISP_SPEEDS_JSON", speeds_json)
 
     # v2: sibling JSON with per-tag status/bytes/window for diagnostics.
-    # Controlled by ISP_SPEED_DIAG_ENABLED (default true). The primary
-    # _ISP_SPEEDS_JSON stays {tag: float} so isp_retest._max_delta_pct
-    # remains schema-compatible with v1.
     diag_enabled = os.environ.get("ISP_SPEED_DIAG_ENABLED", "true").strip().lower() != "false"
     if diag_enabled and ctx.diag:
         diag_json = _json.dumps(ctx.diag)
         os.environ["_ISP_SPEEDS_DIAG_JSON"] = diag_json
         _write_status_line("_ISP_SPEEDS_DIAG_JSON", diag_json)
 
-    if ctx.fastest_tag:
-        os.environ["FASTEST_PROXY_TAG"] = ctx.fastest_tag
+    leader_tag, leader_speed = _leader_with_hysteresis(ctx, prev_speeds)
+    if leader_tag:
+        os.environ["FASTEST_PROXY_TAG"] = leader_tag
         # Bash export name is lowercase (_test_isp_node); mirror it verbatim.
-        os.environ["proxy_max_speed"] = f"{ctx.fastest_speed:.2f}"  # noqa: SIM112
+        os.environ["proxy_max_speed"] = f"{leader_speed:.2f}"  # noqa: SIM112
 
     decision = apply_isp_routing_logic(
         RoutingContext(
@@ -889,8 +1051,8 @@ def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
             geoip_info=os.environ.get("GEOIP_INFO", ""),
             default_isp=os.environ.get("DEFAULT_ISP", ""),
             direct_speed=direct_mbps,
-            fastest_proxy_tag=ctx.fastest_tag,
-            proxy_max_speed=ctx.fastest_speed,
+            fastest_proxy_tag=leader_tag,
+            proxy_max_speed=leader_speed,
         )
     )
     os.environ["ISP_TAG"] = decision.isp_tag
@@ -904,19 +1066,27 @@ def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
         os.environ["IS_8K_SMOOTH"],
     )
 
+    notify = _should_notify(
+        prev=prev,
+        new_speeds=ctx.speeds,
+        new_isp_tag=decision.isp_tag,
+        new_fastest_mbps=leader_speed,
+    )
+
     # Phase 2 observability: structured event so ops can track every
-    # speed-test outcome (boot-time and cron-triggered alike). v2 adds
-    # per-tag 'diag' so operators can tell connect_fail from low_speed
-    # from timeout at a glance.
+    # speed-test outcome (boot-time and cron-triggered alike). ``notify``
+    # gates the Telegram push (shoutrrr) without suppressing the log/event,
+    # so observability stays full-fidelity while alerts stay quiet.
     from sb_xray.events import emit_event
 
     payload: dict[str, object] = {
         "direct_mbps": round(direct_mbps, 2),
-        "fastest_tag": ctx.fastest_tag or "",
-        "fastest_mbps": round(ctx.fastest_speed, 2),
+        "fastest_tag": leader_tag or "",
+        "fastest_mbps": round(leader_speed, 2),
         "speeds": {t: round(v, 2) for t, v in ctx.speeds.items()},
         "isp_tag": decision.isp_tag,
         "is_8k_smooth": decision.is_8k_smooth,
+        "notify": notify,
     }
     if ctx.diag:
         payload["diag"] = ctx.diag

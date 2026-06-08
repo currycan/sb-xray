@@ -63,8 +63,24 @@ def _fmt_mbps(value: object) -> str | None:
     return f"{value:g}"
 
 
+def _rating_line(value: object) -> str | None:
+    """``fastest_mbps`` → 评级梯子标签（如「评级: 流畅 4K，8K 可能卡顿」）。
+
+    Replaces the old binary「8K: ✅/⚠️」which, with the 100 Mbps bar, read as
+    a scary "⚠️ 不流畅" almost permanently. The ladder (8K-HDR/8K/4K/1080P/
+    网络较慢) reuses speed_test.rate so a healthy 4K-capable line says so
+    instead of failing a bar it was never going to clear.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    from sb_xray.speed_test import _RATING_LABEL, rate
+
+    label = _RATING_LABEL.get(rate(float(value)), "—")
+    return f"评级: {label}"
+
+
 def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
-    """isp.speed_test.result → 人话摘要：选定线路 / 8K 判定 / 各线路逐行。"""
+    """isp.speed_test.result → 人话摘要：选定线路 / 评级 / 各线路逐行。"""
     title = f"{title_prefix} 📊 ISP 测速结果"
 
     isp_tag = str(payload.get("isp_tag") or "?")
@@ -73,7 +89,10 @@ def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
     if fastest is not None:
         headline += f" · {fastest} Mbps"
 
-    summary = [headline, f"8K: {'✅ 流畅' if payload.get('is_8k_smooth') else '⚠️ 不流畅'}"]
+    summary = [headline]
+    rating = _rating_line(payload.get("fastest_mbps"))
+    if rating is not None:
+        summary.append(rating)
     direct = _fmt_mbps(payload.get("direct_mbps"))
     if direct is not None:
         summary.append(f"直连基准: {direct} Mbps")
@@ -205,6 +224,13 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
 
 
 def _send(urls: list[str], title_prefix: str, event: str, payload: dict) -> None:
+    # Edge-triggered alerting: speed_test results carry a ``notify`` flag set
+    # by _persist_routing_decision. Only a notable change (membership flip,
+    # tag change, rating-tier flip, first run) sets it true — pure bandwidth
+    # jitter stays silent. Absent key → push (back-compat with old payloads).
+    if event == "isp.speed_test.result" and payload.get("notify") is False:
+        logger.info("speed_test result not notable — skipping push (notify=false)")
+        return
     if not urls:
         logger.info(
             "dry-run event=%s payload=%s",
