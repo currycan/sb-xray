@@ -230,8 +230,8 @@ flowchart TB
 
 | 行为 | 实现 |
 |---|---|
-| **事件类型识别** | 取 `X-Event` 请求头；缺失则退回 URL 路径（`/ban_bt` → `ban_bt`），再退回 `unknown` |
-| **消息拼装** | 4 个内置 ban 事件 → 人话摘要：标题 = `"{SHOUTRRR_TITLE_PREFIX} 🚫 BT 下载已拦截"` 等中文标题，正文 = 「用户 X 尝试连接 Y」+ 来源/入站/时间（空字段整行省略，`ts` 转本地时间）；未登记的事件 → 标题 = `"{SHOUTRRR_TITLE_PREFIX} {event}"`，正文 = 每字段一行 `key: value`（剔除空值、`ts` 转可读） |
+| **事件类型识别** | 取 `X-Event` 请求头（Xray webhook 走这条）；缺失则读 body 里的 `event` 字段（容器内 `events.py` POST 到 `/xray` 时事件名包在 body 里），再退回 URL 路径（`/ban_bt` → `ban_bt`），最后 `unknown` |
+| **消息拼装** | 4 个内置 ban 事件 → 人话摘要：标题 = `"{SHOUTRRR_TITLE_PREFIX} 🚫 BT 下载已拦截"` 等中文标题，正文 = 「用户 X 尝试连接 Y」+ 来源/入站/时间；`isp.speed_test.result` → 标题 `📊 ISP 测速结果`，正文 = 选定线路/8K 判定/直连基准 + 各线路逐行（含 ✓/✗ 与失败原因）；未登记的事件 → 标题 = `"{SHOUTRRR_TITLE_PREFIX} {event}"`，正文 = 每字段一行 `key: value`（剔除空值与 `event` 键、`ts` 转可读） |
 | **多 URL 发送** | **同一事件的多条 URL 顺序发送**（`for url in urls`），每条独立 `try` + 10s 超时；单条失败 `continue`，不影响后续 |
 | **多事件并发** | `ThreadingHTTPServer`——不同事件各开线程处理，互不阻塞 |
 | **token 安全** | 日志只记 URL 的 **scheme**（`telegram`/`discord`），从不打印完整 URL |

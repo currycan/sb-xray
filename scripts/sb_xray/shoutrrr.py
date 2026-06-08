@@ -46,6 +46,64 @@ _BAN_TITLES: Final[dict[str, str]] = {
 }
 _TS_FORMAT: Final[str] = "%m-%d %H:%M:%S"
 
+# speed_test diag.status → 人话标签（词表见 speed_test._aggregate_diag）
+_SPEED_STATUS_LABEL: Final[dict[str, str]] = {
+    "low_speed": "速率过低",
+    "timeout": "超时",
+    "connect_fail": "连接失败",
+    "zero_body": "空响应",
+    "mixed": "部分失败",
+}
+
+
+def _fmt_mbps(value: object) -> str | None:
+    """数字 → 去尾零的 Mbps 文本；非数字返回 None。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return f"{value:g}"
+
+
+def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """isp.speed_test.result → 人话摘要：选定线路 / 8K 判定 / 各线路逐行。"""
+    title = f"{title_prefix} 📊 ISP 测速结果"
+
+    isp_tag = str(payload.get("isp_tag") or "?")
+    headline = f"选定线路: {isp_tag}"
+    fastest = _fmt_mbps(payload.get("fastest_mbps"))
+    if fastest is not None:
+        headline += f" · {fastest} Mbps"
+
+    summary = [headline, f"8K: {'✅ 流畅' if payload.get('is_8k_smooth') else '⚠️ 不流畅'}"]
+    direct = _fmt_mbps(payload.get("direct_mbps"))
+    if direct is not None:
+        summary.append(f"直连基准: {direct} Mbps")
+    blocks = ["\n".join(summary)]
+
+    speeds = payload.get("speeds")
+    diag = payload.get("diag")
+    diag = diag if isinstance(diag, dict) else {}
+    if isinstance(speeds, dict) and speeds:
+        detail = ["各线路:"]
+        for tag, mbps in speeds.items():
+            d = diag.get(tag)
+            d = d if isinstance(d, dict) else {}
+            status = d.get("status")
+            mark = "✓" if status == "ok" else ("✗" if status else "·")
+            mbps_str = _fmt_mbps(mbps) or str(mbps)
+            line = f"{mark} {tag}  {mbps_str} Mbps"
+            if status and status != "ok":
+                label = _SPEED_STATUS_LABEL.get(status, status)
+                ok, total = d.get("ok"), d.get("total")
+                if isinstance(ok, int) and isinstance(total, int):
+                    line += f"  ({label} {ok}/{total})"
+                else:
+                    line += f"  ({label})"
+            detail.append(line)
+        blocks.append("\n".join(detail))
+
+    return title, "\n\n".join(blocks)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +127,8 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
     已知 ban 事件 → emoji 标题 + 摘要正文（谁连了什么 + 来源/入站/时间），
     空值字段整行省略；未知事件 → 原 key:value 列表，但剔除空值、ts 转可读。
     """
+    if event == "isp.speed_test.result":
+        return _format_speed_test(payload, title_prefix)
     if event in _BAN_TITLES:
         title = f"{title_prefix} {_BAN_TITLES[event]}"
         user = str(payload.get("email") or "").split("@", 1)[0]
@@ -104,6 +164,8 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
     title = f"{title_prefix} {event}"
     lines: list[str] = []
     for k, v in payload.items():
+        if k == "event":  # 已是标题，避免正文重复
+            continue
         if v is None or v == "":
             continue
         if k == "ts":
@@ -168,7 +230,12 @@ def _make_handler(urls: list[str], title_prefix: str) -> type[BaseHTTPRequestHan
                 self.end_headers()
                 self.wfile.write(f"bad json: {exc}".encode())
                 return
-            event = self.headers.get("X-Event") or self.path.strip("/") or "unknown"
+            # X-Event 头优先（Xray webhook 走这条）；events.py 把事件名包在
+            # body 的 "event" 字段里 POST 到 /xray，无头时退回读它，再退回 URL 路径。
+            event = self.headers.get("X-Event")
+            if not event and isinstance(payload, dict):
+                event = payload.get("event")
+            event = event or self.path.strip("/") or "unknown"
             _send(urls, title_prefix, event, payload)
             self.send_response(204)
             self.end_headers()

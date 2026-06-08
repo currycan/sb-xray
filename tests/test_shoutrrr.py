@@ -105,6 +105,75 @@ def test_format_message_unknown_event_keeps_unparsable_ts_verbatim():
     assert "ts: oops" in body
 
 
+def test_format_message_unknown_event_skips_event_key():
+    # events.py wraps payloads as {"event": name, ...}; the title already
+    # carries the name, so it must not be repeated as a body line.
+    _title, body = shoutrrr._format_message(
+        "manual.test", {"event": "manual.test", "email": "demo"}, "[p]"
+    )
+    assert "email: demo" in body
+    assert "event:" not in body
+
+
+_SPEED_PAYLOAD = {
+    "event": "isp.speed_test.result",
+    "direct_mbps": 302.91,
+    "fastest_tag": "proxy-us-isp",
+    "fastest_mbps": 5.17,
+    "speeds": {"proxy-us-isp": 5.17, "proxy-la-isp": 1.31},
+    "isp_tag": "proxy-us-isp",
+    "is_8k_smooth": False,
+    "diag": {
+        "proxy-us-isp": {"status": "ok", "ok": 2, "total": 2},
+        "proxy-la-isp": {"status": "ok", "ok": 2, "total": 2},
+    },
+}
+
+
+def test_format_message_speed_test_result_is_readable():
+    title, body = shoutrrr._format_message("isp.speed_test.result", _SPEED_PAYLOAD, "[sb-xray:jp]")
+    assert title == "[sb-xray:jp] 📊 ISP 测速结果"
+    assert "选定线路: proxy-us-isp · 5.17 Mbps" in body
+    assert "8K: ⚠️ 不流畅" in body
+    assert "直连基准: 302.91 Mbps" in body
+    assert "✓ proxy-us-isp  5.17 Mbps" in body
+    assert "✓ proxy-la-isp  1.31 Mbps" in body
+    # raw python dict repr must be gone
+    assert "{'status'" not in body
+    assert "window_sec" not in body
+    assert "event:" not in body
+
+
+def test_format_message_speed_test_marks_failed_tag():
+    payload = {
+        "isp_tag": "proxy-us-isp",
+        "fastest_mbps": 5.0,
+        "is_8k_smooth": True,
+        "speeds": {"proxy-us-isp": 5.0, "proxy-la-isp": 0.0},
+        "diag": {
+            "proxy-us-isp": {"status": "ok", "ok": 2, "total": 2},
+            "proxy-la-isp": {"status": "timeout", "ok": 0, "total": 2},
+        },
+    }
+    _title, body = shoutrrr._format_message("isp.speed_test.result", payload, "[p]")
+    assert "8K: ✅ 流畅" in body
+    assert "✓ proxy-us-isp  5 Mbps" in body
+    assert "✗ proxy-la-isp  0 Mbps  (超时 0/2)" in body
+
+
+def test_post_uses_payload_event_when_no_header(caplog):
+    caplog.set_level("INFO", logger="sb_xray.shoutrrr")
+    with _ServerThread() as srv:
+        conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=2)
+        body = json.dumps({"event": "isp.speed_test.result", "isp_tag": "proxy-us-isp"})
+        conn.request("POST", "/xray", body=body, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 204
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("dry-run event=isp.speed_test.result" in m for m in messages)
+
+
 def test_parse_urls_splits_on_semicolons():
     assert shoutrrr._parse_urls(None) == []
     assert shoutrrr._parse_urls("") == []
