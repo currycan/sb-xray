@@ -180,9 +180,9 @@ environment:
 | `PORT_TUIC` | `8443`（Dockerfile ENV 固定值） | TUIC UDP 端口（Sing-box 承载） |
 | `PORT_ANYTLS` | `4433`（Dockerfile ENV 固定值） | AnyTLS TCP 端口（Sing-box 承载） |
 | `PORT_XHTTP_H3` | `4443`（Dockerfile ENV 固定值） | XHTTP/3 UDP 端口 |
-| `PORT_XICMP_ID` | `12345` | XICMP 紧急通道 ICMP id（默认关，见 `docs/features/0421-new-features-guide.md §6`） |
-| `PORT_XDNS` | `5353` | XDNS 紧急通道 UDP 端口（默认关，见 `docs/features/0421-new-features-guide.md §7`） |
-| `ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE` | `false` | 实验性 feature flag；开启条件与效果详见 [新特性使用指南](./features/0421-new-features-guide.md) |
+| `PORT_XICMP_ID` | `12345` | XICMP 紧急通道 ICMP id（默认关，见 `docs/09-feature-flags-and-capabilities.md §6`） |
+| `PORT_XDNS` | `5353` | XDNS 紧急通道 UDP 端口（默认关，见 `docs/09-feature-flags-and-capabilities.md §7`） |
+| `ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE` | `false` | 实验性 feature flag；开启条件与效果详见 [特性开关与可选能力指南](./09-feature-flags-and-capabilities.md) |
 | `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（Dockerfile ENV 注册） | **小内存节点降载开关**；设 `false` 在 `createConfig` 后由 `python3 /scripts/entrypoint.py trim` 过滤对应 `[program:*]` 段；详见 §7 |
 | `GOMEMLIMIT` / `GOGC` | _未设置_ | Go GC 硬上限 + 回收激进度；推荐小内存节点 `GOMEMLIMIT=320MiB` + `GOGC=50` |
 | `XDNS_DOMAIN` | _空_ | XDNS 紧急通道的 NS 域名（`ENABLE_XDNS=true` 时必填） |
