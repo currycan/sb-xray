@@ -64,6 +64,45 @@ def test_trace_url_returns_empty_on_failure() -> None:
     assert sbhttp.trace_url("https://example.test/err") == ""
 
 
+@respx.mock
+def test_fetch_returns_status_body_and_final_url() -> None:
+    respx.get("https://example.test/page").mock(
+        return_value=httpx.Response(200, text="<html>hello</html>")
+    )
+    result = sbhttp.fetch("https://example.test/page")
+    assert result.status == 200
+    assert "hello" in result.body
+    assert result.final_url == "https://example.test/page"
+
+
+@respx.mock
+def test_fetch_follows_redirect_to_final_url() -> None:
+    respx.get("https://example.test/go").mock(
+        return_value=httpx.Response(302, headers={"location": "https://example.test/dest"})
+    )
+    respx.get("https://example.test/dest").mock(return_value=httpx.Response(200, text="ok"))
+    result = sbhttp.fetch("https://example.test/go")
+    assert result.status == 200
+    assert result.final_url == "https://example.test/dest"
+
+
+@respx.mock
+def test_fetch_returns_minus_one_on_network_error() -> None:
+    respx.get("https://example.test/down").mock(side_effect=httpx.ConnectError("refused"))
+    result = sbhttp.fetch("https://example.test/down")
+    assert result.status == -1
+    assert result.body == ""
+    assert result.final_url == ""
+
+
+@respx.mock
+def test_fetch_truncates_large_body() -> None:
+    huge = "x" * (200 * 1024)
+    respx.get("https://example.test/big").mock(return_value=httpx.Response(200, text=huge))
+    result = sbhttp.fetch("https://example.test/big")
+    assert len(result.body.encode("utf-8")) <= sbhttp._MAX_BODY_BYTES
+
+
 def test_user_agent_is_mozilla() -> None:
     assert "Mozilla" in sbhttp.DEFAULT_UA
 

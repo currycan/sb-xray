@@ -9,6 +9,7 @@ for Phase 2's concurrent speed test + media probe.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Final
 
 import httpx
@@ -16,6 +17,24 @@ import httpx
 DEFAULT_UA: Final[str] = "Mozilla/5.0"
 PROBE_TIMEOUT: Final[float] = 3.0
 TRACE_TIMEOUT: Final[float] = 5.0
+GET_TIMEOUT: Final[float] = 6.0
+# Read at most this many bytes of a response body — enough to fingerprint
+# an unlock/block page, bounded so a large stream can't blow up memory.
+_MAX_BODY_BYTES: Final[int] = 64 * 1024
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """Outcome of a body-reading GET probe.
+
+    ``status`` is the (post-redirect) HTTP status code, or ``-1`` on any
+    network/protocol failure. ``body`` is the decoded response text,
+    truncated to ~64 KiB. ``final_url`` is the URL after redirects.
+    """
+
+    status: int
+    body: str
+    final_url: str
 
 
 def probe(url: str, *, follow: bool = False, timeout: float = PROBE_TIMEOUT) -> str:
@@ -48,6 +67,37 @@ async def probe_async(url: str, *, follow: bool = False, timeout: float = PROBE_
             return str(resp.status_code)
     except httpx.HTTPError:
         return "Timeout"
+
+
+def fetch(url: str, *, follow: bool = True, timeout: float = GET_TIMEOUT) -> FetchResult:
+    """GET ``url`` and return status + (truncated) body + final URL.
+
+    Unlike :func:`probe` (HEAD only, status code), this reads the response
+    body so callers can tell a real page from a 200-but-blocked page
+    (captcha / geo-gate). Streams and stops at ``_MAX_BODY_BYTES``. Any
+    network/protocol error yields ``FetchResult(-1, "", "")``.
+    """
+    try:
+        with (
+            httpx.Client(
+                follow_redirects=follow,
+                timeout=timeout,
+                headers={"User-Agent": DEFAULT_UA},
+            ) as client,
+            client.stream("GET", url) as resp,
+        ):
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in resp.iter_bytes():
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= _MAX_BODY_BYTES:
+                    break
+            raw = b"".join(chunks)[:_MAX_BODY_BYTES]
+            body = raw.decode(resp.encoding or "utf-8", errors="replace")
+            return FetchResult(status=resp.status_code, body=body, final_url=str(resp.url))
+    except httpx.HTTPError:
+        return FetchResult(status=-1, body="", final_url="")
 
 
 def trace_url(url: str, *, timeout: float = TRACE_TIMEOUT) -> str:
