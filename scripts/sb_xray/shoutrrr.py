@@ -148,6 +148,45 @@ def _format_substore_failure(payload: dict, title_prefix: str) -> tuple[str, str
     return title, "\n\n".join(blocks) or "订阅拉取失败"
 
 
+# isp.retest.completed reason → 人话（取值见 isp_retest._should_reload）
+_RETEST_REASON_LABEL: Final[dict[str, str]] = {
+    "composition_changed": "节点集合变化",
+    "routing_class_changed": "路由模式切换（直连 ↔ 代理）",
+}
+
+
+def _format_retest_completed(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """isp.retest.completed → 人话：线路切换结论 + 触发原因 + 重启状态。
+
+    payload 只带路由决策元数据（reason / old_top_tag / new_top_tag /
+    delta_pct / restarted），不含测速数值，所以原先落到通用 key:value 兜底,
+    与 ``isp.speed_test.result`` 的中文卡片观感割裂。delta_pct 在 composition
+    变化时恒为 100%（新节点旧值为 0），属噪声,故不展示。
+    """
+    title = f"{title_prefix} 🔄 ISP 线路已更新"
+
+    old_top = str(payload.get("old_top_tag") or "")
+    new_top = str(payload.get("new_top_tag") or "")
+    if old_top and new_top and old_top != new_top:
+        headline = f"线路切换: {old_top} → {new_top}"
+    elif new_top:
+        headline = f"当前线路: {new_top}"
+    elif old_top:
+        headline = f"线路切换: {old_top} → 无可用线路"
+    else:
+        headline = "线路配置已更新"
+
+    details: list[str] = []
+    reason_label = _RETEST_REASON_LABEL.get(str(payload.get("reason") or ""))
+    if reason_label:
+        details.append(f"原因: {reason_label}")
+    details.append(
+        "已重启 xray/sing-box 生效" if payload.get("restarted") else "未重启（启动阶段）"
+    )
+
+    return title, "\n\n".join([headline, "\n".join(details)])
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -173,6 +212,8 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
     """
     if event == "isp.speed_test.result":
         return _format_speed_test(payload, title_prefix)
+    if event == "isp.retest.completed":
+        return _format_retest_completed(payload, title_prefix)
     if event == "substore.sub_fetch.failed":
         return _format_substore_failure(payload, title_prefix)
     if event in _BAN_TITLES:
