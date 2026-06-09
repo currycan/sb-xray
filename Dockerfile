@@ -485,6 +485,15 @@ VOLUME ${DUFS_SERVE_PATH} ${WORKDIR} ${SUB_STORE_DATA_BASE_PATH} ${LOGDIR} /etc/
 
 STOPSIGNAL SIGTERM
 
+# OCI 元数据：置于 final stage 末尾（所有 RUN/COPY 之后），
+# VERSION/SHA 每次 commit 变，放最后可避免使依赖层缓存失效。
+ARG VERSION
+ARG SHA
+LABEL org.opencontainers.image.title="sb-xray" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${SHA}" \
+      org.opencontainers.image.source="https://github.com/currycan/sb-xray"
+
 # Python entrypoint (100% orchestration — no bash fallback).
 # `run` runs every boot stage in Python and execs supervisord as PID 1.
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "python3", "/scripts/entrypoint.py", "run"]
