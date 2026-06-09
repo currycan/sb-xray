@@ -332,3 +332,24 @@ def test_apply_isp_routing_logic_does_not_touch_env(monkeypatch: pytest.MonkeyPa
     geoip_touches = [t for t in touches if t[1] == "GEOIP_INFO"]
     assert geoip_touches == []  # never touched GEOIP_INFO, not even transiently
     assert dict(os.environ) == before  # net effect unchanged
+
+
+# ---- rule order: tiktok must precede the broader social-media rule ---------
+
+
+def _spec_domains() -> list[tuple[str, ...]]:
+    return [domains for domains, _env, _mark in isp._SERVICE_SPEC]
+
+
+def test_tiktok_rule_precedes_social_media_in_service_spec() -> None:
+    domains = _spec_domains()
+    tiktok_idx = domains.index(("geosite:tiktok",))
+    social_idx = domains.index(("geosite:category-social-media-!cn",))
+    # Both engines match top-down first-hit; the dedicated tiktok rule is dead
+    # if the broad social-media rule comes first.
+    assert tiktok_idx < social_idx
+
+
+def test_xray_service_rules_emit_tiktok_before_social_media() -> None:
+    rules = isp.build_xray_service_rules(outbounds={})
+    assert rules.index("geosite:tiktok") < rules.index("geosite:category-social-media-!cn")

@@ -241,15 +241,15 @@
             },
             {
                 "rule_set": [
-                    "geosite-category-social-media-!cn"
+                    "geosite-tiktok"
                 ],
-                "outbound": "${ISP_OUT}"
+                "outbound": "${TIKTOK_OUT}"
             },
             {
                 "rule_set": [
-                    "geosite-tiktok"
+                    "geosite-category-social-media-!cn"
                 ],
-                "outbound": "${ISP_OUT}"
+                "outbound": "${SOCIAL_MEDIA_OUT}"
             },
             {
                 "rule_set": [

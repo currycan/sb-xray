@@ -1,4 +1,28 @@
-"""Streaming / AI reachability probes (entrypoint.sh §11 equivalent)."""
+"""Streaming / AI reachability probes (entrypoint.sh §11 equivalent).
+
+Services are split by **account-risk class**, because "should this go direct
+or through the residential ISP proxy?" has two different answers:
+
+- **Account-sensitive** (chatgpt / social / tiktok / gemini / claude): the risk
+  is *account bans*, which can't be probed. So we stay maximally conservative —
+  home-broadband IP → ``direct``; anything else → fallback (``isp-auto``), no probe.
+- **Streaming-unlock** (netflix / disney / youtube): the risk is *can this IP
+  unlock the catalog?* A datacenter IP may well unlock, so it's worth probing.
+  We GET the page and inspect the body (a HEAD 200 can hide a block/captcha page).
+
+Unified decision order per service (highest priority first, short-circuit on hit):
+
+    L0  (gemini only) GEMINI_DIRECT override: true→direct, false→fallback
+    L1  is_restricted_region(GEOIP_INFO) → fallback        ← top-level safety net
+    L2  IP_TYPE == "isp" (home broadband) → "direct"
+    L3  non-residential, by class:
+          account-sensitive → fallback (hardcoded, no probe)
+          streaming-unlock  → GET probe; REAL → "direct", else → fallback
+
+The restricted-region guard sits *above* the residential short-circuit on
+purpose: a home-broadband node that happens to sit in a censored region must
+not send these services out ``direct`` (censorship + account risk).
+"""
 
 from __future__ import annotations
 
@@ -7,82 +31,91 @@ import re
 
 from sb_xray import http as sbhttp
 from sb_xray.network import get_fallback_proxy, is_restricted_region
+from sb_xray.routing.service_spec import SPECS_BY_ENV, ContentSignature
 
-_OK_RE = re.compile(r"^[23]")
+# Streaming-unlock classify verdicts.
+_REAL = "REAL"
+_BLOCKED = "BLOCKED"
+_UNREACHABLE = "UNREACHABLE"
+_UNKNOWN = "UNKNOWN"
 
 
 def _is_residential() -> bool:
     return os.environ.get("IP_TYPE", "unknown") == "isp"
 
 
-def _probe_direct_or_fallback(url: str, *, follow: bool = True) -> str:
-    """HEAD ``url``; 2xx/3xx → ``direct``; otherwise ``get_fallback_proxy``."""
-    code = sbhttp.probe(url, follow=follow)
-    if _OK_RE.match(code):
+def _classify(result: sbhttp.FetchResult, sig: ContentSignature) -> str:
+    """Classify a fetched streaming page. BLOCKED wins over REAL because a
+    block page can still contain brand keywords; anything unmatched is
+    UNKNOWN (caller treats it as fail-safe → fallback)."""
+    if result.status < 200 or result.status >= 400:
+        return _UNREACHABLE
+    body = result.body
+    if any(s in body for s in sig.blocked_substrings):
+        return _BLOCKED
+    if any(re.search(p, result.final_url) for p in sig.blocked_url_patterns):
+        return _BLOCKED
+    if sig.real_substrings and any(s in body for s in sig.real_substrings):
+        return _REAL
+    return _UNKNOWN
+
+
+def _account_sensitive() -> str:
+    """A-class decision: no probe. Restricted region or non-residential →
+    fallback; only an unrestricted home-broadband IP earns ``direct``."""
+    if is_restricted_region():
+        return get_fallback_proxy()
+    if _is_residential():
         return "direct"
     return get_fallback_proxy()
 
 
-# ---- Netflix / Disney / YouTube (simple HEAD probe) ------------------------
+def _streaming_unlock(env_var: str) -> str:
+    """B-class decision: restricted/residential short-circuits first, then a
+    body-reading GET decides unlock. Only a REAL verdict earns ``direct``."""
+    if is_restricted_region():
+        return get_fallback_proxy()
+    if _is_residential():
+        return "direct"
+    spec = SPECS_BY_ENV[env_var]
+    if spec.signature is None:  # defensive: a streaming spec must carry one
+        return get_fallback_proxy()
+    verdict = _classify(sbhttp.fetch(spec.probe_url), spec.signature)
+    return "direct" if verdict == _REAL else get_fallback_proxy()
+
+
+# ---- Streaming-unlock services (B-class: probed) ---------------------------
 
 
 def check_netflix() -> str:
-    if _is_residential():
-        return "direct"
-    return _probe_direct_or_fallback("https://www.netflix.com/title/81249783", follow=True)
+    return _streaming_unlock("NETFLIX_OUT")
 
 
 def check_disney() -> str:
-    if _is_residential():
-        return "direct"
-    return _probe_direct_or_fallback("https://www.disneyplus.com/", follow=True)
+    return _streaming_unlock("DISNEY_OUT")
 
 
 def check_youtube() -> str:
-    if _is_residential():
-        return "direct"
-    return _probe_direct_or_fallback("https://www.youtube.com/", follow=True)
+    return _streaming_unlock("YOUTUBE_OUT")
 
 
-# ---- Social / TikTok (no HTTP, pure env) -----------------------------------
+# ---- Account-sensitive services (A-class: hardcoded, no probe) -------------
 
 
 def check_social_media() -> str:
-    if is_restricted_region():
-        return get_fallback_proxy()
-    if not _is_residential():
-        return get_fallback_proxy()
-    return "direct"
+    return _account_sensitive()
 
 
 def check_tiktok() -> str:
-    if is_restricted_region():
-        return get_fallback_proxy()
-    if not _is_residential():
-        return get_fallback_proxy()
-    return "direct"
-
-
-# ---- ChatGPT / Claude / Gemini (restricted-first) --------------------------
+    return _account_sensitive()
 
 
 def check_chatgpt() -> str:
-    if is_restricted_region():
-        return get_fallback_proxy()
-    if _is_residential():
-        return "direct"
-    return _probe_direct_or_fallback("https://chatgpt.com", follow=False)
+    return _account_sensitive()
 
 
 def check_claude() -> str:
-    if is_restricted_region():
-        return get_fallback_proxy()
-    if _is_residential():
-        return "direct"
-    final = sbhttp.trace_url("https://claude.ai/login")
-    if not final or re.search(r"claude\.ai/(login|chats)", final):
-        return "direct"
-    return get_fallback_proxy()
+    return _account_sensitive()
 
 
 def check_gemini() -> str:
@@ -91,11 +124,7 @@ def check_gemini() -> str:
         return "direct"
     if override == "false":
         return get_fallback_proxy()
-    if is_restricted_region():
-        return get_fallback_proxy()
-    if _is_residential():
-        return "direct"
-    return _probe_direct_or_fallback("https://gemini.google.com/app", follow=True)
+    return _account_sensitive()
 
 
 # ---- aggregate --------------------------------------------------------------

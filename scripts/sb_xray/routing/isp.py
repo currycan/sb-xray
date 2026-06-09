@@ -94,8 +94,11 @@ _SERVICE_SPEC: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = (
     (("geosite:google",), "GEMINI_OUT", False),
     (("geosite:google-gemini",), "GEMINI_OUT", False),
     (("geosite:youtube",), "YOUTUBE_OUT", False),
-    (("geosite:category-social-media-!cn",), "SOCIAL_MEDIA_OUT", False),
+    # tiktok MUST precede the broader social-media rule: both engines match
+    # top-down first-hit, so listing category-social-media-!cn first shadows
+    # the dedicated tiktok rule (dead rule). See tests/test_routing_isp.py.
     (("geosite:tiktok",), "TIKTOK_OUT", False),
+    (("geosite:category-social-media-!cn",), "SOCIAL_MEDIA_OUT", False),
     (("geosite:amazon", "geosite:paypal", "geosite:ebay"), "ISP_OUT", False),
 )
 
