@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from sb_xray import speed_test as st
@@ -165,20 +164,30 @@ def test_isp_context_record_diag_optional() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _outcome_from_ctx(ctx: st.IspSpeedContext, *, direct_mbps: float = 100.0) -> st.SpeedOutcome:
+    """Build a SpeedOutcome directly from a measured context (test helper).
+
+    Replaces the old ``_persist_routing_decision`` test path now that
+    measurement and side effects are split (race-fix Task 3).
+    """
+    return st.SpeedOutcome(
+        speeds=dict(ctx.speeds),
+        diag=dict(ctx.diag) if ctx.diag else None,
+        direct_mbps=direct_mbps,
+        fastest_tag=ctx.fastest_tag,
+        fastest_speed=ctx.fastest_speed,
+        isp_tag=ctx.fastest_tag or "direct",
+        is_8k_smooth=False,
+        has_isp_nodes=bool(ctx.speeds),
+        notify=False,
+    )
+
+
 def test_persist_writes_diag_json_when_enabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))
     monkeypatch.delenv("ISP_SPEED_DIAG_ENABLED", raising=False)
-
-    # Fake routing decision so we don't touch the full xray pipeline.
-    from sb_xray.routing import isp as isp_mod
-
-    monkeypatch.setattr(
-        isp_mod,
-        "apply_isp_routing_logic",
-        lambda ctx: isp_mod.IspDecision(isp_tag="proxy-la-isp", is_8k_smooth=False),
-    )
 
     ctx = st.IspSpeedContext()
     ctx.record("proxy-la-isp", 21.0, diag={"status": "ok", "ok": 3, "total": 3})
@@ -188,17 +197,12 @@ def test_persist_writes_diag_json_when_enabled(
         diag={"status": "connect_fail", "ok": 0, "total": 3},
     )
 
-    monkeypatch.setattr(st, "emit_event", MagicMock(), raising=False)
-    from sb_xray import events as _events
-
-    monkeypatch.setattr(_events, "emit_event", MagicMock())
-
-    st._persist_routing_decision(100.0, ctx)
+    st.persist_outcome_to_status(_outcome_from_ctx(ctx))
 
     status_raw = (tmp_path / "status").read_text(encoding="utf-8")
     assert "_ISP_SPEEDS_DIAG_JSON=" in status_raw
     # Extract and parse the JSON diag line
-    diag_line = [line for line in status_raw.splitlines() if "_ISP_SPEEDS_DIAG_JSON=" in line][0]
+    diag_line = next(line for line in status_raw.splitlines() if "_ISP_SPEEDS_DIAG_JSON=" in line)
     raw = diag_line.split("=", 1)[1].strip().strip("'\"")
     parsed = json.loads(raw)
     assert parsed["proxy-la-isp"]["status"] == "ok"
@@ -211,22 +215,10 @@ def test_persist_omits_diag_json_when_disabled(
     monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))
     monkeypatch.setenv("ISP_SPEED_DIAG_ENABLED", "false")
 
-    from sb_xray.routing import isp as isp_mod
-
-    monkeypatch.setattr(
-        isp_mod,
-        "apply_isp_routing_logic",
-        lambda ctx: isp_mod.IspDecision(isp_tag="direct", is_8k_smooth=True),
-    )
-
     ctx = st.IspSpeedContext()
     ctx.record("proxy-la-isp", 21.0, diag={"status": "ok"})
 
-    from sb_xray import events as _events
-
-    monkeypatch.setattr(_events, "emit_event", MagicMock())
-
-    st._persist_routing_decision(100.0, ctx)
+    st.persist_outcome_to_status(_outcome_from_ctx(ctx))
 
     status_raw = (tmp_path / "status").read_text(encoding="utf-8")
     assert "_ISP_SPEEDS_DIAG_JSON=" not in status_raw
@@ -240,14 +232,6 @@ def test_persist_omits_diag_json_when_disabled(
 def test_event_payload_includes_diag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))
 
-    from sb_xray.routing import isp as isp_mod
-
-    monkeypatch.setattr(
-        isp_mod,
-        "apply_isp_routing_logic",
-        lambda c: isp_mod.IspDecision(isp_tag="proxy-la-isp", is_8k_smooth=False),
-    )
-
     captured = {}
 
     def _cap(name, payload):
@@ -260,7 +244,7 @@ def test_event_payload_includes_diag(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     ctx = st.IspSpeedContext()
     ctx.record("proxy-la-isp", 21.0, diag={"status": "ok", "ok": 3, "total": 3})
-    st._persist_routing_decision(100.0, ctx)
+    st._emit_outcome_event(_outcome_from_ctx(ctx))
 
     assert captured["name"] == "isp.speed_test.result"
     assert "diag" in captured["payload"]

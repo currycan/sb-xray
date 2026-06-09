@@ -109,9 +109,15 @@ def check_brutal_status() -> str:
     return "true" if _BRUTAL_MODULE_PATH.is_dir() else "false"
 
 
-def is_restricted_region() -> bool:
-    """Match the Bash regex on ``${GEOIP_INFO}`` (CN/HK/MO/RU variants)."""
-    info = os.environ.get("GEOIP_INFO", "")
+def is_restricted_region(info: str | None = None) -> bool:
+    """Match the Bash regex on ``GEOIP_INFO`` (CN/HK/MO/RU variants).
+
+    ``info`` lets callers pass the value directly instead of round-tripping
+    through ``os.environ`` (avoids a thread-shared env mutation). When omitted,
+    the value is read from ``${GEOIP_INFO}`` for backward compatibility.
+    """
+    if info is None:
+        info = os.environ.get("GEOIP_INFO", "")
     return bool(_RESTRICTED_RE.search(info))
 
 

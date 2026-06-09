@@ -36,6 +36,13 @@ def test_is_restricted_region_no_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert net.is_restricted_region() is False
 
 
+def test_is_restricted_region_explicit_arg(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GEOIP_INFO", raising=False)
+    assert net.is_restricted_region("CN|1.2.3.4") is True
+    assert net.is_restricted_region("US|1.2.3.4") is False
+    assert net.is_restricted_region() is False  # no-arg falls back to env (back-compat)
+
+
 # ---- fallback / preferred strategy ------------------------------------------
 
 

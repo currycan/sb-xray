@@ -288,3 +288,47 @@ def test_service_rules_openai_has_marktag() -> None:
 def test_service_rules_unknown_defaults_to_direct() -> None:
     rules = isp.build_xray_service_rules(outbounds={})
     assert '"outboundTag": "direct"' in rules
+
+
+# ---- H1: apply_isp_routing_logic must not mutate os.environ ------------------
+
+
+def test_apply_isp_routing_logic_does_not_touch_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """apply_isp_routing_logic must not write os.environ (incl. transient GEOIP_INFO).
+
+    Dunder lookup happens on the type, not the instance, so we spy on
+    ``type(os.environ).__setitem__`` / ``__delitem__`` to catch even a
+    transient write+restore (the old ``_restricted_by_geoip`` did exactly that).
+    """
+    import os
+
+    monkeypatch.delenv("GEOIP_INFO", raising=False)
+    before = dict(os.environ)
+    touches: list[tuple[str, str]] = []
+    env_type = type(os.environ)
+    orig_set = env_type.__setitem__
+    orig_del = env_type.__delitem__
+
+    def _spy_set(self: object, k: str, v: str) -> None:
+        touches.append(("set", k))
+        orig_set(self, k, v)
+
+    def _spy_del(self: object, k: str) -> None:
+        touches.append(("del", k))
+        orig_del(self, k)
+
+    monkeypatch.setattr(env_type, "__setitem__", _spy_set)
+    monkeypatch.setattr(env_type, "__delitem__", _spy_del)
+    isp.apply_isp_routing_logic(
+        isp.RoutingContext(
+            ip_type="hosting",
+            geoip_info="US|1.2.3.4",
+            default_isp="",
+            direct_speed=50.0,
+            fastest_proxy_tag="proxy-us-isp",
+            proxy_max_speed=29.6,
+        )
+    )
+    geoip_touches = [t for t in touches if t[1] == "GEOIP_INFO"]
+    assert geoip_touches == []  # never touched GEOIP_INFO, not even transiently
+    assert dict(os.environ) == before  # net effect unchanged
