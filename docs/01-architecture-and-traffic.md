@@ -429,7 +429,7 @@ flowchart TB
 * **定位**：纯粹被动调用的函数合集，所有上层逻辑的基础设施。
 * **代表组件**：
   * `ensure_var`（§6）：三分支缓存系统——① 变量已在当前 shell 则直接返回；② 已在持久化文件 `/.env/sb-xray` 则读取并 export 到 shell；③ 两者均无则执行计算、export 后写文件。
-  * `http_probe`（§3）：**所有流媒体和 AI 探测的通用基建**，封装了带伪装 UA、短超时 (3s) 和强制断后重试的 `curl` 探测器。
+  * HTTP 探测基建（§3）：带伪装 UA、短超时的探测器，两种形态——**HEAD 取状态码**（连通性 / 测速），以及 **读正文 GET**（B 类流媒体解锁判定：读页面正文做内容签名分类，因为 HEAD 200 可能藏着封锁 / 验证页）。A 类账号敏感服务不探测。
 
 #### §7-9 网络探测与状态缓存层
 
@@ -459,45 +459,56 @@ flowchart TB
 * **动态路由规则**：`build_xray_service_rules()` 根据 `*_OUT` 变量值动态切换 `balancerTag`（isp-auto）或 `outboundTag`（direct/具体 tag）
 * **外显智能标识**：通过 `IS_8K_SMOOTH` 配合 `IP_TYPE` 判定，在外显订阅上动态渲染策略匹配后缀（住宅流畅标 ` ✈ super` 或代理流畅标 ` ✈ good`）
 
-### 5.3 AI/媒体解锁探测决策流
+### 5.3 AI / 媒体出海方向决策流
 
-脚本内置了针对 Gemini/ChatGPT/Netflix 等服务的探测逻辑阵列，决策链遵循下列流程树：
+📘 **一句话**：每个服务（Netflix、ChatGPT、TikTok…）该走直连还是绕家宽代理，由**账号风险**决定——「能不能解锁」可以试探，「会不会封号」不能试探。系统据此把服务分成两类、用两套判据。
+
+🔬 **判定逐个服务进行**，决策链自上而下短路（命中即停）：
 
 ```mermaid
 flowchart TD
-    classDef q1 fill:#0984e3,stroke:#74b9ff,stroke-width:2px,color:#fff
-    classDef q2 fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
-    classDef q3 fill:#e17055,stroke:#fab1a0,stroke-width:2px,color:#fff
-    classDef ans fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#333
+    Start(["逐服务决策入口"]) --> Cache{"STATUS_FILE 已有探测成绩?"}
+    Cache -- "命中（重启复用）" --> ActCache["直接应用缓存结果<br/>极速上线"]
+    Cache -- "初次部署 / 缓存失效" --> L0{"gemini 且设了 GEMINI_DIRECT?"}
 
-    Start((网络探测入口))
-    Q1{"缓存盘中是否存在此探针成绩?"}:::q3
-    Q2{"节点 GEOIP 是否处于封锁区?"}:::q2
-    Q3{"用户是否通过环境变量强制指派?"}:::q1
-    Q4{"IP 信誉是否为家庭宽带 ISP?"}:::q1
-    Q5{"http_probe 远端 API 返回码?"}:::q1
+    L0 -- "已设" --> ActOverride["尊重用户外参<br/>true→direct，false→fallback"]
+    L0 -- "未设 / 非 gemini" --> L1{"节点 GEOIP 处于受限区?"}
 
-    ActCache["触发短路极速放行 直接应用缓存结果"]:::ans
-    ActA["尊重用户外参配置"]:::ans
-    ActB["ISP 纯净住宅地址 免试探直连"]:::ans
-    ActC["命中黑名单 强制拉起代理池绕行"]:::q2
+    L1 -- "是：审查 / 高风险地区" --> Fallback["走住宅代理 isp-auto<br/>安全网，绝不直连"]
+    L1 -- "否" --> L2{"IP 信誉为家庭宽带 ISP?"}
 
-    Start --> Q1
-    Q1 -- "有缓存" --> ActCache
-    Q1 -- "初次开机" --> Q2
+    L2 -- "是：原生住宅 IP" --> Direct["直连 direct"]
+    L2 -- "否：机房 IP" --> Class{"服务风险分类?"}
 
-    Q2 -- "属于香港/大陆/俄罗斯等地" --> ActC
-    Q2 -- "区域放行" --> Q3
+    Class -- "A 类·账号敏感" --> Fallback
+    Class -- "B 类·流媒体解锁" --> Probe["读正文 GET 探测<br/>+ 内容签名分类"]
 
-    Q3 -- "存在用户预参定义" --> ActA
-    Q3 -- "流转云端自由试探" --> Q4
+    Probe --> Verdict{"页面内容判定?"}
+    Verdict -- "REAL 真实可解锁" --> Direct
+    Verdict -- "BLOCKED / 不确定 / 不可达" --> Fallback
 
-    Q4 -- "不符合 身在机房中心" --> ActC
-    Q4 -- "符合 原生住宅 ISP" --> Q5
-
-    Q5 -- "网络握手通畅" --> ActB
-    Q5 -- "超时或返回拒载" --> ActC
+    class Start entry
+    class Cache,L0,L1,L2,Class,Verdict decision
+    class ActCache,Direct,ActOverride process
+    class Fallback block
+    class Probe sing
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef block    fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
+    classDef sing     fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#333
 ```
+
+📘 **两类服务、两套判据**：
+
+| 风险类 | 服务 | 风险点 | 机房 IP 上的处理 |
+|:---|:---|:---|:---|
+| **A 类·账号敏感** | ChatGPT / Claude / Gemini / 社交 / TikTok | **账号封禁**，无法用探测衡量 | **不探测**，直接走住宅代理 fallback |
+| **B 类·流媒体解锁** | Netflix / Disney+ / YouTube | **能否解锁片库**，机房 IP 也可能解锁，值得一试 | **读正文 GET** + 内容签名：仅 `REAL` 直连，否则 fallback |
+
+🔬 **为什么「受限区」判定排在「住宅短路」之上**：一个恰好落在审查地区的家宽节点，也绝不能把这些服务直连出去（审查 + 账号风险）。所以 `受限区 → fallback` 的优先级高于 `住宅 → direct`。
+
+🔬 **失败即安全（fail-safe）**：B 类内容签名匹配不出 `REAL` 时一律退到住宅代理，绝不误判直连。签名过时/不全只会让「本可直连」的节点退化为「慢一点但安全」，不会把流量错误地直连出去。
 
 ---
 
@@ -527,7 +538,7 @@ flowchart TD
     HC -- "全部 ISP 故障" --> Fallback["自动回退 direct"]:::pass
 ```
 
-### 6.2 核心出站类型
+> **注**：上图 `R2` 把服务笼统画成「命中解锁库 → isp-auto」是为突出健康选优链路。实际每个服务走 `direct` 还是 `isp-auto`，由 §5.3 的账号风险决策流逐服务、逐节点判定——账号敏感类（ChatGPT/Claude/Gemini/社交/TikTok）在机房 IP 上走 `isp-auto`，流媒体类（Netflix/Disney+/YouTube）仅在内容签名判定 `REAL` 时才 `direct`。
 
 | 出站类型 | Tag 标签 | 协议 | 作用 |
 |:---|:---|:---|:---|
