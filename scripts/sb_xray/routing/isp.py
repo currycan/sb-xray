@@ -399,16 +399,8 @@ def build_xray_service_rules(*, outbounds: dict[str, str]) -> str:
 
 
 def _restricted_by_geoip(geoip_info: str) -> bool:
-    """Run is_restricted_region with an isolated GEOIP_INFO value."""
-    prev = os.environ.get("GEOIP_INFO")
-    os.environ["GEOIP_INFO"] = geoip_info
-    try:
-        return is_restricted_region()
-    finally:
-        if prev is None:
-            os.environ.pop("GEOIP_INFO", None)
-        else:
-            os.environ["GEOIP_INFO"] = prev
+    """Run is_restricted_region against an explicit value (no env mutation)."""
+    return is_restricted_region(geoip_info)
 
 
 def _manual_isp_tag(default_isp: str) -> str:
