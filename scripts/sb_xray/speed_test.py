@@ -1301,13 +1301,30 @@ def _try_speed_cache_hit() -> bool:
     return True
 
 
+def _async_refresh_once(url: str, sample_count: int) -> None:
+    """Background refresh body — measure + atomic persist ONLY. Never env.
+
+    The old runner called ``run_isp_speed_tests(force=True)``, which both purged
+    env (``_reset_caches_for_fresh_run``) and wrote env (``apply_outcome_to_env``)
+    — racing the main thread that was still consuming ``HAS_ISP_NODES`` during
+    cold-boot config generation. This body touches neither: it only computes an
+    outcome and atomically persists it to STATUS_FILE (safe under ``exec``-kill).
+    """
+    outcome = measure_isp_speeds(url, sample_count)
+    persist_outcome_to_status(outcome)
+    _emit_outcome_event(outcome)
+
+
 def _spawn_async_refresh() -> None:
-    """Background daemon refreshing speeds after a cache hit."""
+    """Background daemon refreshing speeds after a cache hit (persist only)."""
     import threading
+
+    sample_count = _resolve_sample_count(None)
+    url = _SPEED_TEST_URL
 
     def _runner() -> None:
         try:
-            run_isp_speed_tests(force=True)
+            _async_refresh_once(url, sample_count)
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("async speed refresh failed: %s", exc)
             from sb_xray.events import emit_event

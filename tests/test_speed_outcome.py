@@ -83,3 +83,28 @@ def test_measure_is_pure_no_side_effects(
     # measure neither added nor removed any env key
     # (depends on Task 0: apply_isp_routing_logic no longer transiently writes GEOIP_INFO).
     assert dict(os.environ) == before
+
+
+def test_async_refresh_does_not_touch_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The async refresh body must persist only — never mutate os.environ."""
+    monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))
+    monkeypatch.setenv("HAS_ISP_NODES", "true")  # main thread already set it
+    monkeypatch.setenv("ISP_TAG", "proxy-us-isp")
+
+    fake = _make_outcome(
+        speeds={"proxy-us-isp": 30.0},
+        direct_mbps=40.0,
+        fastest_speed=30.0,
+        notify=False,
+    )
+    monkeypatch.setattr(st, "measure_isp_speeds", lambda url, sample_count: fake)
+
+    st._async_refresh_once(url="http://x/", sample_count=1)
+
+    # env untouched by async (critical: HAS_ISP_NODES survives)
+    assert os.environ["HAS_ISP_NODES"] == "true"
+    assert os.environ["ISP_TAG"] == "proxy-us-isp"
+    # STATUS_FILE atomically refreshed
+    assert "proxy-us-isp" in st._read_status_snapshot()["_ISP_SPEEDS_JSON"]
