@@ -22,7 +22,7 @@ VPS 的 IP 通常被标记为 Hosting（机房），受阻于 Netflix、ChatGPT 
 
 ### 1.2 路由决策工作原理
 
-在 Xray (`xr.json`) 和 Sing-box (`sb.json`) 的底层核心中，配置了高度一致的路由决策引擎，流媒体/AI 域名统一指向 `isp-auto` 健康选优出站：
+在 Xray (`xr.json`) 和 Sing-box (`sb.json`) 的底层核心中，配置了高度一致的路由决策引擎。每个流媒体/AI 服务路由到各自的出站变量 `${*_OUT}`，其取值（`direct` 或 `isp-auto` 健康选优）由服务端按账号风险逐服务、逐节点判定（决策流见 [01. 架构与流量](./01-architecture-and-traffic.md) §5.3）；命中 `isp-auto` 时再由运行时健康检测选优：
 
 ```mermaid
 flowchart TD
@@ -44,7 +44,7 @@ flowchart TD
     HC -- "全部故障" --> Direct["自动回退 direct"]:::pass
 ```
 
-> **路由决策**：所有服务路由指向 `isp-auto`，由 sing-box `urltest` / xray `balancer` 在运行时自动选优；ISP 全部不可达时按 `ISP_FALLBACK_STRATEGY` 回退（默认 `direct`，可选 `block` 实现 fail-closed）。
+> **路由决策**：每个服务路由到各自 `${*_OUT}`，按账号风险判定为 `direct` 或 `isp-auto`（决策流见 [01. 架构与流量](./01-architecture-and-traffic.md) §5.3）；命中 `isp-auto` 时由 sing-box `urltest` / xray `balancer` 在运行时自动选优，ISP 全部不可达时按 `ISP_FALLBACK_STRATEGY` 回退（默认 `direct`，可选 `block` 实现 fail-closed）。
 >
 > **可选增强**（默认关闭或等价默认行为，按需打开）:
 > - `ISP_PROBE_URL` — probe URL 默认 Cloudflare 1 MiB，携带带宽信号
