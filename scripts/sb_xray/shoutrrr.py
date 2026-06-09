@@ -187,6 +187,35 @@ def _format_retest_completed(payload: dict, title_prefix: str) -> tuple[str, str
     return title, "\n\n".join([headline, "\n".join(details)])
 
 
+_CANARY_ROLE_LABEL: Final[dict[str, str]] = {
+    "canary": "canary（错峰先行）",
+    "worker": "worker（本台）",
+}
+
+
+def _format_canary_failed(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """watchtower.canary.failed → 自动更新后业务自检失败的中文卡片。"""
+    title = f"{title_prefix} 🔴 自动更新自检失败"
+    role = _CANARY_ROLE_LABEL.get(str(payload.get("role") or ""), str(payload.get("role") or "?"))
+    head = [f"节点角色: {role}"]
+    fails = str(payload.get("fails") or "")
+    if fails:
+        head.append(f"失败项: {fails}")
+    head.append(f"镜像构建: {payload.get('built') or '未知'}")
+    blocks = ["\n".join(head)]
+    runbook = str(payload.get("runbook") or "")
+    if runbook:
+        blocks.append(f"⚠️ 处置\n{runbook}")
+    return title, "\n\n".join(blocks)
+
+
+def _format_canary_updated(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """watchtower.canary.updated → 自动更新成功且自检通过的中文卡片。"""
+    title = f"{title_prefix} ✅ 已自动更新"
+    built = str(payload.get("built") or "未知")
+    return title, "\n\n".join([f"镜像构建: {built}", "四项自检全部通过"])
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -214,6 +243,10 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
         return _format_speed_test(payload, title_prefix)
     if event == "isp.retest.completed":
         return _format_retest_completed(payload, title_prefix)
+    if event == "watchtower.canary.failed":
+        return _format_canary_failed(payload, title_prefix)
+    if event == "watchtower.canary.updated":
+        return _format_canary_updated(payload, title_prefix)
     if event == "substore.sub_fetch.failed":
         return _format_substore_failure(payload, title_prefix)
     if event in _BAN_TITLES:

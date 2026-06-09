@@ -494,3 +494,42 @@ def test_run_honors_env_fallbacks(monkeypatch):
     assert rc == 0
     assert captured["addr"] == ("127.0.0.1", 18099)
     assert captured["closed"] is True
+
+
+def test_format_message_canary_failed_card():
+    payload = {
+        "role": "canary",
+        "fails": "回国链路端到端",
+        "built": "2026-06-09 10:43",
+        "runbook": "立即叫停其余 15 台",
+    }
+    title, body = shoutrrr._format_message("watchtower.canary.failed", payload, "[sb-xray:dc99-3]")
+    assert title == "[sb-xray:dc99-3] 🔴 自动更新自检失败"
+    assert "节点角色: canary（错峰先行）" in body
+    assert "失败项: 回国链路端到端" in body
+    assert "镜像构建: 2026-06-09 10:43" in body
+    assert "⚠️ 处置" in body
+    assert "立即叫停其余 15 台" in body
+    assert "sha256" not in body  # 镜像信息是可读构建时间，不是 sha256
+
+
+def test_format_message_canary_failed_worker_role_and_omits_blank_fails():
+    payload = {"role": "worker", "built": "2026-06-09 10:43"}
+    title, body = shoutrrr._format_message("watchtower.canary.failed", payload, "[p]")
+    assert title == "[p] 🔴 自动更新自检失败"
+    assert "节点角色: worker（本台）" in body
+    assert "失败项:" not in body  # 缺 fails 字段整行省略
+    assert "⚠️ 处置" not in body  # 缺 runbook 不渲染处置块
+
+
+def test_format_message_canary_updated_card():
+    payload = {"role": "canary", "built": "2026-06-09 10:43"}
+    title, body = shoutrrr._format_message("watchtower.canary.updated", payload, "[sb-xray:dc99-3]")
+    assert title == "[sb-xray:dc99-3] ✅ 已自动更新"
+    assert "镜像构建: 2026-06-09 10:43" in body
+    assert "四项自检全部通过" in body
+
+
+def test_format_message_canary_missing_built_shows_unknown():
+    _title, body = shoutrrr._format_message("watchtower.canary.updated", {"role": "canary"}, "[p]")
+    assert "镜像构建: 未知" in body

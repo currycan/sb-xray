@@ -142,9 +142,8 @@ services:
       # 错峰 schedule（6 段 cron，时区=上方 TZ）：默认北京 04:00 低峰；canary（dc99-3）.env 覆盖为 0 0 3 * * *
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
       # 自动更新通知，复用 sb-xray 同源 shoutrrr（Telegram）。注：仅 schedule 模式发，run-once/sbx-update 不发（设计 §4.5）
-      - WATCHTOWER_NOTIFICATIONS=shoutrrr
-      - WATCHTOWER_NOTIFICATION_URL=${shoutrrr_urls}
-      # 关 startup 噪音：不再每次重启发启动日志，只在真更新/失败时通知（详细更新报告由 sbx-canary-check 自检告警负责）
-      - WATCHTOWER_NO_STARTUP_MESSAGE=true
+      # 通知：watchtower 自带通知为英文且不可定制（仅 Go template，维护成本不值），故关闭。
+      # 所有 Telegram 报警统一由 sbx-canary-check 用中文经 shoutrrr-forwarder 发出
+      # （更新成功/自检失败均中文，见 sources/vps/sbx-canary-check.sh）
       # 更新后删旧镜像省盘
       - WATCHTOWER_CLEANUP=true
