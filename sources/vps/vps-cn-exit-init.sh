@@ -107,7 +107,7 @@ EOF
 chmod 644 /etc/cron.d/cn-exit-keepalive
 
 # ── 3.5 watchtower 自动更新护栏（sbx-update 手动触发 + canary 自检定时器）──
-# 设计：docs/superpowers/specs/2026-06-09-watchtower-auto-update-design.md §4.5/§4.8
+# 设计：.superpowers/specs/2026-06-09-watchtower-auto-update-design.md §4.5/§4.8
 # watchtower service 在 compose 里，凌晨自动更新 :latest；本段补两件节点侧护栏：
 #   (a) sbx-update —— 立即 run-once 更新本台（幂等，灰度手动滚动用）
 #   (b) sbx-canary-check 定时器 —— 更新后业务自检 + 中文告警（canary 错峰拦截）

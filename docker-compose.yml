@@ -2,7 +2,7 @@ services:
   sb-xray:
     image: docker.io/currycan/sb-xray:latest
     container_name: sb-xray
-    # watchtower 白名单：仅本容器纳入自动更新（见 docs/superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
+    # watchtower 白名单：仅本容器纳入自动更新（见 .superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
     labels:
       - com.centurylinklabs.watchtower.enable=true
     # 小内存节点（内存不超过 512 MB 的 VPS）内存硬约束，防止 xray VSZ 暴走触发宿主级 OOM
@@ -124,7 +124,7 @@ services:
         soft: 65536
         hard: 65536
 
-  # 全自动镜像更新（方案 B + L1 canary 护栏，详见 docs/superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
+  # 全自动镜像更新（方案 B + L1 canary 护栏，详见 .superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
   # ⚠ 镜像用 nickfedor/watchtower（containrrr/watchtower 已停摆，与现代 Docker daemon 不兼容会 panic）
   watchtower:
     image: docker.io/nickfedor/watchtower:latest
