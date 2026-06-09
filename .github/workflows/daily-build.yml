@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       should_build: ${{ steps.versions.outputs.should_build }}
+      no_cache: ${{ steps.versions.outputs.no_cache }}
       changed: ${{ steps.versions.outputs.changed }}
       shoutrrr: ${{ steps.versions.outputs.shoutrrr }}
       mihomo: ${{ steps.versions.outputs.mihomo }}
@@ -158,6 +159,11 @@ jobs:
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+          # force_build 必须绕过 GHA 层缓存：纯代码改动不改 build-args，
+          # 否则 COPY scripts 等层全缓存命中、输出旧 digest，新代码进不了镜像。
+          if [ "$FORCE" = "true" ]; then
+            echo "no_cache=true" >> "$GITHUB_OUTPUT"
           fi
 
           echo "$NEW_VERSIONS" > /tmp/new_versions.json
@@ -311,6 +317,7 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          no-cache: ${{ needs.check.outputs.no_cache == 'true' }}
           cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
           build-args: |
