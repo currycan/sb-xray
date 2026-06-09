@@ -2,6 +2,9 @@ services:
   sb-xray:
     image: docker.io/currycan/sb-xray:latest
     container_name: sb-xray
+    # watchtower 白名单：仅本容器纳入自动更新（见 docs/superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
     # 小内存节点（内存不超过 512 MB 的 VPS）内存硬约束，防止 xray VSZ 暴走触发宿主级 OOM
     mem_limit: 460m
     mem_reservation: 380m
@@ -120,3 +123,24 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+
+  # 全自动镜像更新（方案 B + L1 canary 护栏，详见 docs/superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
+  # ⚠ 镜像用 nickfedor/watchtower（containrrr/watchtower 已停摆，与现代 Docker daemon 不兼容会 panic）
+  watchtower:
+    image: docker.io/nickfedor/watchtower:latest
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # schedule 用容器时区解释；设北京时区以便 schedule 直接写本地时间
+      - TZ=${TZ:-Asia/Shanghai}
+      # 白名单：只更新带 com.centurylinklabs.watchtower.enable=true 的容器，绝不触碰节点上其它容器
+      - WATCHTOWER_LABEL_ENABLE=true
+      # 错峰 schedule（6 段 cron，时区=上方 TZ）：默认北京 04:00 低峰；canary（dc99-3）.env 覆盖为 0 0 3 * * *
+      - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
+      # 自动更新通知，复用 sb-xray 同源 shoutrrr（Telegram）。注：仅 schedule 模式发，run-once/sbx-update 不发（设计 §4.5）
+      - WATCHTOWER_NOTIFICATIONS=shoutrrr
+      - WATCHTOWER_NOTIFICATION_URL=${shoutrrr_urls}
+      # 更新后删旧镜像省盘
+      - WATCHTOWER_CLEANUP=true
