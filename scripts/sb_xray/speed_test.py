@@ -9,11 +9,14 @@ surface the fastest one — preserving the Bash ``proxy_max_speed`` /
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json as _json
 import logging
 import os
 import re
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -746,11 +749,32 @@ def _read_status_snapshot() -> dict[str, str]:
     return snapshot
 
 
-def _write_status_line(key: str, value: str) -> None:
-    """Upsert ``export KEY='VALUE'`` in ``STATUS_FILE`` (mirrors sed -i+echo).
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via tmp file + ``os.replace`` so readers never see a half file.
 
-    Silently warns + returns on ``OSError`` so a read-only status dir
-    never aborts boot (bash equivalent uses ``|| true`` on every sed).
+    ``os.replace`` is an atomic rename within the same directory on POSIX, so a
+    concurrent reader (or an ``exec``-killed async daemon) sees either the old
+    complete file or the new complete file — never a truncated one.
+    """
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".status.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)  # POSIX rename — atomic within same dir
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _write_status_line(key: str, value: str) -> None:
+    """Upsert ``export KEY='VALUE'`` in ``STATUS_FILE``, atomic + flock-serialized.
+
+    The read-modify-write runs under an exclusive ``flock`` so concurrent writers
+    (main thread + async refresh daemon) never clobber each other's lines, and
+    the actual file swap is atomic (:func:`_atomic_write_text`). Silently warns +
+    returns on ``OSError`` so a read-only status dir never aborts boot (the bash
+    equivalent used ``|| true`` on every sed).
     """
     path = _status_file()
     try:
@@ -758,16 +782,17 @@ def _write_status_line(key: str, value: str) -> None:
     except OSError as exc:
         logger.warning("status: cannot create %s: %s", path.parent, exc)
         return
-    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-    import re as _re
-
-    pattern = _re.compile(rf"^export {_re.escape(key)}=.*\n?", _re.MULTILINE)
-    cleaned = pattern.sub("", existing).rstrip("\n")
-    if cleaned:
-        cleaned += "\n"
-    cleaned += f"export {key}='{value}'\n"
+    lock = path.parent / ".status.lock"
+    pattern = re.compile(rf"^export {re.escape(key)}=.*\n?", re.MULTILINE)
     try:
-        path.write_text(cleaned, encoding="utf-8")
+        with open(lock, "w") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+            cleaned = pattern.sub("", existing).rstrip("\n")
+            if cleaned:
+                cleaned += "\n"
+            cleaned += f"export {key}='{value}'\n"
+            _atomic_write_text(path, cleaned)
     except OSError as exc:
         logger.warning("status: cannot write %s: %s", path, exc)
 
@@ -779,10 +804,6 @@ def _purge_service_caches() -> None:
     re-run against the fresh routing decision.
     """
     path = _status_file()
-    if not path.is_file():
-        return
-    import re as _re
-
     removed_keys = (
         "ISP_OUT",
         "CHATGPT_OUT",
@@ -794,11 +815,21 @@ def _purge_service_caches() -> None:
         "SOCIAL_MEDIA_OUT",
         "TIKTOK_OUT",
     )
-    text = path.read_text(encoding="utf-8")
+    if path.is_file():
+        lock = path.parent / ".status.lock"
+        try:
+            with open(lock, "w") as lf:
+                fcntl.flock(lf, fcntl.LOCK_EX)
+                text = path.read_text(encoding="utf-8")
+                for key in removed_keys:
+                    text = re.sub(
+                        rf"^export {re.escape(key)}=.*\n?", "", text, flags=re.MULTILINE
+                    )
+                _atomic_write_text(path, text)
+        except OSError as exc:
+            logger.warning("status: purge failed %s: %s", path, exc)
     for key in removed_keys:
-        text = _re.sub(rf"^export {_re.escape(key)}=.*\n?", "", text, flags=_re.MULTILINE)
         os.environ.pop(key, None)
-    path.write_text(text, encoding="utf-8")
 
 
 def _proxy_url(ip: str, port: str) -> str:
