@@ -142,3 +142,53 @@ def test_async_refresh_starts_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ISP_SPEED_CACHE_ASYNC", raising=False)
     speed_test._spawn_async_refresh()
     assert started == ["isp-speed-refresh"]
+
+
+def test_coldboot_cachehit_then_async_keeps_isp_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the race: after cache-hit sets HAS_ISP_NODES, an async refresh running
+    before media routing reads it must NOT clear it — ISP_OUT stays isp-auto."""
+    import os
+
+    from sb_xray import speed_test as st
+
+    status = tmp_path / "status"
+    monkeypatch.setenv("STATUS_FILE", str(status))
+    monkeypatch.setenv("IP_TYPE", "hosting")
+    ts = int(time.time())
+    status.write_text(
+        f"export ISP_LAST_RETEST_TS='{ts}'\n"
+        'export _ISP_SPEEDS_JSON=\'{"proxy-us-isp": 29.6}\'\n'
+        "export ISP_TAG='proxy-us-isp'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ISP_SPEED_CACHE_ASYNC", "false")  # drive async timing manually
+
+    # Main-thread cold boot: cache-hit must set HAS_ISP_NODES.
+    st.run_isp_speed_tests()
+    assert os.environ["HAS_ISP_NODES"] == "true"
+
+    # Worst-case interleave: async refresh completes before media routing reads.
+    fake = st.SpeedOutcome(
+        speeds={"proxy-us-isp": 31.0},
+        diag=None,
+        direct_mbps=40.0,
+        fastest_tag="proxy-us-isp",
+        fastest_speed=31.0,
+        isp_tag="proxy-us-isp",
+        is_8k_smooth=False,
+        has_isp_nodes=True,
+        notify=False,
+    )
+    monkeypatch.setattr(st, "measure_isp_speeds", lambda url, sample_count: fake)
+    st._async_refresh_once(url="http://x/", sample_count=1)
+
+    # Main thread derives ISP_OUT (same expression as entrypoint.py) — still isp-auto.
+    isp_out = "isp-auto" if os.environ.get("HAS_ISP_NODES") else "direct"
+    assert isp_out == "isp-auto"
+
+    # Media probes route through ISP too.
+    from sb_xray.network import get_fallback_proxy
+
+    assert get_fallback_proxy() == "isp-auto"
