@@ -18,6 +18,9 @@
 #   COMPOSE_URL     docker-compose.yml 下载源（默认仓库 main 的 raw）
 #   SKIP_COMPOSE_UPDATE  设 1 跳过 compose 同步（默认 0，会拉最新覆盖）
 #   SKIP_PULL       设 1 跳过 docker compose pull（只 up -d，不升级镜像；默认 0）
+#   SBX_CANARY_ROLE 本节点 watchtower 角色 canary|worker（默认 worker；dc99-3 设 canary）
+#   CANARY_URL      sbx-canary-check.sh 下载源（默认仓库 main 的 raw）
+#   SKIP_CANARY_WIRING  设 1 跳过 watchtower 自检护栏安装（默认 0）
 #
 # 退出码：自检全部通过 0；有硬失败（容器未起 / env 未生效 / Tailscale 未在网）非 0，
 # 便于批量编排检测坏节点。ping / socks5 探测为软告警，不影响退出码。
@@ -39,6 +42,7 @@ with_timeout() {
 SBXRAY_DIR="${SBXRAY_DIR:-/root/sb-xray}"
 CN_EXIT_MODE="${CN_EXIT_MODE:-balance}"
 TS_HOSTNAME="${TS_HOSTNAME:-$(hostname)}"
+SBX_CANARY_ROLE="${SBX_CANARY_ROLE:-worker}"
 
 # 支持从文件读 authkey（避免明文出现在远端进程表 / shell 历史）
 if [ -z "$TS_AUTHKEY" ] && [ -n "$TS_AUTHKEY_FILE" ] && [ -f "$TS_AUTHKEY_FILE" ]; then
@@ -101,6 +105,58 @@ cat > /etc/cron.d/cn-exit-keepalive <<EOF
 * * * * * root $_tsbin ping -c 1 --timeout 5s $OPENWRT_TS_IP >/dev/null 2>&1
 EOF
 chmod 644 /etc/cron.d/cn-exit-keepalive
+
+# ── 3.5 watchtower 自动更新护栏（sbx-update 手动触发 + canary 自检定时器）──
+# 设计：docs/superpowers/specs/2026-06-09-watchtower-auto-update-design.md §4.5/§4.8
+# watchtower service 在 compose 里，凌晨自动更新 :latest；本段补两件节点侧护栏：
+#   (a) sbx-update —— 立即 run-once 更新本台（幂等，灰度手动滚动用）
+#   (b) sbx-canary-check 定时器 —— 更新后业务自检 + 中文告警（canary 错峰拦截）
+if [ "${SKIP_CANARY_WIRING:-0}" = "1" ]; then
+    log "跳过 watchtower 自检护栏安装（SKIP_CANARY_WIRING=1）"
+else
+    # (a) sbx-update：watchtower run-once，立即检查并更新本台镜像（digest 未变即 no-op）
+    log "安装 sbx-update helper → /usr/local/bin/sbx-update"
+    cat > /usr/local/bin/sbx-update <<'EOF'
+#!/bin/sh
+# sbx-update —— 立即检查并更新本台 sb-xray 镜像（watchtower run-once，幂等）
+exec docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+    docker.io/nickfedor/watchtower:latest --run-once sb-xray "$@"
+EOF
+    chmod 755 /usr/local/bin/sbx-update
+
+    # (b) 装/更新 sbx-canary-check.sh（更新后业务自检 + 中文告警，全 16 台同构）
+    CANARY_URL="${CANARY_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/sbx-canary-check.sh}"
+    _canary="$SBXRAY_DIR/sbx-canary-check.sh"
+    if curl -fsSL "$CANARY_URL" -o "$_canary.new" && [ -s "$_canary.new" ] && head -1 "$_canary.new" | grep -q '#!/bin/sh'; then
+        mv "$_canary.new" "$_canary"; chmod 755 "$_canary"
+        log "  sbx-canary-check.sh 已更新 ← $CANARY_URL"
+    elif [ -f "$_canary" ]; then
+        rm -f "$_canary.new"; warn "  canary-check 下载失败，保留现有 $_canary"
+    else
+        rm -f "$_canary.new"; warn "  canary-check 下载失败且本地缺失，自检护栏未装（手动放置后重跑本脚本）"
+    fi
+
+    # (c) 角色：canary（dc99-3）让 watchtower 提前 1h（北京 03:00），自检 03:05；
+    #     worker 走 compose 默认 04:00，自检 04:05。错峰留出 1h 人工叫停窗口。
+    if [ "$SBX_CANARY_ROLE" = "canary" ]; then
+        upsert_env WATCHTOWER_SCHEDULE "0 0 3 * * *"
+        _check_min="5 3"
+        log "  角色=canary：watchtower 03:00 先行，自检 03:05"
+    else
+        _check_min="5 4"
+        log "  角色=worker：watchtower 04:00（compose 默认），自检 04:05"
+    fi
+
+    # (d) 装自检 cron（角色只决定运行时间与失败 runbook 文案）
+    if [ -f "$_canary" ]; then
+        cat > /etc/cron.d/sbx-canary-check <<EOF
+# sb-xray 自动更新后业务自检（vps-cn-exit-init.sh 生成；角色=$SBX_CANARY_ROLE）
+$_check_min * * * root SBX_CANARY_ROLE=$SBX_CANARY_ROLE SBX_DIGEST_STATE=$SBXRAY_DIR/.sbx-canary-last-digest $_canary >/dev/null 2>&1
+EOF
+        chmod 644 /etc/cron.d/sbx-canary-check
+        log "  自检 cron 已装：/etc/cron.d/sbx-canary-check（$_check_min 时段）"
+    fi
+fi
 
 # ── 4. 同步 docker-compose.yml（确保含最新回国 env 引用）────────────
 # 旧部署的 compose 可能不含 ${CN_EXIT_MODE} / ${tsip} 等引用，导致上面写的

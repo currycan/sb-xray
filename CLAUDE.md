@@ -74,3 +74,12 @@ The test: for every claim, could you point to what you checked to back it? If no
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, clarifying questions come before implementation rather than after mistakes, and every claim is verified rather than assumed.
+
+---
+
+## 6. Watchtower 自动更新发布纪律（漂移缓解契约）
+
+16 台生产节点经 watchtower 自动跟进 `currycan/sb-xray:latest`。watchtower **不读 docker-compose.yml**——它从现有容器 inspect 出已实例化的 env 重建新镜像。所以运维 `git pull` 同步 compose 之前，新发布引入的 compose env 拿不到。两条硬约束（设计：`docs/superpowers/specs/2026-06-09-watchtower-auto-update-design.md` §4.6）：
+
+- **(a) 新增 env 必须镜像内默认兜底。** 凡新增 `docker-compose.yml` 的 env，必须在 `scripts/entrypoint.py` / `scripts/sb_xray` 内有对应 `os.environ.get(key, 合理默认)`，且默认值向后兼容。保证 watchtower 用旧 env 集重建新镜像时不崩，新功能暂用镜像内默认值直至运维 `git pull` 同步。
+- **(b) 修复必须镜像内默认生效。** 任何修复/安全类变更必须落在镜像内默认行为里，不得以「运维设新 compose env」为前提。若某发布确实必须靠新 env 才能正确运行，在发布说明标记 `requires-compose-sync`——**该发布不走 watchtower 自动分发**，强制全量 `git pull && docker compose up -d`。否则修复镜像被自动拉下却因缺 env 不生效，造成虚假安全感。
