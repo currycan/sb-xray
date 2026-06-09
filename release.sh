@@ -8,55 +8,18 @@ YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m' # 无颜色
 
-# 辅助函数: 执行 CURL 请求
-fetch_url() {
-    local url=$1
-    if [ -n "$GITHUB_TOKEN" ]; then
-        curl -sSf -H "Authorization: token $GITHUB_TOKEN" "$url" 2>/dev/null || echo ""
-    else
-        curl -sSf "$url" 2>/dev/null || echo ""
-    fi
-}
+# 发布 tag 与镜像 tag 一致：YY.M.D-<short=7 sha>（与 daily-build.yml / build.sh 对齐）。
+# 组件版本仍以 versions.json 为单一事实源，不再同步 Xray 上游版本号。
+RELEASE_TAG="$(TZ=Asia/Shanghai date +%y.%-m.%-d)-$(git rev-parse --short=7 HEAD)"
 
-# 辅助函数: 获取最新稳定版 Tag（与 build.sh get_latest_stable_tag 对齐，过滤 rc/beta/alpha）
-get_latest_stable_tag() {
-    local repo=$1
-    local url="https://api.github.com/repos/$repo/tags?per_page=100"
-    local response=$(fetch_url "$url")
-
-    if [ -n "$response" ]; then
-        echo "$response" | jq -r '[.[] | select(.name | test("rc|beta|alpha") | not)] | .[0].name'
-    else
-        echo ""
-    fi
-}
-
-echo -e "${BLUE}正在获取最新 Xray 稳定版,以保持版本一致性...${NC}"
-
-# 获取 Xray 最新稳定版本 (与 build.sh 逻辑一致)
-XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
-
-if [ -z "$XRAY_TAG" ] || [ "$XRAY_TAG" == "null" ]; then
-    echo -e "${RED}无法获取 Xray 版本，取消发布。${NC}"
-    exit 1
-fi
-
-# Xray_TAG 通常自带 'v' 前缀，Docker 镜像 Tag 清除了 'v'。
-# 这里使用 'v' 前缀作为当前项目的 git tag，保持语义化版本。
-# Xray 例如: v1.8.8 -> Docker image: 1.8.8 -> Git release: v1.8.8
-
-CLEAN_VERSION=${XRAY_TAG#v}
-RELEASE_TAG="v${CLEAN_VERSION}"
-
-echo -e "${GREEN}获取到 Xray 版本: ${XRAY_TAG}${NC}"
-echo -e "${BLUE}准备将此项目打上标签: ${RELEASE_TAG} (对应 Docker tag: ${CLEAN_VERSION})${NC}"
+echo -e "${BLUE}准备发布 tag: ${RELEASE_TAG}（对应 Docker 镜像 currycan/sb-xray:${RELEASE_TAG}）${NC}"
 
 # 检查本地是否已经有此 tag
 if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
     echo -e "${YELLOW}本地已存在标签 $RELEASE_TAG，将被跳过。${NC}"
 else
     echo -e "创建本地 Git 标签 $RELEASE_TAG"
-    git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG (Sync with Xray $CLEAN_VERSION)"
+    git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
 fi
 
 # 检查是否安装了 gh 命令行工具
@@ -72,7 +35,7 @@ if command -v gh &> /dev/null; then
 
          gh release create "$RELEASE_TAG" \
             --title "Release $RELEASE_TAG" \
-            --notes "同步 Xray 最新版本 $RELEASE_TAG。\n对应的 Docker 镜像 tag 为 \`${CLEAN_VERSION}\`。"
+            --notes "对应的 Docker 镜像 tag 为 \`${RELEASE_TAG}\`。"
 
          echo -e "${GREEN}Release $RELEASE_TAG 创建成功！${NC}"
     fi

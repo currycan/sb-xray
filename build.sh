@@ -159,8 +159,6 @@ get_cached_version() {
     jq -r --arg k "$key" '.[$k] // empty' "$VERSIONS_JSON_PATH" 2>/dev/null
 }
 
-XRAY_VERSION_FINAL=""
-
 # 获取各组件版本
 if [ "$MODE" == "offline" ]; then
     echo -e "${BLUE}离线模式：从 versions.json 读取组件版本...${NC}"
@@ -230,9 +228,6 @@ check_version() {
 
     printf "%-25s ${GREEN}%s${NC}\n" "${name}:" "${stripped}"
     BUILD_ARGS="${BUILD_ARGS} --build-arg ${arg_name}=${stripped}"
-    if [ "$name" == "Xray" ]; then
-        XRAY_VERSION_FINAL=$stripped
-    fi
 }
 
 check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"
@@ -278,7 +273,10 @@ if [ "$MODE" == "refresh" ]; then
     echo -e "  ${GREEN}✓ versions 段已写回 versions.json${NC}"
 fi
 
-TAG_VERSION=$XRAY_VERSION_FINAL
+# 镜像 tag 与 CI（daily-build.yml）一致：YY.M.D-<short=7 sha>，如 26.6.9-9efd47a
+# 组件版本仍以 versions.json 为单一事实源；此处只决定镜像 tag，不再用 Xray 版本号。
+TAG_VERSION="$(TZ=Asia/Shanghai date +%y.%-m.%-d)-$(git rev-parse --short=7 HEAD)"
+GIT_SHA="$(git rev-parse HEAD)"
 
 # ============================================================
 # 下载完整性：为每个不自带 checksum 文件的组件从 GitHub API 取 digest
@@ -432,6 +430,9 @@ BUILD_ARGS="${BUILD_ARGS} \
   --build-arg XUI_ARM64_SHA256=${XUI_ARM64_SHA} \
   --build-arg SING_BOX_AMD64_SHA256=${SING_BOX_AMD64_SHA} \
   --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA}"
+
+# 镜像版本号注入（Dockerfile final stage 的 ARG VERSION/SHA → OCI label）
+BUILD_ARGS="${BUILD_ARGS} --build-arg VERSION=${TAG_VERSION} --build-arg SHA=${GIT_SHA}"
 
 echo -e "${BLUE}开始构建 Docker 镜像...${NC}"
 echo -e "Tags: currycan/sb-xray:${TAG_VERSION}  currycan/sb-xray:latest"

@@ -60,7 +60,7 @@ export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 ### 2.1 基本用法
 
-一条命令完成构建并同时推送 `:版本号` 和 `:latest` 两个 tag，两者始终指向同一 Image ID。
+一条命令完成构建并同时推送 `:<版本号>` 和 `:latest` 两个 tag，两者始终指向同一 Image ID。版本号格式为 `YY.M.D-<7 位短 sha>`（构建日期按 `Asia/Shanghai` 时区 + 当前 commit 短 sha），例如 `26.6.9-9efd47a`。各组件自身的版本仍以 `versions.json` 为单一事实源，与镜像 tag 相互独立。
 
 ```bash
 ./build.sh              # 离线模式（默认）：读 versions.json 构建，不触网
@@ -100,6 +100,22 @@ flowchart TD
 | **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100`（过滤 `rc/beta/alpha`） | Xray、Sing-box、3x-ui、Dufs、Cloudflared |
 
 `.github/workflows/daily-build.yml` 每日跑相同逻辑：调用 API → 计算 digests → 提交 `versions.json`。所以本地 `./build.sh` 和 CI 的最新产物始终位级一致。
+
+### 2.4 镜像版本号与 OCI 标签
+
+镜像 tag（`YY.M.D-<短 sha>`）由 `build.sh` 与 CI 在构建时计算，并通过两个 build-arg 写入最终镜像的 OCI 标签，便于在运行节点上反查镜像来源：
+
+| build-arg | 值 | 写入的 OCI 标签 |
+|:---|:---|:---|
+| `VERSION` | `YY.M.D-<短 sha>`，如 `26.6.9-9efd47a` | `org.opencontainers.image.version` |
+| `SHA` | 完整 git commit sha | `org.opencontainers.image.revision` |
+
+OCI 标签在 Dockerfile 最终阶段末尾注入（位于所有 `RUN` 之后、`ENTRYPOINT` 之前），因此版本变动不会使其前面的依赖层缓存失效。在运行节点上反查镜像版本：
+
+```bash
+docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' currycan/sb-xray:latest
+# 期望：打印形如 26.6.9-9efd47a 的版本号
+```
 
 ---
 
@@ -252,7 +268,7 @@ docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --build-arg XRAY_VERSION=26.2.6 \
   --build-arg SING_BOX_VERSION=1.13.1 \
-  --tag currycan/sb-xray:26.2.6 \
+  --tag "currycan/sb-xray:$(TZ=Asia/Shanghai date +%y.%-m.%-d)-$(git rev-parse --short=7 HEAD)" \
   --tag currycan/sb-xray:latest \
   --push .
 ```
@@ -375,25 +391,26 @@ docker exec sb-xray /sub-store/http-meta/http-meta -v
 
 ## 7. Git Release 版本发布（release.sh）
 
-`release.sh` 负责将项目的 Git Release 版本号与 Docker 镜像版本（即 Xray 版本号）保持**自动同步**。
+`release.sh` 为当前 commit 打一个与 Docker 镜像同名的 Git Tag 并创建 GitHub Release，使每个 Git Release 与一份 Docker 镜像 tag 一一对应。
 
-### 7.1 版本同步策略
+### 7.1 版本号策略
 
-本项目的版本号直接对齐 **Xray-core 最新 Tag**，确保三者一致：
+Git Release Tag 与 Docker 镜像 tag 完全一致，均为 `YY.M.D-<7 位短 sha>`：
 
 | 标识 | 格式 | 示例 |
 |:---|:---|:---|
-| Xray-core Tag | `vX.Y.Z` | `v26.2.6` |
-| Docker 镜像 Tag | `X.Y.Z` (无 `v` 前缀) | `26.2.6` |
-| Git Release Tag | `vX.Y.Z` | `v26.2.6` |
+| Docker 镜像 Tag | `YY.M.D-<短 sha>` | `26.6.9-9efd47a` |
+| Git Release Tag | `YY.M.D-<短 sha>` | `26.6.9-9efd47a` |
+
+组件版本（含 Xray）以 `versions.json` 为单一事实源，不参与镜像 / Release 版本号的命名。
 
 ### 7.2 基本用法
 
 ```bash
-# 自动获取最新 Xray 版本，创建对应 Git Tag 和 GitHub Release
+# 为当前 commit 创建 Git Tag 和 GitHub Release（tag = YY.M.D-短sha）
 ./release.sh
 
-# 推荐配置 GitHub Token 以避免 API 限流
+# 创建 Release 需要 gh CLI 已登录；或设置 token 供 git push 使用
 export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 ./release.sh
 ```
@@ -402,62 +419,49 @@ export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 ```mermaid
 flowchart TD
-    Start(["./release.sh"]) --> Fetch["调用 GitHub API<br/>获取 Xray 最新 Tag"]
-    Fetch --> Valid{"版本获取成功?"}
-    Valid -- 否 --> Abort(["❌ 取消发布"])
-    Valid -- 是 --> CalcTag["计算版本号<br/>v26.2.6 → Git Tag: v26.2.6<br/>Docker Tag: 26.2.6"]
+    Start(["./release.sh"]):::entry --> CalcTag["计算 tag<br/>YY.M.D-短sha"]:::process
+    CalcTag --> LocalTag{"本地 Tag<br/>已存在?"}:::decision
+    LocalTag -- 是 --> SkipTag["跳过本地 Tag 创建"]:::process
+    LocalTag -- 否 --> CreateTag["git tag -a"]:::process
+    SkipTag --> GhCli{"gh CLI<br/>可用?"}:::decision
+    CreateTag --> GhCli
+    GhCli -- 是 --> RemoteCheck{"远端 Release<br/>已存在?"}:::decision
+    RemoteCheck -- 是 --> Done(["无需操作"]):::terminal
+    RemoteCheck -- 否 --> Push1["git push origin tag"]:::process
+    Push1 --> CreateRelease["gh release create"]:::process
+    CreateRelease --> Done2(["Release 创建成功"]):::terminal
+    GhCli -- 否 --> Push2["git push origin tag"]:::process
+    Push2 --> Manual(["请手动创建 Release"]):::gateway
 
-    CalcTag --> LocalTag{"本地 Tag<br/>已存在?"}
-    LocalTag -- 是 --> SkipTag["跳过本地 Tag 创建"]
-    LocalTag -- 否 --> CreateTag["git tag -a vX.Y.Z"]
-
-    SkipTag --> GhCli
-    CreateTag --> GhCli{"gh CLI<br/>可用?"}
-
-    GhCli -- 是 --> RemoteCheck{"远端 Release<br/>已存在?"}
-    RemoteCheck -- 是 --> Done(["✅ 无需操作"])
-    RemoteCheck -- 否 --> Push1["git push origin tag"] --> CreateRelease["gh release create"]
-    CreateRelease --> Done2(["✅ Release 创建成功"])
-
-    GhCli -- 否 --> Push2["git push origin tag"] --> Manual(["⚠️ 请手动创建 Release"])
-
-    style Abort fill:#d63031,stroke:#b71c1c,color:#fff
-    style Done fill:#55efc4,stroke:#00b894,color:#333
-    style Done2 fill:#00b894,stroke:#009577,color:#fff
-    style Manual fill:#fdcb6e,stroke:#e0a33e,color:#333
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef gateway  fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:2px,color:#fff
 ```
 
-### 7.4 详细流程说明
-
-| 步骤 | 动作 | 说明 |
-|:---:|:---|:---|
-| 1 | 获取 Xray 最新版本 | 通过 GitHub API `/repos/XTLS/Xray-core/tags` 获取最新 Tag |
-| 2 | 计算 Release Tag | 去除/添加 `v` 前缀以匹配 Docker 与 Git 两种命名规范 |
-| 3 | 创建本地 Git Tag | 使用 `git tag -a` 创建附注标签（annotated tag） |
-| 4a | 推送 + 创建 Release | 若检测到 `gh` CLI → 自动推送标签并创建 GitHub Release |
-| 4b | 仅推送标签 | 若无 `gh` CLI → 推送标签后提示用户手动创建 Release |
-
-### 7.5 幂等性保障
+### 7.4 幂等性保障
 
 `release.sh` 设计为**可重复执行**，不会产生副作用：
 
 * **本地 Tag 已存在** → 跳过创建，不报错
 * **远端 Release 已存在** → 跳过创建，不报错
-* **获取版本失败** → 立即中止，不执行任何 Git 操作
 
-### 7.6 与 build.sh 的关系
+### 7.5 与 build.sh 的关系
+
+`build.sh` 与 `release.sh` 各自独立计算同一格式的版本号（`YY.M.D-<短 sha>`）：在同一 commit、同一天运行时两者一致，使 Docker 镜像 tag 与 Git Release tag 指向同一份代码。
 
 ```mermaid
 flowchart LR
-    API(("GitHub API<br/>Xray 版本")) --> Build
-    API --> Release
+    Commit(["当前 commit<br/>YY.M.D-短sha"]):::entry --> Build["build.sh"]:::process
+    Commit --> Release["release.sh"]:::xray
+    Build -- ":VERSION + :latest<br/>同一 Image ID" --> Registry["Docker Hub"]:::external
+    Release -- "Git Tag = 镜像 tag" --> GitHub["GitHub Releases"]:::external
 
-    Build["build.sh"] -- ":VERSION + :latest\n同一 Image ID" --> Registry["Docker Hub"]
-    Release["release.sh<br/>发布 Git Release"] -- "Git Tag: v26.2.6" --> GitHub["GitHub Releases"]
-
-    style Build fill:#00b894,stroke:#009577,color:#fff
-    style Release fill:#a29bfe,stroke:#6c5ce7,color:#fff
-    style API fill:#fdcb6e,stroke:#e0a33e,color:#333
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef external fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
 ```
 
-推荐执行顺序：`./build.sh` → `./release.sh`。两个脚本共享同一版本源，确保 Docker 镜像版本与 Git Release 版本始终一致。
+推荐执行顺序：`./build.sh` → `./release.sh`，在同一 commit 上运行即可让镜像 tag 与 Git Release tag 一致。
