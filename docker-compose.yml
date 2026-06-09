@@ -129,6 +129,8 @@ services:
   watchtower:
     image: docker.io/nickfedor/watchtower:latest
     container_name: watchtower
+    # 通知标题用容器 hostname；设为节点域名以便 16 台一眼可辨（否则显示容器 hash）
+    hostname: ${domain:-sb-xray}
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -142,5 +144,7 @@ services:
       # 自动更新通知，复用 sb-xray 同源 shoutrrr（Telegram）。注：仅 schedule 模式发，run-once/sbx-update 不发（设计 §4.5）
       - WATCHTOWER_NOTIFICATIONS=shoutrrr
       - WATCHTOWER_NOTIFICATION_URL=${shoutrrr_urls}
+      # 关 startup 噪音：不再每次重启发启动日志，只在真更新/失败时通知（详细更新报告由 sbx-canary-check 自检告警负责）
+      - WATCHTOWER_NO_STARTUP_MESSAGE=true
       # 更新后删旧镜像省盘
       - WATCHTOWER_CLEANUP=true
