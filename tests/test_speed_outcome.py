@@ -60,3 +60,26 @@ def test_persist_outcome_writes_status(tmp_path: Path, monkeypatch: pytest.Monke
     assert snap["ISP_TAG"] == "proxy-us-isp"
     assert snap["IS_8K_SMOOTH"] == "true"
     assert "proxy-us-isp" in snap["_ISP_SPEEDS_JSON"]
+
+
+def test_measure_is_pure_no_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """measure_isp_speeds must not touch os.environ / STATUS_FILE, nor hit the net."""
+    monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))
+    monkeypatch.setenv("IP_TYPE", "hosting")
+    monkeypatch.delenv("HAS_ISP_NODES", raising=False)
+    monkeypatch.delenv("GEOIP_INFO", raising=False)
+    # M2: mock the direct-baseline network call (else measure() does real HTTP).
+    monkeypatch.setattr(st, "measure", lambda *a, **k: 50.0)
+    # No *_ISP_IP nodes → the ISP-node loop performs zero network IO.
+    before = dict(os.environ)
+    o = st.measure_isp_speeds(url="http://x/", sample_count=1)
+    assert isinstance(o, st.SpeedOutcome)
+    assert o.has_isp_nodes is False
+    assert o.direct_mbps == 50.0
+    assert os.environ.get("HAS_ISP_NODES") in (None, "")  # never written
+    assert not (tmp_path / "status").exists()  # never persisted
+    # measure neither added nor removed any env key
+    # (depends on Task 0: apply_isp_routing_logic no longer transiently writes GEOIP_INFO).
+    assert dict(os.environ) == before

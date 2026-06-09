@@ -908,16 +908,73 @@ def _log_routing_inputs() -> None:
     )
 
 
-def _measure_direct_baseline(url: str, sample_count: int) -> float:
-    """Direct speed measurement, not used for routing but for 8K 判定."""
+def measure_isp_speeds(url: str, sample_count: int) -> SpeedOutcome:
+    """Pure measurement: network IO + decision compute. NO env/STATUS writes.
+
+    Reads the *previous* speeds from STATUS_FILE (read-only) to drive leader
+    hysteresis and the notify edge-trigger, then returns an immutable
+    :class:`SpeedOutcome`. Side effects are the caller's job
+    (:func:`apply_outcome_to_env` / :func:`persist_outcome_to_status` /
+    :func:`_emit_outcome_event`), which keeps this safe to run from the async
+    refresh thread.
+    """
+    from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
+
+    # Direct baseline — not used for routing, only the 8K verdict when no proxy.
     direct_mbps = measure(url, samples=sample_count)
-    os.environ["DIRECT_SPEED"] = f"{direct_mbps:.2f}"
     show_report(direct_mbps, name="Direct")
     logger.info(
         "直连基准: %.2f Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）",
         direct_mbps,
     )
-    return direct_mbps
+
+    ctx = _measure_isp_nodes(url, sample_count)
+    has_isp = bool(ctx.speeds)
+
+    # Snapshot prior persisted state (from STATUS_FILE, not env, so it works in
+    # the fresh cron-retest process) for hysteresis + notify edge-trigger.
+    prev = _read_status_snapshot()
+    prev_speeds: dict[str, float] = {}
+    prev_raw = prev.get("_ISP_SPEEDS_JSON", "").strip()
+    if prev_raw:
+        try:
+            prev_speeds = {str(k): float(v) for k, v in _json.loads(prev_raw).items()}
+        except (ValueError, TypeError):
+            prev_speeds = {}
+
+    leader_tag, leader_speed = _leader_with_hysteresis(ctx, prev_speeds)
+    decision = apply_isp_routing_logic(
+        RoutingContext(
+            ip_type=os.environ.get("IP_TYPE", "unknown"),
+            geoip_info=os.environ.get("GEOIP_INFO", ""),
+            default_isp=os.environ.get("DEFAULT_ISP", ""),
+            direct_speed=direct_mbps,
+            fastest_proxy_tag=leader_tag,
+            proxy_max_speed=leader_speed,
+        )
+    )
+    notify = _should_notify(
+        prev=prev,
+        new_speeds=ctx.speeds,
+        new_isp_tag=decision.isp_tag,
+        new_fastest_mbps=leader_speed,
+    )
+    logger.info(
+        "ISP_TAG=%s IS_8K_SMOOTH=%s",
+        decision.isp_tag,
+        "true" if decision.is_8k_smooth else "false",
+    )
+    return SpeedOutcome(
+        speeds=dict(ctx.speeds),
+        diag=dict(ctx.diag) if ctx.diag else None,
+        direct_mbps=direct_mbps,
+        fastest_tag=leader_tag,
+        fastest_speed=leader_speed,
+        isp_tag=decision.isp_tag,
+        is_8k_smooth=decision.is_8k_smooth,
+        has_isp_nodes=has_isp,
+        notify=notify,
+    )
 
 
 def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
@@ -928,7 +985,10 @@ def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
         logger.warning("未发现 ISP 节点（无 *_ISP_IP 环境变量），将回退直连")
         return ctx
 
-    os.environ["HAS_ISP_NODES"] = "true"
+    # HAS_ISP_NODES is no longer written here — that env mutation would leak from
+    # the async refresh thread. The signal is carried by SpeedOutcome.has_isp_nodes
+    # (= bool(ctx.speeds)) and applied to env only in the main process via
+    # apply_outcome_to_env.
     legacy = _legacy_sampler_enabled()
     logger.info(
         "发现 ISP 节点 %d 个，逐节点采样 %d 次 | sampler=%s",
@@ -1116,90 +1176,6 @@ def _emit_outcome_event(o: SpeedOutcome) -> None:
     emit_event("isp.speed_test.result", payload)
 
 
-def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
-    """Feed the routing logic and export the decision to env + STATUS_FILE."""
-    from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
-
-    # Snapshot the *previous* persisted state before we overwrite it — drives
-    # both leader hysteresis and the notify edge-trigger below. Read from
-    # STATUS_FILE (not env) so it works in the fresh cron-retest process.
-    prev = _read_status_snapshot()
-    prev_speeds: dict[str, float] = {}
-    prev_raw = prev.get("_ISP_SPEEDS_JSON", "").strip()
-    if prev_raw:
-        try:
-            prev_speeds = {str(k): float(v) for k, v in _json.loads(prev_raw).items()}
-        except (ValueError, TypeError):
-            prev_speeds = {}
-
-    speeds_json = _json_speeds(ctx.speeds)
-    os.environ["_ISP_SPEEDS_JSON"] = speeds_json
-    # Persist the primary speeds map so the *next* retest compares against the
-    # real previous result instead of the frozen boot-time env snapshot — the
-    # bug that made every retest report delta=100% and restart needlessly.
-    _write_status_line("_ISP_SPEEDS_JSON", speeds_json)
-
-    # v2: sibling JSON with per-tag status/bytes/window for diagnostics.
-    diag_enabled = os.environ.get("ISP_SPEED_DIAG_ENABLED", "true").strip().lower() != "false"
-    if diag_enabled and ctx.diag:
-        diag_json = _json.dumps(ctx.diag)
-        os.environ["_ISP_SPEEDS_DIAG_JSON"] = diag_json
-        _write_status_line("_ISP_SPEEDS_DIAG_JSON", diag_json)
-
-    leader_tag, leader_speed = _leader_with_hysteresis(ctx, prev_speeds)
-    if leader_tag:
-        os.environ["FASTEST_PROXY_TAG"] = leader_tag
-        # Bash export name is lowercase (_test_isp_node); mirror it verbatim.
-        os.environ["proxy_max_speed"] = f"{leader_speed:.2f}"  # noqa: SIM112
-
-    decision = apply_isp_routing_logic(
-        RoutingContext(
-            ip_type=os.environ.get("IP_TYPE", "unknown"),
-            geoip_info=os.environ.get("GEOIP_INFO", ""),
-            default_isp=os.environ.get("DEFAULT_ISP", ""),
-            direct_speed=direct_mbps,
-            fastest_proxy_tag=leader_tag,
-            proxy_max_speed=leader_speed,
-        )
-    )
-    os.environ["ISP_TAG"] = decision.isp_tag
-    os.environ["IS_8K_SMOOTH"] = "true" if decision.is_8k_smooth else "false"
-
-    _write_status_line("IS_8K_SMOOTH", os.environ["IS_8K_SMOOTH"])
-    _write_status_line("ISP_TAG", decision.isp_tag)
-    logger.info(
-        "ISP_TAG=%s IS_8K_SMOOTH=%s",
-        decision.isp_tag,
-        os.environ["IS_8K_SMOOTH"],
-    )
-
-    notify = _should_notify(
-        prev=prev,
-        new_speeds=ctx.speeds,
-        new_isp_tag=decision.isp_tag,
-        new_fastest_mbps=leader_speed,
-    )
-
-    # Phase 2 observability: structured event so ops can track every
-    # speed-test outcome (boot-time and cron-triggered alike). ``notify``
-    # gates the Telegram push (shoutrrr) without suppressing the log/event,
-    # so observability stays full-fidelity while alerts stay quiet.
-    from sb_xray.events import emit_event
-
-    payload: dict[str, object] = {
-        "direct_mbps": round(direct_mbps, 2),
-        "fastest_tag": leader_tag or "",
-        "fastest_mbps": round(leader_speed, 2),
-        "speeds": {t: round(v, 2) for t, v in ctx.speeds.items()},
-        "isp_tag": decision.isp_tag,
-        "is_8k_smooth": decision.is_8k_smooth,
-        "notify": notify,
-    }
-    if ctx.diag:
-        payload["diag"] = ctx.diag
-    emit_event("isp.speed_test.result", payload)
-
-
 def run_isp_speed_tests(
     *,
     samples: int | None = None,
@@ -1208,16 +1184,19 @@ def run_isp_speed_tests(
 ) -> None:
     """Port of ``run_speed_tests_if_needed`` (entrypoint.sh:1153).
 
-    Orchestrator — composed of 5 single-purpose helpers:
+    Main-process orchestrator:
 
-      1. :func:`_try_cache_hit` — honor a valid ``ISP_TAG`` cache.
-      2. :func:`_reset_caches_for_fresh_run` — wipe stale state.
-      3. :func:`_measure_direct_baseline` — direct speed for 8K 判定.
-      4. :func:`_measure_isp_nodes` — per-``*_ISP_IP`` SOCKS5h probes.
-      5. :func:`_persist_routing_decision` — route + write STATUS_FILE.
+      1. :func:`_try_speed_cache_hit` / :func:`_try_cache_hit` — honor a valid
+         cache (unless ``force``).
+      2. :func:`_reset_caches_for_fresh_run` — wipe stale env + STATUS ``*_OUT``.
+      3. :func:`measure_isp_speeds` — pure measurement → :class:`SpeedOutcome`.
+      4. :func:`apply_outcome_to_env` — write env (MAIN PROCESS ONLY).
+      5. :func:`persist_outcome_to_status` — atomic STATUS_FILE write.
+      6. :func:`_emit_outcome_event` — observability event.
 
-    ``force=True`` (Phase 3) bypasses the ``ISP_TAG`` cache hit path —
-    the periodic retest cron needs a real measurement every time.
+    ``force=True`` (Phase 3) bypasses the cache hit path — the periodic retest
+    cron needs a real measurement every time. The async cache-hit refresh uses
+    :func:`_async_refresh_once` instead (persist only, never mutate env).
     """
     sample_count = _resolve_sample_count(samples)
 
@@ -1231,11 +1210,12 @@ def run_isp_speed_tests(
         if cached_tag and _try_cache_hit(cached_tag):
             return
 
-    _reset_caches_for_fresh_run()
+    _reset_caches_for_fresh_run()  # main-process cache purge
     _log_routing_inputs()
-    direct_mbps = _measure_direct_baseline(url, sample_count)
-    ctx = _measure_isp_nodes(url, sample_count)
-    _persist_routing_decision(direct_mbps, ctx)
+    outcome = measure_isp_speeds(url, sample_count)
+    apply_outcome_to_env(outcome)  # main process: write env
+    persist_outcome_to_status(outcome)  # atomic STATUS_FILE
+    _emit_outcome_event(outcome)
 
 
 def _try_speed_cache_hit() -> bool:

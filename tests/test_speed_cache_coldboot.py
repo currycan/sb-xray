@@ -49,8 +49,7 @@ def test_cache_hit_skips_live_measurement(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setenv("ISP_SPEED_CACHE_ASYNC", "false")
 
     measure = MagicMock()
-    monkeypatch.setattr(speed_test, "_measure_direct_baseline", measure)
-    monkeypatch.setattr(speed_test, "_measure_isp_nodes", MagicMock())
+    monkeypatch.setattr(speed_test, "measure_isp_speeds", measure)
 
     speed_test.run_isp_speed_tests()
 
@@ -105,13 +104,19 @@ def test_force_bypasses_cache_even_when_fresh(
     monkeypatch.setenv("STATUS_FILE", str(status))
     monkeypatch.setenv("ISP_SPEED_CACHE_ASYNC", "false")
 
-    measure = MagicMock(return_value=50.0)
-    monkeypatch.setattr(speed_test, "_measure_direct_baseline", measure)
-    monkeypatch.setattr(
-        speed_test,
-        "_measure_isp_nodes",
-        MagicMock(return_value=speed_test.IspSpeedContext()),
+    fake = speed_test.SpeedOutcome(
+        speeds={},
+        diag=None,
+        direct_mbps=50.0,
+        fastest_tag=None,
+        fastest_speed=0.0,
+        isp_tag="direct",
+        is_8k_smooth=False,
+        has_isp_nodes=False,
+        notify=False,
     )
+    measure = MagicMock(return_value=fake)
+    monkeypatch.setattr(speed_test, "measure_isp_speeds", measure)
 
     speed_test.run_isp_speed_tests(force=True)
 
