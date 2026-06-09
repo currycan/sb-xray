@@ -1040,6 +1040,82 @@ def _should_notify(
     return rate(prev_fastest) != rate(new_fastest_mbps)
 
 
+@dataclass(frozen=True)
+class SpeedOutcome:
+    """Immutable result of one speed-test run — no side effects to produce.
+
+    Decouples *measurement* (network IO + decision compute) from *side effects*
+    (env writes, STATUS_FILE writes, event emission). The async refresh daemon
+    may compute an outcome but must never apply it to ``os.environ`` — only the
+    main process owns the env that cold-boot config generation consumes.
+    """
+
+    speeds: dict[str, float]
+    diag: dict[str, dict[str, object]] | None
+    direct_mbps: float
+    fastest_tag: str | None
+    fastest_speed: float
+    isp_tag: str
+    is_8k_smooth: bool
+    has_isp_nodes: bool
+    notify: bool
+
+
+def _diag_enabled() -> bool:
+    return os.environ.get("ISP_SPEED_DIAG_ENABLED", "true").strip().lower() != "false"
+
+
+def apply_outcome_to_env(o: SpeedOutcome) -> None:
+    """Write the outcome into ``os.environ``. MAIN-PROCESS ONLY (never async).
+
+    Mirrors the env exports the old ``_persist_routing_decision`` performed
+    inline, plus ``DIRECT_SPEED`` (formerly set by ``_measure_direct_baseline``)
+    so the split keeps full parity.
+    """
+    os.environ["DIRECT_SPEED"] = f"{o.direct_mbps:.2f}"
+    os.environ["_ISP_SPEEDS_JSON"] = _json_speeds(o.speeds)
+    if _diag_enabled() and o.diag:
+        os.environ["_ISP_SPEEDS_DIAG_JSON"] = _json.dumps(o.diag)
+    if o.fastest_tag:
+        os.environ["FASTEST_PROXY_TAG"] = o.fastest_tag
+        os.environ["proxy_max_speed"] = f"{o.fastest_speed:.2f}"  # noqa: SIM112
+    os.environ["ISP_TAG"] = o.isp_tag
+    os.environ["IS_8K_SMOOTH"] = "true" if o.is_8k_smooth else "false"
+    os.environ["HAS_ISP_NODES"] = "true" if o.has_isp_nodes else ""
+
+
+def persist_outcome_to_status(o: SpeedOutcome) -> None:
+    """Persist the outcome to STATUS_FILE (atomic). Safe from any thread.
+
+    Each ``_write_status_line`` call is individually atomic + flock-serialized;
+    there is no cross-key transaction (an ``exec``-kill between keys leaves a
+    syntactically-valid mix of old/new lines, never a corrupt file).
+    """
+    _write_status_line("_ISP_SPEEDS_JSON", _json_speeds(o.speeds))
+    if _diag_enabled() and o.diag:
+        _write_status_line("_ISP_SPEEDS_DIAG_JSON", _json.dumps(o.diag))
+    _write_status_line("IS_8K_SMOOTH", "true" if o.is_8k_smooth else "false")
+    _write_status_line("ISP_TAG", o.isp_tag)
+
+
+def _emit_outcome_event(o: SpeedOutcome) -> None:
+    """Emit the ``isp.speed_test.result`` observability event for an outcome."""
+    from sb_xray.events import emit_event
+
+    payload: dict[str, object] = {
+        "direct_mbps": round(o.direct_mbps, 2),
+        "fastest_tag": o.fastest_tag or "",
+        "fastest_mbps": round(o.fastest_speed, 2),
+        "speeds": {t: round(v, 2) for t, v in o.speeds.items()},
+        "isp_tag": o.isp_tag,
+        "is_8k_smooth": o.is_8k_smooth,
+        "notify": o.notify,
+    }
+    if o.diag:
+        payload["diag"] = o.diag
+    emit_event("isp.speed_test.result", payload)
+
+
 def _persist_routing_decision(direct_mbps: float, ctx: IspSpeedContext) -> None:
     """Feed the routing logic and export the decision to env + STATUS_FILE."""
     from sb_xray.routing.isp import RoutingContext, apply_isp_routing_logic
