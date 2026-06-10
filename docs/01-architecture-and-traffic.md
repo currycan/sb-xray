@@ -25,7 +25,7 @@
 
 ### 为什么选择 Nginx 作为守门人？
 
-如果由 Xray 独占 443 端口（Xray 前置），虽然配置极简，但其只能作为单一的 Reality 代理服务器。一旦您需要同时运行 **多个可视化 Web 面板 (X-UI/S-UI)**、提供 **文件网盘 (Dufs)**，或是处理来自 **Cloudflare 的 CDN 备用流量**，Xray 简单的 `fallbacks` 机制将捉襟见肘。
+如果由 Xray 独占 443 端口（Xray 前置），虽然配置极简，但其只能作为单一的 Reality 代理服务器。一旦您需要同时运行 **可视化 Web 面板 (X-UI)**、提供 **文件网盘 (Dufs)**，或是处理来自 **Cloudflare 的 CDN 备用流量**，Xray 简单的 `fallbacks` 机制将捉襟见肘。
 
 **SB-Xray 的 Nginx 前置三大核心优势：**
 
@@ -191,7 +191,6 @@ flowchart TD
     NginxWeb -- "/xhttp (gRPC)" --> Xhttp["Xray XHTTP 安全隧道"]:::xray
     NginxWeb -- "/vmess (WebSocket)" --> VMess["Xray VMess CDN 兼容节点"]:::xray
     NginxWeb -- "/xui" --> XUI["X-UI 协议管理面板"]:::app
-    NginxWeb -- "/sui" --> SUI["S-UI 监控面板<br/>(已移除)"]:::app
     NginxWeb -- "/myfiles" --> Dufs["Dufs 私密文件网盘"]:::app
     NginxWeb -- "其他路径" --> FakeWeb["伪装站点 / 404"]:::app
 ```
@@ -314,7 +313,7 @@ flowchart LR
 | 特性 | Xray 前置 (方案 A) | Nginx 前置 (本项目) | 本项目选择理由 |
 |:---|:---|:---|:---|
 | **性能** | ⭐⭐⭐⭐⭐ 极致 | ⭐⭐⭐⭐⭐ TCP层分流损耗忽略 | 两者性能差距肉眼不可见 |
-| **Web 能力** | ⭐⭐ 仅能简单回落 | ⭐⭐⭐⭐⭐ 路由/压缩/缓存/重写 | 需运行 X-UI、S-UI、Dufs 等多个 Web 服务 |
+| **Web 能力** | ⭐⭐ 仅能简单回落 | ⭐⭐⭐⭐⭐ 路由/压缩/缓存/重写 | 需运行 X-UI、Dufs 等多个 Web 服务 |
 | **CDN 支持** | ⭐⭐⭐ 配置繁琐 | ⭐⭐⭐⭐⭐ 原生支持 | 需完美处理 CDN 回源 IP 和 Headers |
 | **隐蔽性** | ⭐⭐⭐⭐⭐ 原生 Reality | ⭐⭐⭐⭐⭐ 透明分流 | Nginx Stream 不解密 Reality 流量，隐蔽性等同 |
 | **维护性** | ⭐⭐⭐ 单点故障 | ⭐⭐⭐⭐ 模块解耦 | Nginx 崩溃不影响 Sing-box；Xray 崩溃 Nginx 仍可展示 Web |
@@ -413,7 +412,7 @@ flowchart TB
         R1["出站 JSON 装配<br/>isp-auto / 按服务分桶 balancer"]:::process
         R2["模板渲染<br/>xray · sing-box · nginx · supervisord"]:::process
         R3["按 ENABLE_* 开关裁剪 daemon.ini<br/>关闭小内存节点的可选子进程"]:::process
-        R4["X-UI / S-UI 数据库初始化<br/>Nginx htpasswd 凭据"]:::process
+        R4["X-UI 数据库初始化<br/>Nginx htpasswd 凭据"]:::process
         R5["Cron 安装<br/>geo-update (03:00) · isp-retest (每 6h)"]:::process
         R1 --> R2 --> R3 --> R4 --> R5
     end
@@ -425,7 +424,7 @@ flowchart TB
         F1 --> F2
     end
 
-    Daemons[["xray · sing-box · nginx · cron · X-UI / S-UI / shoutrrr-forwarder<br/>(supervisord 守护,策略在 daemon.ini 中声明)"]]:::external
+    Daemons[["xray · sing-box · nginx · cron · X-UI · shoutrrr-forwarder<br/>(supervisord 守护,策略在 daemon.ini 中声明)"]]:::external
 
     Start --> P1 --> P2
     S2 --> P3
