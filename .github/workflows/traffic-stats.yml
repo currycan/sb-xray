@@ -20,13 +20,13 @@ jobs:
     steps:
       # 工作区根目录检出 traffic 孤儿分支：CSV 在此累积，提交也回推到此分支
       - name: Checkout traffic data branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: traffic
 
       # 渲染脚本只存在于默认分支，单独检出到子目录供本次运行调用
       - name: Checkout render script from default branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: .ci-src
 
@@ -41,8 +41,26 @@ jobs:
       - name: Normalize traffic dir ownership
         run: sudo chown -R "$(id -u):$(id -g)" traffic
 
+      # 可观测性:绿跑却「Nothing to commit」时,一眼区分「API 暂无新数据(正常,通常是 GitHub
+      # Traffic 固有 2-3 天上报延迟)」与「抓取异常」。无此输出，绿跑会被误读为已更新。
+      - name: Report traffic data freshness
+        run: |
+          csv=traffic/clones.csv
+          if [ ! -f "$csv" ]; then echo "::warning::$csv not found"; exit 0; fi
+          rows=$(awk 'END{print NR-1}' "$csv")
+          last=$(awk 'END{print}' "$csv" | cut -d, -f1)
+          today=$(date -u +%F)
+          {
+            echo "### 项目活跃度数据新鲜度"
+            echo ""
+            echo "- clones.csv 数据行数: \`$rows\`"
+            echo "- 最新数据日期: \`$last\`  ·  当前 UTC 日期: \`$today\`"
+            echo ""
+            echo "> 最新日期落后今日数天通常是 GitHub Traffic API 固有的 2-3 天上报延迟，而非流水线故障。"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -52,7 +70,7 @@ jobs:
           python .ci-src/.github/scripts/render_traffic.py
 
       - name: Commit traffic data and chart
-        uses: EndBug/add-and-commit@v9
+        uses: EndBug/add-and-commit@v10
         with:
           # 只收录所需产物；sangonzal action 还会生成内置的 plots.png，
           # 我们不引用它，用 remove 显式剔除（--ignore-unmatch 容忍未跟踪）
