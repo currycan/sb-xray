@@ -104,14 +104,6 @@ echo "0 4 * * * CDNDOMAIN=example.com /usr/bin/cdn-speedtest.sh run  # optimize 
 
 ---
 
-## anytls_overwrite.sh — OpenClash AnyTLS 覆写
-
-[Giveupmoon/OpenClash_Overwrite: OpenClash覆写模块相关文件](https://github.com/Giveupmoon/OpenClash_Overwrite/tree/main)
-
-```
-https://hk.gh-proxy.org/https://raw.githubusercontent.com/currycan/sb-xray/main/sources/hack/anytls_overwrite.sh
-```
-
 ## rename.js — 节点重命名
 
 基于 [Keywos/rule](https://github.com/Keywos/rule) 的节点重命名脚本。

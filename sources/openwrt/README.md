@@ -310,6 +310,7 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | skip-auth | socks5 / balance | 把 `100.64.0.0/10` 注入 mihomo `skip-auth-prefixes`，VPS 经 Tailscale 访问本机 SOCKS5(7891) 免认证 |
 | keepalive / UDP GRO | socks5 / balance | ~15s 一轮 ping 热备保住 41641 映射；WAN 网卡开 `rx-udp-gro-forwarding` 提升转发吞吐 |
 | 解耦 | 所有（有 OpenClash 时） | 给清单内每个 VPS 域名加 `DOMAIN,<vps>,DIRECT` + fake-ip 过滤，bridge 直连真实 IP |
+| GLOBAL 重排 | 所有（有 OpenClash 时） | 注入自定义 `GLOBAL` select 组，把内置 `DIRECT`/`REJECT` 排到选单最后；纯 UI 顺序，不影响路由 |
 | xray bridge | reverse / balance | 装 xray + `cn-bridge` + 生成节点清单；对热备各拨一条独立隧道 |
 | socks5 对齐 | socks5 / balance | OpenClash 加 `IN-PORT,7891,DIRECT`，socks5 腿强制纯直出 |
 | 监控 | 配了 TG 告警时 | 装 `cn-bridge-monitor` + cron 周期探活 |
