@@ -1,11 +1,11 @@
-# Xray Reverse Bridge 回国架构设计与配置指南
+# 08. Xray Reverse Bridge 回国架构设计与配置指南
 
 本文把「**用 Xray 反向代理（reverse bridge）做海外回国**」这套链路讲透：境外设备访问大陆限定服务时，海外 VPS 把国内流量经一条**由家里主动建立**的加密隧道丢回大陆软路由，从家宽 IP 直出。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
 > **本文与相邻文档的分工**：
 > - [05. VLESS Reverse Proxy 部署指南](./05-reverse-proxy-guide.md) 讲 reverse 这套机制本身（portal/bridge、双 UUID、内网穿透）。
 > - [07. Tailscale 代理架构设计与配置](./07-tailscale-proxy-architecture.md) 讲**另一套**回国方案（Tailscale + OpenClash SOCKS5）。
-> - 本文 09 专讲**用 reverse bridge 回国**：架构、流量图解、`CN_EXIT_MODE` 开关与主备故障转移、完整踩坑。两套回国方案怎么选见 §7.2。
+> - 本文 08 专讲**用 reverse bridge 回国**：架构、流量图解、`CN_EXIT_MODE` 开关与主备故障转移、完整踩坑。两套回国方案怎么选见 §7.2。
 
 ---
 
@@ -112,7 +112,7 @@ flowchart TB
 
 | `CN_EXIT_MODE` | 国内流量出口 | 说明 | 本文相关 |
 |---|---|---|---|
-| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [08](./07-tailscale-proxy-architecture.md)） | 否 |
+| `socks5` | `cn-exit` SOCKS5 出站 | Tailscale/OpenClash 方案（见 [07](./07-tailscale-proxy-architecture.md)） | 否 |
 | `reverse` | `r-tunnel` 反向隧道 | **本方案** | ✅ §3.1 / §4 |
 | `balance` | `cn-exit` + `r-tunnel` 主备 | 两条链路并挂、自动故障转移 | ✅ §3.2 |
 | `off` | 封禁（不回国） | — | — |
@@ -149,7 +149,7 @@ flowchart TB
 
 ### 3.1 reverse 模式（CN_EXIT_MODE=reverse）
 
-📘 **一句话**：境外用户访问爱奇艺，流量到 VPS 后命中 `geosite:cn`，被送进 `r-tunnel` 沿隧道回到家里 OpenWrt，用家宽 IP 直连——大陆服务以为这是个国内用户。
+📘 整条链路「谁主动连谁、流量怎么回家」见 [§0 全局总览](#0-全局总览谁主动连谁流量怎么回家)；本节只把 reverse 单链路逐跳拆给工程师看。
 
 ```mermaid
 flowchart LR
@@ -230,7 +230,7 @@ flowchart LR
 # - REVERSE_DOMAINS=domain:lan   # 顺带做内网穿透时填；纯回国可留空
 ```
 
-🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [08](./07-tailscale-proxy-architecture.md)）：
+🔧 **balance 主备**（额外需要 SOCKS5 那条就绪，见 [07](./07-tailscale-proxy-architecture.md)）：
 
 ```yaml
 - CN_EXIT_MODE=balance
@@ -252,7 +252,19 @@ docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
 
 🔧 **多 VPS 批量初始化**：每台 VPS 用 `sources/vps/vps-cn-exit-init.sh`（用法详见 [sources/vps/README.md](../sources/vps/README.md)）一键写 `.env`（回国项以 `${VAR}` 注入 docker-compose）、装 Tailscale 入网、配 VPS 侧 keepalive、拉起容器，嵌进你的 provisioning 即可。各台 `XRAY_REVERSE_UUID` 自动生成持久化、互不冲突；socks5 腿命脉是 Tailscale 链路，务必每台都入 tailnet。配一次永不改 env，回国拨号切换全在 OpenWrt 侧 `cn-bridge` 完成。
 
-### 4.2 拿落地机配置下载链接
+### 4.2 balance 降级守卫：缺变量时会发生什么
+
+📘 **一句话**：`balance` 不是「写了就一定双腿」——它对前置变量有硬依赖，缺哪个就静默降级。下表是 portal 渲染 `xr.json` 时（`scripts/sb_xray/config_builder.py` 的 `_apply_cn_exit_balance`）的实测行为，**降级只打日志、不报错**，所以务必照「如何验证」核对，别凭 `CN_EXIT_MODE=balance` 就以为生效。
+
+| 缺失的前置变量 | portal 实际行为 | 后果 | 日志关键字 |
+|---|---|---|---|
+| `CN_EXIT_SOCKS5_HOST` 未设置/为空 | **整档 balance 改写跳过**，回国规则不被注入 | CN 流量保持 base 模板的 `block`——**不回国**（被封禁） | `CN-exit(balance): CN_EXIT_SOCKS5_HOST 未设置,跳过` |
+| `ENABLE_REVERSE` 不为 `true` | **退化为仅 socks5 单腿**（不挂 r-tunnel，不建 balancer） | 回国可用但**无主备**，只走 SOCKS5 那条 | `CN-exit(balance): ENABLE_REVERSE!=true,r-tunnel 不可用,balance 退化为仅 socks5` |
+| 两者都齐 | 正常生成 `cn-exit-balance` balancer（`selector: ["cn-exit","r-tunnel"]`，`leastPing`） | 双腿主备生效 | `CN-exit(balance): selector=['cn-exit', 'r-tunnel'] leastPing` |
+
+🔧 **如何验证降级**：重启后 `docker compose logs sb-xray | grep "CN-exit(balance)"`，比对上表日志关键字——看到「未设置,跳过」说明根本没回国，看到「退化为仅 socks5」说明丢了 r-tunnel 主备。要双腿生效，`CN_EXIT_SOCKS5_HOST` 和 `ENABLE_REVERSE=true` 缺一不可。
+
+### 4.3 拿落地机配置下载链接
 
 🔧 portal 已把所有参数填好，渲染出一份可直接用的 bridge 配置。运行 `show` 取链接：
 
@@ -262,7 +274,7 @@ docker exec sb-xray show
 # https://<你的域名>/sb-xray/reverse_bridge_client.json?token=<SUBSCRIBE_TOKEN>
 ```
 
-### 4.3 bridge 侧（大陆 OpenWrt）
+### 4.4 bridge 侧（大陆 OpenWrt）
 
 🔧 **推荐：一键脚本**。仓库 `sources/openwrt/cn-exit-setup.sh` 已把「装 xray + 带 token 拉取已渲染 `client.json` + 写 `/etc/init.d/xray-bridge` 开机自启 + 自检」固化成幂等脚本，`CN_EXIT_MODE=reverse` 时只跑 bridge 相关步骤、不碰 Tailscale。
 
@@ -315,11 +327,11 @@ chmod +x /etc/init.d/xray-bridge
 
 > 📘 bridge 与 OpenClash 可并存：xray-bridge 拨向 VPS 的连接是路由器**自身**出站流量，OpenClash 默认不接管本机流量，二者通常互不干扰（细节同回国方案一的注意事项）。
 
-### 4.4 客户端
+### 4.5 客户端
 
 📘 客户端操作与方案一完全相同（客户端只负责把国内流量送到 VPS，具体走哪条回国链路由 portal 的 `CN_EXIT_MODE` 决定）：把订阅里的 **`国内流量`** 策略组从「直接连接」切到你的 sb-xray VPS 节点即可。人在国内时记得切回「直接连接」。
 
-### 4.5 多节点高可用：多公网 VPS + `cn-bridge` 拨号
+### 4.6 多节点高可用：多公网 VPS + `cn-bridge` 拨号
 
 单条 bridge 是单点——那台 VPS 宕机，走它的回国就断。多公网部署让每台 VPS 都成为独立回国入口：家里 OpenWrt 对**热备**节点常驻拨通、**冷备**节点平时不拨、故障时一条命令顶上。
 
@@ -345,7 +357,7 @@ cn-bridge                 # 交互菜单
 
 📘 **热备 / 冷备语义**：
 
-- **热备**（`BRIDGE_HOT`）：常驻拨通，有 r-tunnel 腿；`balance` 模式下 leastPing 通常优选它（freedom 直出、不经 OpenClash 二次分流，质量更纯净）。
+- **热备**（`BRIDGE_HOT`）：常驻拨通，有 r-tunnel 腿。r-tunnel 走 freedom 直出、不经 OpenClash 二次分流，质量更纯净；但 `balance` 的 `leastPing` **仅按探测 RTT 选路、不含任何质量偏置**——RTT 更低的那条腿被选中，与「纯净度」无关。若某时刻 socks5 腿 RTT 更低，leastPing 会选 socks5，并不保证优先走 r-tunnel。
 - **冷备**：未拨、没有 r-tunnel 腿，但只要它在 tailnet 里就仍有 **socks5 腿**（经 Tailscale 回国），`balance` 的 observatory 探测 r-tunnel 失败后**自动用 socks5 兜底——不黑洞**。故障时 `cn-bridge up <名>` 秒级升它为双腿。
 
 > ⚠️ 所有回国流量最终都从家里**同一条家宽上行**出去。多 VPS 是**入口冗余**（某台挂了切别台），**不增加**回国出口带宽。
@@ -418,6 +430,10 @@ docker exec sb-xray xray api statsquery --server=127.0.0.1:7978 2>/dev/null \
 
 用对域名（`cip.cc` 命中 `geosite:cn`），别用 `myip.ipip.net`（见 §5 警告）；在 VPS 本机而非家里 WiFi 下测（家里测不出回国效果）。
 
+### 6.6 ISP 重测会顺带重注入回国路由（跨子系统耦合）
+
+🔬 回国分流与 ISP 测速是**同一份 `xr.json`**。`isp-retest`（cron 周期跑）一旦发现 ISP 节点集合变化或路由类别翻转，会调用 `config_builder.create_config()` 整份重渲染——而重渲染必然重跑 `_apply_cn_exit`，按当前 `CN_EXIT_MODE` 重注入回国路由规则。含义有二：① 回国分流不是「配一次定死」，每次 ISP 重测重启 daemon 都会重建一遍；② 若运行时 env 与首启不一致（如某变量被改），重渲染会以**当前** env 为准，可能与你预期的回国姿态不同。排查回国异常时，若恰逢 ISP 重测窗口，先确认这次重渲染用的 `CN_EXIT_MODE` / `CN_EXIT_SOCKS5_HOST` / `ENABLE_REVERSE` 是否仍是你想要的（见 §4.2 降级守卫）。
+
 ---
 
 ## 7. 附录
@@ -428,7 +444,7 @@ docker exec sb-xray xray api statsquery --server=127.0.0.1:7978 2>/dev/null \
 
 ### 7.2 两套回国方案怎么选
 
-| 维度 | 方案一 Tailscale SOCKS5（[08](./07-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
+| 维度 | 方案一 Tailscale SOCKS5（[07](./07-tailscale-proxy-architecture.md)） | 本方案 reverse bridge |
 |---|---|---|
 | 大陆侧依赖 | OpenWrt + OpenClash + kmod-tun（kernel TUN） | OpenWrt 能跑 xray、能出站 443 即可 |
 | 公网 IP | 不需要 | 不需要 |
