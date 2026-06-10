@@ -126,13 +126,14 @@ flowchart TD
 | :---------------------- | :----------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------- |
 | ⚙️ **构建部署指南**     | [**👉 00. 构建部署指南**](./docs/00-build-release.md)                          | 详解 `build.sh` 自动构建脚本、三阶段 Dockerfile 架构、10 个组件的版本管理策略与常见构建问题 FAQ。                      |
 | 🟢 **架构与原理剖析**   | [**👉 01. 系统架构与网络流量链路详解**](./docs/01-architecture-and-traffic.md) | 深度解析 Nginx 前置分流原理、微观 Unix Socket 链路、架构方案对比以及 `entrypoint.py`（Python PID 1，`run` / `show` 子命令）守护进程的五大生命周期扇区。      |
-| 🔵 **安全加固与协议**   | [**👉 02. 协议详解与安全加密体系**](./docs/02-protocols-and-security.md)       | 涵盖全部 9 种协议配置手册、MLKEM 后量子加密理论与实践、Reality Fallback 回落机制、ACME 证书管家以及 TUN 模式进阶指南。 |
+| 🔵 **安全加固与协议**   | [**👉 02. 协议详解与安全加密体系**](./docs/02-protocols-and-security.md)       | 涵盖全部 10 种协议（Xray 系 8 种 + Sing-box 系 2 种）配置手册、MLKEM 后量子加密理论与实践、Reality Fallback 回落机制、ACME 证书管家以及 TUN 模式进阶指南。 |
 | 🟡 **调度中枢与客户端** | [**👉 03. 智能路由策略与全平台客户端接入**](./docs/03-routing-and-clients.md)  | 详解 OpenClash Policy-Priority 六维加权评分体系、Sub-Store 深层节点清洗引擎，以及动态 ISP 链式落地的底层实现。         |
 | 🔴 **系统运维与监控**   | [**👉 04. 运维管理与故障排查手册**](./docs/04-ops-and-troubleshooting.md)      | 包含多面板入口导航、订阅端点双重认证安全防扫描策略、证书运维以及应对 502/404/证书失效等故障的汇总排错指南。            |
 | 🔄 **内网穿透专题**     | [**👉 05. VLESS Reverse Proxy 部署指南**](./docs/05-reverse-proxy-guide.md)    | 家宽落地机反向挂载到 VPS 的端到端部署：portal 侧 `ENABLE_REVERSE` 开关、bridge 侧 simplified outbound 模板、双 UUID 隔离、故障排查与撤销流程。 |
 | 📣 **事件通知专题**     | [**👉 06. 事件总线：Xray webhook → shoutrrr**](./docs/06-event-bus-shoutrrr.md)          | 把"谁被 ban / 谁踩 BT / 谁走私网 IP"等 Xray 事件经 shoutrrr 实时推送到 Telegram / Discord / Slack / Gotify 的部署配置与排错指南。 |
 | 🛰️ **Tailscale 架构**  | [**👉 07. Tailscale 代理架构设计与配置**](./docs/07-tailscale-proxy-architecture.md) | 一台 OpenWrt 四个角色（cn-exit 回国 / exit node 出国分流 / subnet router 内网穿透 / 本机直连）的架构原理、流量图解、kernel TUN 与 OpenClash/fake-ip 配置详解，以及路由黑洞等真实踩坑实录。 |
 | 🔁 **Reverse Bridge 架构** | [**👉 08. Xray Reverse Bridge 回国架构设计与配置**](./docs/08-xray-reverse-bridge.md) | 用 Xray 反向代理做海外回国：portal/bridge 角色、`r-tunnel` 虚拟出站、`CN_EXIT_MODE` 四档开关与 socks5+r-tunnel 主备故障转移（balance）的架构原理、流量图解与踩坑实录。 |
+| 🎚️ **特性开关与可选能力** | [**👉 09. 特性开关与可选能力指南**](./docs/09-feature-flags-and-capabilities.md) | 全部 `ENABLE_*` 特性开关的「做什么 / 何时用 / 怎么开 / 如何验证 / 故障排查」五段式索引，并独家详述无独立主文档的能力（XICMP/XDNS 紧急通道、订阅端点、XHTTP/3）。 |
 | 📜 **版本发布日志**     | [**👉 CHANGELOG（Keep a Changelog 格式）**](./CHANGELOG.md)                    | Added / Changed / Fixed / Removed / Security / Migration notes 全分类列表，附生产 E2E 验证证据与 30 秒回滚命令。|
 
 ---
@@ -182,7 +183,7 @@ docker compose up -d
 
 ### 环境变量全集
 
-仓库根 `docker-compose.yml` 内按段落给出了所有可用 env 的用法注释；完整分层表格（核心配置 / 证书 / 节点降载 / Shoutrrr 事件总线 / `isp-auto` 十余个优化开关 / 自动检测状态）见 [04. 运维与排障 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量与状态文件)。下面速查表只列最常被问到的几项：
+仓库根 `docker-compose.yml` 内按段落给出了所有可用 env 的用法注释；完整分层表格（核心配置 / 证书 / 节点降载 / Shoutrrr 事件总线 / `isp-auto` 十余个优化开关 / 自动检测状态）见 [04. 运维与排障 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量完整参考)。下面速查表只列最常被问到的几项：
 
 | 类别 | 关键变量 | 默认 | 要点 |
 |:---|:---|:---|:---|
@@ -199,7 +200,7 @@ docker compose up -d
 | **`isp-auto` 优化** | `ISP_PROBE_URL` / `ISP_PER_SERVICE_SB` / `ISP_FALLBACK_STRATEGY` / `ISP_RETEST_INTERVAL_HOURS` 等 | 有默认 | 开箱即用，按需调优见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选) |
 | **回国出站** | `CN_EXIT_MODE` / `CN_EXIT_SOCKS5_HOST` / `CN_EXIT_PROBE_URL` 等 | `balance`（compose 默认） | 海外节点把国内流量回送国内（访问 B 站 / 网易云 / 银行等）；四档开关与变量见 [04. 运维 §2.7](./docs/04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选) |
 
-> Provider 订阅、Hysteria2 / TUIC / AnyTLS 端口覆盖、实验性 feature flag（`ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE`）等非日常调整项也都在 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量与状态文件) 内列出；海外节点回国出站（`CN_EXIT_MODE` 四档）见 [04. 运维 §2.7](./docs/04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选)。
+> Provider 订阅、Hysteria2 / TUIC / AnyTLS 端口覆盖、实验性 feature flag（`ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE`）等非日常调整项也都在 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量完整参考) 内列出；海外节点回国出站（`CN_EXIT_MODE` 四档）见 [04. 运维 §2.7](./docs/04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选)。
 
 ### 目录结构说明
 
@@ -242,7 +243,8 @@ sb-xray/
 │   ├── 05-reverse-proxy-guide.md             # VLESS Reverse Proxy 内网穿透部署
 │   ├── 06-event-bus-shoutrrr.md              # shoutrrr 事件总线指南
 │   ├── 07-tailscale-proxy-architecture.md    # Tailscale 代理架构（含 socks5 回国半边）
-│   └── 08-xray-reverse-bridge.md             # Xray Reverse Bridge 回国架构与 CN_EXIT_MODE
+│   ├── 08-xray-reverse-bridge.md             # Xray Reverse Bridge 回国架构与 CN_EXIT_MODE
+│   └── 09-feature-flags-and-capabilities.md  # 特性开关（ENABLE_*）总索引与可选能力详述
 ├── tests/                    # pytest 单元/集成测试（~380 用例）
 └── sources/                  # 静态资源与伪装站点素材
 ```
