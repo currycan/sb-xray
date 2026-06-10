@@ -84,6 +84,51 @@ def test_noop_on_pure_bandwidth_jitter(status_file: Path, monkeypatch: pytest.Mo
     restart.assert_not_called()
 
 
+def test_noop_folds_speed_summary_and_suppresses_push(
+    status_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merged card: retest suppresses the standalone speed push and folds the
+    speed summary into the isp.retest.noop payload (one notification, not two)."""
+    from sb_xray.speed_test import SpeedOutcome
+
+    _write_status(status_file, speeds={"proxy-us": 100.0, "proxy-la": 80.0}, isp_tag="proxy-us")
+    outcome = SpeedOutcome(
+        speeds={"proxy-us": 51.56, "proxy-la": 20.97},
+        diag={"proxy-us": {"status": "ok", "ok": 2, "total": 2}},
+        direct_mbps=91.91,
+        fastest_tag="proxy-us",
+        fastest_speed=51.56,
+        isp_tag="proxy-us",
+        is_8k_smooth=False,
+        has_isp_nodes=True,
+        notify=True,
+    )
+    captured_kw: dict[str, object] = {}
+
+    def _fake(**kw: object) -> SpeedOutcome:
+        captured_kw.update(kw)
+        _write_status(status_file, speeds={"proxy-us": 51.56, "proxy-la": 20.97}, isp_tag="proxy-us")
+        return outcome
+
+    monkeypatch.setattr("sb_xray.speed_test.run_isp_speed_tests", _fake)
+    monkeypatch.setattr(isp_retest, "_write_status_timestamps", MagicMock())
+    emit = MagicMock()
+    monkeypatch.setattr(isp_retest, "emit_event", emit)
+
+    rc = isp_retest.run()
+
+    assert rc == 0
+    # standalone speed_test push is suppressed in the retest path
+    assert captured_kw.get("suppress_result_push") is True
+    # the noop event carries the folded speed summary
+    emit.assert_called_once()
+    name, payload = emit.call_args[0]
+    assert name == "isp.retest.noop"
+    assert payload["speed"]["fastest_mbps"] == 51.56
+    assert payload["speed"]["direct_mbps"] == 91.91
+    assert payload["speed"]["speeds"] == {"proxy-us": 51.56, "proxy-la": 20.97}
+
+
 def test_no_reload_on_pure_reorder(status_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Top-1 tag flips but membership/class unchanged → leastPing handles it live."""
     _write_status(status_file, speeds={"proxy-cn2": 100.0, "proxy-hk": 80.0}, isp_tag="proxy-cn2")

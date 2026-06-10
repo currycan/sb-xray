@@ -174,6 +174,29 @@ def _restart_daemons(
     return True
 
 
+def _speed_summary(outcome: object) -> dict | None:
+    """Speed-test fields the merged retest card renders, or ``None`` if absent.
+
+    The retest card folds in the same numbers a standalone
+    ``isp.speed_test.result`` would show (its push is suppressed in this path),
+    so the data is not lost. ``outcome`` is ``SpeedOutcome | None`` — ``None`` on
+    a cache hit or a stubbed test run; typed loosely to dodge a speed_test
+    import at module top. Fields mirror shoutrrr._speed_blocks' expectations.
+    """
+    if outcome is None:
+        return None
+    summary: dict[str, object] = {
+        "isp_tag": getattr(outcome, "isp_tag", ""),
+        "fastest_mbps": round(getattr(outcome, "fastest_speed", 0.0), 2),
+        "direct_mbps": round(getattr(outcome, "direct_mbps", 0.0), 2),
+        "speeds": {t: round(v, 2) for t, v in (getattr(outcome, "speeds", {}) or {}).items()},
+    }
+    diag = getattr(outcome, "diag", None)
+    if diag:
+        summary["diag"] = diag
+    return summary
+
+
 def _write_status_timestamps(*, delta_pct: float, top_tag: str) -> None:
     # Import locally to avoid speed_test import-cycle at module top.
     from sb_xray.speed_test import _write_status_line
@@ -199,7 +222,9 @@ def run() -> int:
     old_top = _top_tag(old_speeds)
 
     try:
-        run_isp_speed_tests(force=True)
+        # Suppress the standalone speed_test push — its summary is folded into
+        # the merged retest card below, so the two notifications become one.
+        outcome = run_isp_speed_tests(force=True, suppress_result_push=True)
     except Exception as exc:  # pragma: no cover — defensive
         logger.exception("isp-retest: speed-test failed")
         emit_event("isp.retest.error", {"error": repr(exc)})
@@ -226,14 +251,15 @@ def run() -> int:
             new_top,
             delta_pct,
         )
-        emit_event(
-            "isp.retest.noop",
-            {
-                "reason": reason,
-                "top_tag": new_top,
-                "delta_pct": round(delta_pct, 2),
-            },
-        )
+        noop_payload: dict[str, object] = {
+            "reason": reason,
+            "top_tag": new_top,
+            "delta_pct": round(delta_pct, 2),
+        }
+        speed = _speed_summary(outcome)
+        if speed:
+            noop_payload["speed"] = speed
+        emit_event("isp.retest.noop", noop_payload)
         return 0
 
     # Configured membership or routing class changed — rebuild the balancer
@@ -256,16 +282,17 @@ def run() -> int:
         return 1
 
     restarted = _restart_daemons()
-    emit_event(
-        "isp.retest.completed",
-        {
-            "reason": reason,
-            "old_top_tag": old_top,
-            "new_top_tag": new_top,
-            "delta_pct": round(delta_pct, 2),
-            "restarted": restarted,
-        },
-    )
+    completed_payload: dict[str, object] = {
+        "reason": reason,
+        "old_top_tag": old_top,
+        "new_top_tag": new_top,
+        "delta_pct": round(delta_pct, 2),
+        "restarted": restarted,
+    }
+    speed = _speed_summary(outcome)
+    if speed:
+        completed_payload["speed"] = speed
+    emit_event("isp.retest.completed", completed_payload)
     logger.info(
         "isp-retest: completed (reason=%s old_top=%s new_top=%s delta=%.2f%%)",
         reason,

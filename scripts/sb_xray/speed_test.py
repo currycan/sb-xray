@@ -1158,8 +1158,15 @@ def persist_outcome_to_status(o: SpeedOutcome) -> None:
     _write_status_line("ISP_TAG", o.isp_tag)
 
 
-def _emit_outcome_event(o: SpeedOutcome) -> None:
-    """Emit the ``isp.speed_test.result`` observability event for an outcome."""
+def _emit_outcome_event(o: SpeedOutcome, *, suppress_push: bool = False) -> None:
+    """Emit the ``isp.speed_test.result`` observability event for an outcome.
+
+    ``suppress_push=True`` forces ``notify=False`` in the payload: the forwarder
+    still logs the event (stdout/Loki history stays intact) but skips the
+    Telegram/Discord push. The ISP retest path uses this — it folds the same
+    speed summary into its own ``isp.retest.{noop,completed}`` card, so a
+    standalone speed_test push would only duplicate it.
+    """
     from sb_xray.events import emit_event
 
     payload: dict[str, object] = {
@@ -1169,7 +1176,7 @@ def _emit_outcome_event(o: SpeedOutcome) -> None:
         "speeds": {t: round(v, 2) for t, v in o.speeds.items()},
         "isp_tag": o.isp_tag,
         "is_8k_smooth": o.is_8k_smooth,
-        "notify": o.notify,
+        "notify": False if suppress_push else o.notify,
     }
     if o.diag:
         payload["diag"] = o.diag
@@ -1181,7 +1188,8 @@ def run_isp_speed_tests(
     samples: int | None = None,
     url: str = _SPEED_TEST_URL,
     force: bool = False,
-) -> None:
+    suppress_result_push: bool = False,
+) -> SpeedOutcome | None:
     """Port of ``run_speed_tests_if_needed`` (entrypoint.sh:1153).
 
     Main-process orchestrator:
@@ -1197,6 +1205,12 @@ def run_isp_speed_tests(
     ``force=True`` (Phase 3) bypasses the cache hit path — the periodic retest
     cron needs a real measurement every time. The async cache-hit refresh uses
     :func:`_async_refresh_once` instead (persist only, never mutate env).
+
+    ``suppress_result_push=True`` emits the result event with ``notify=False``
+    (logged, not pushed) — the retest path folds the same speed summary into
+    its own card. Returns the fresh :class:`SpeedOutcome`, or ``None`` on a
+    cache hit (no fresh measurement to hand back). The retest cron consumes the
+    return value to build its merged ``isp.retest.{noop,completed}`` card.
     """
     sample_count = _resolve_sample_count(samples)
 
@@ -1205,17 +1219,18 @@ def run_isp_speed_tests(
         # speeds on cold boot; kick off a daemon thread to refresh in the
         # background so the boot stays fast.
         if _try_speed_cache_hit():
-            return
+            return None
         cached_tag = os.environ.get("ISP_TAG", "").strip()
         if cached_tag and _try_cache_hit(cached_tag):
-            return
+            return None
 
     _reset_caches_for_fresh_run()  # main-process cache purge
     _log_routing_inputs()
     outcome = measure_isp_speeds(url, sample_count)
     apply_outcome_to_env(outcome)  # main process: write env
     persist_outcome_to_status(outcome)  # atomic STATUS_FILE
-    _emit_outcome_event(outcome)
+    _emit_outcome_event(outcome, suppress_push=suppress_result_push)
+    return outcome
 
 
 def _try_speed_cache_hit() -> bool:
