@@ -294,7 +294,7 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | `TS_HOSTNAME` | socks5 / balance | 本机在 Tailscale 网络的名字 |
 | `TS_VERSION` | socks5 / balance | Tailscale 版本号 |
 | `TS_PORT` | 可选 | tailscaled 固定 UDP 端口，默认 41641，别改 |
-| `TS_ADVERTISE_ROUTES` | 可选 | subnet router 通告网段，默认 `172.18.18.0/23`，按实际 lan 改 |
+| `TS_ADVERTISE_ROUTES` | socks5 / balance | subnet router 通告网段，**必填**，填本机实际 lan 网段（如 `192.168.1.0/24`） |
 | `ARCH_OVERRIDE` | 可选 | 留空自动检测；可强制 `arm64` / `amd64` |
 | `RELOAD_OPENCLASH` | 可选 | `1` = 安装末尾自动 reload OpenClash 使规则立即生效，默认 `0` 只提示 |
 | `DOWNLOAD_RETRIES` | 可选 | 下载失败重试次数，默认 3 |

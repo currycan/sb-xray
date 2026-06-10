@@ -31,7 +31,7 @@ flowchart TB
     VPS(["🌏 海外 VPS<br/>xray 路由"])
     PHONE(["📱 外部设备<br/>手机 / 笔记本"])
     OWRT{{"🏠 OpenWrt 网关<br/>tailscaled + OpenClash"}}
-    LAN["🖧 家庭内网<br/>172.18.18.0/23"]
+    LAN["🖧 家庭内网<br/>${TS_ADVERTISE_ROUTES}"]
     PEER(["💻 tailnet 其他节点"])
     ISP[["🇨🇳 中国 ISP<br/>家宽出口"]]
     INET[["🌐 国际互联网"]]
@@ -91,7 +91,7 @@ flowchart TB
 
 - 📘 **subnet router（子网路由器）**：默认情况下，tailnet 里只有装了 Tailscale 的设备能互访。但你家 NAS、摄像头没装 Tailscale。把 OpenWrt 设为 subnet router（`--advertise-routes=${TS_ADVERTISE_ROUTES}`），它就**代理**整个家庭网段——其他设备访问该网段内的地址时，流量先到 OpenWrt，再转给内网设备。**一台代言一片。**
 
-> 📘 **关于网段值**：本文图示与命令里出现的家庭内网网段是**示例占位**，真实值由 `config.env` 的 `TS_ADVERTISE_ROUTES` 决定（默认见 [`config.env.example`](../sources/openwrt/config.env.example)）。下文凡需精确对应配置的命令/校验，统一写成 `${TS_ADVERTISE_ROUTES}` 变量名，请按自家 LAN 网段替换。
+> 📘 **关于网段值**：本文图示与命令里出现的家庭内网网段是**示例占位**，真实值由 `config.env` 的 `TS_ADVERTISE_ROUTES` 决定（**必填**，无默认值，格式见 [`config.env.example`](../sources/openwrt/config.env.example)）。下文凡需精确对应配置的命令/校验，统一写成 `${TS_ADVERTISE_ROUTES}` 变量名，请按自家 LAN 网段替换。
 
 - 📘 **exit node（出口节点）**：把 OpenWrt 设为 exit node（`--advertise-exit-node`），其他设备可以选择「让我所有上网流量都从这台出去」。你在国外用手机选了家里的 OpenWrt 作 exit node，看到的就是家宽的中国 IP。**等于一个家用 VPN 出口。**
 
@@ -284,12 +284,12 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    DEV(["📱 外部设备<br/>访问 172.18.18.x"])
+    DEV(["📱 外部设备<br/>访问内网主机"])
     TS0["tailscale0<br/>入站 → forward"]
     LANZONE["forward: tailscale→lan"]
-    NAS[["🖥️ 内网 NAS / 摄像头<br/>172.18.18.0/23"]]
+    NAS[["🖥️ 内网 NAS / 摄像头<br/>${TS_ADVERTISE_ROUTES} 网段"]]
 
-    DEV -->|"经 Tailscale<br/>目标 172.18.18.x"| TS0
+    DEV -->|"经 Tailscale<br/>目标内网地址"| TS0
     TS0 --> LANZONE
     LANZONE --> NAS
 
