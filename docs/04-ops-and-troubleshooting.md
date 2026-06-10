@@ -192,7 +192,19 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 | `enable-cors` | `true` | 放开跨域，任意网页可发起跨源请求访问该文件服务 |
 | `render-spa` | `true` | 以单页应用方式渲染目录 |
 
-> ⚠️ **`DUFS_ALLOW_ALL` env 与 `conf.yml` 的优先级当前未验证**。镜像内 `Dockerfile` 设 `ENV DUFS_ALLOW_ALL="false"`，而 `conf.yml` 同时硬编码 `allow-all: true`，两者并存。effective 值取决于 dufs 0.45.0 对「命令行 `-c` config 文件 vs `DUFS_` 环境变量」的优先级裁决——**本仓库环境无 docker 无法实测，结论待运维在 dufs 0.45.0 上实测确认**（如 `docker run --rm -e DUFS_ALLOW_ALL=false -v conf.yml:/c.yml sigoden/dufs:0.45.0 --config /c.yml` 观察 effective 行为）。在确认前，应按「`allow-all` 可能为 `true` 生效」的保守假设审视该文件服务的暴露面（建议 `DUFS_PATH_PREFIX` 走随机前缀 + HTTP Basic 认证兜底，见 §1.1）。
+> ⚠️ **`DUFS_ALLOW_ALL` env 与 `conf.yml allow-all` 取「并集」——任一为 `true` 即生效 `true`，permissive 值胜出，二者无单向覆盖关系**（生产容器内 dufs 0.46.0 实测，A/B + 控制组交叉验证）。因此镜像 `Dockerfile` 的 `ENV DUFS_ALLOW_ALL="false"` **并不能关闭 allow-all**——`conf.yml` 硬编码的 `allow-all: true` 经并集胜出，effective 值恒为 `true`。结论:**生产 dufs 的 `allow-all` 实际处于开启状态**,前述「保守假设」由实测坐实为既成事实。
+>
+> 但 `allow-all` 只管**操作权限**(上传/删除/搜索/打包),不等于放开**身份认证**:启动行的 `-a ${PUBLIC_USER}:${PUBLIC_PASSWORD}@/:rw` 规则仍强制 HTTP Basic 认证——实测对运行实例发未认证请求,落在 `DUFS_PATH_PREFIX` 下的访问返回 `401`。所以真正兜底暴露面的是「随机前缀 + Basic 认证」(见 §1.1),而非 `DUFS_ALLOW_ALL=false`。运维结论:**不要依赖 `DUFS_ALLOW_ALL=false` 收紧权限**(它被 conf 并集架空);要收紧须改 `conf.yml` 的 `allow-all`,且务必保留 `-a` 认证规则与随机前缀。
+>
+> <details><summary>实测方法(可复现)</summary>
+>
+> 在跑着 sb-xray 容器的节点上,用容器内同一 dufs 二进制起隔离实例(绑 `127.0.0.1` 测试端口、唯一探针文件),发未认证 `PUT`/`DELETE` 看响应码:
+> - env=`false` + conf=`true` → `PUT 201 / DELETE 204`(放开)
+> - env=`true` + conf=`false` → `PUT 201 / DELETE 204`(放开)
+> - env=`false` + conf=`false`(及二者均缺省)→ `PUT 403 / DELETE 403`(拒绝,基线)
+>
+> 前两行任一为 `true` 即放开 ⇒ 并集语义;第三行 `403` 确认拒绝是真实信号而非「dufs 总是允许」。
+> </details>
 
 #### Entrypoint 日志（Python stdlib logging）
 
