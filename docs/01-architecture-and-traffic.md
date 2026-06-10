@@ -605,7 +605,7 @@ flowchart TD
 
 为解决 VPS 机房 IP 无法观看 Netflix、Disney+ 及无法正常访问 ChatGPT 等服务的痛点，后端引擎配置了针对流媒体与海外 AI 的全自动链式跳板引擎，并内置**运行时健康检测与自动回退**机制。
 
-### 6.1 出站路由决策
+### 7.1 出站路由决策
 
 ```mermaid
 flowchart TD
@@ -638,7 +638,7 @@ flowchart TD
 
 > **全程透明**：所有的解锁动作在服务器端默默完成，客户端无需任何繁琐的前置 (Dialer) 设置。
 
-### 6.3 ISP 健康检测工作机制
+### 7.3 ISP 健康检测工作机制
 
 容器启动时对每个 ISP 节点做一次带宽实测,把所有节点按速度降序全部注入 xray / sing-box 的出站列表,并生成一个 `isp-auto` 健康选优出站。服务路由(Netflix / OpenAI / Disney 等)指向 `isp-auto`,由内核在运行时持续探测、自动选最低延迟节点、ISP 故障时按策略回退。
 
@@ -688,7 +688,7 @@ flowchart LR
 
 由 `build_xray_service_rules()` 在 `analyze_ai_routing_env()` 之后调用，遍历所有 `*_OUT` 变量动态拼接注入 `${XRAY_SERVICE_RULES}` 占位符。
 
-### 6.4 完整运行时闭环
+### 7.4 完整运行时闭环
 
 `isp-auto` 是一个「冷启动缓存 → 速度测量 → 配置渲染 → 内核健康选优 → 周期重测」的完整闭环,操作员通过约十二个 env flag 控制节奏、可观测性与失败语义。
 
