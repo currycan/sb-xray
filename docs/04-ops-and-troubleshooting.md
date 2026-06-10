@@ -559,7 +559,7 @@ SAN[1]: example.com       (主域名)
 
 ### 5.1 自动更新
 
-- **启动阶段**: entrypoint 第 9 段 (`stages/geoip.py`) 调用 `geo.refresh(on_startup=True)`。文件 <7 天视为新鲜,直接跳过下载;仅维护 `/usr/local/bin/*.dat` 符号链接。
+- **启动阶段**: entrypoint `geoip` 段（17 段坐标系第 11 段，`stages/geoip.py`）调用 `geo.refresh(on_startup=True)`。文件 <7 天视为新鲜,直接跳过下载;仅维护 `/usr/local/bin/*.dat` 符号链接。
 - **每日任务**: cron 每天 03:00 (容器时区) 执行 `/scripts/entrypoint.py geo-update`,强制刷新并通过 `supervisorctl` 重启 xray 让新规则生效。
 - **日志**: cron 输出重定向到 `/var/log/geo_update.log`;启动阶段输出走 entrypoint 的 stderr。
 
@@ -920,9 +920,9 @@ docker logs sb-xray 2>&1 | grep "\[xray-exit\]"
 
 ## 7. 小内存节点部署指引（内存不超过 512 MB）
 
-镜像默认启用全部 10 个 supervisord 进程（xray / sing-box / nginx / x-ui / s-ui / sub-store / http-meta / shoutrrr-forwarder / dufs / cron），常驻 RSS ~390–650 MB，启动峰值可达 650–870 MB。低于 1 GB 物理内存的节点需通过以下开关组合降载至 ~300–430 MB 常驻。
+镜像默认启用 9 个 supervisord program（xray / sing-box / nginx / x-ui / sub-store / http-meta / shoutrrr-forwarder / dufs / cron）+ 1 个 eventlistener（xray_exit_listener，进程拓扑见 [01. 架构 §6](./01-architecture-and-traffic.md)），常驻 RSS ~390–650 MB，启动峰值可达 650–870 MB。低于 1 GB 物理内存的节点需通过以下开关组合降载至 ~300–430 MB 常驻。
 
-**作用机制**：`scripts/sb_xray/config_builder.py:create_config` 用 `string.Template` envsubst 语义渲染出完整 10 段 `/etc/supervisor.d/daemon.ini` 后，`scripts/entrypoint.py:run_pipeline` 在步 11b 直接调用同模块的 `trim_runtime_configs` 按环境变量 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤（也可通过 `docker exec sb-xray python3 /scripts/entrypoint.py trim` 重跑一次）。所有开关都是 opt-out：仅显式设 `false` 生效，未设置或为空保持默认启用。
+**作用机制**：`scripts/sb_xray/config_builder.py:create_config` 用 `string.Template` envsubst 语义渲染出完整 `/etc/supervisor.d/daemon.ini` 后，`scripts/entrypoint.py:run_pipeline` 在 `trim` 段（17 段坐标系第 14 段，见 [01. 架构 §5](./01-architecture-and-traffic.md)）直接调用同模块的 `trim_runtime_configs` 按环境变量 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤（也可通过 `docker exec sb-xray python3 /scripts/entrypoint.py trim` 重跑一次）。所有开关都是 opt-out：仅显式设 `false` 生效，未设置或为空保持默认启用。
 
 ### 7.1 docker-compose.yml（宿主层硬约束）
 

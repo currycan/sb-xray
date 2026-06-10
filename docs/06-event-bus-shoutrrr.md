@@ -70,7 +70,7 @@ flowchart LR
 - **不配置也能跑** —— `SHOUTRRR_URLS` 留空时进入 **dry-run**，事件只进容器日志，不外发。
 - **零外网暴露** —— forwarder 只绑定 `127.0.0.1`，容器外无法访问，无需开任何端口。
 - **多通道** —— 同一条事件可同时发 Telegram + Discord + Slack + Gotify。
-- **低内存可关** —— `ENABLE_SHOUTRRR=false` 让 trim 阶段整块移除 forwarder 进程（显著降低常驻 RSS，量级见 §10.3）。
+- **低内存可关** —— `ENABLE_SHOUTRRR=false` 让 trim 阶段整块移除 forwarder 进程（单项约回收 ~20–30MB 常驻 RSS，量级见 §10.3）。
 - **失败透明化** —— shoutrrr 子进程的 exit code 和 stderr 都写进 forwarder 日志（token 不泄露），杜绝「204 但没收到消息」的盲区。
 
 ---
@@ -285,7 +285,7 @@ services:
 | `SHOUTRRR_URLS` | 否（空 = dry-run） | `""` | 分号分隔的 shoutrrr URL 列表 | `telegram://...;discord://...` |
 | `SHOUTRRR_FORWARDER_PORT` | 否 | `18085` | forwarder 监听端口（仅 127.0.0.1） | `18085` |
 | `SHOUTRRR_TITLE_PREFIX` | 否 | `[sb-xray]` | 推送消息的标题前缀 | `[sb-xray:jp01]` |
-| `ENABLE_SHOUTRRR` | 否 | `true` | 低内存部署（≤ 512MB）设 `false`，trim 阶段整块移除 forwarder（显著降低常驻 RSS，量级见 §10.3） | `true` / `false` |
+| `ENABLE_SHOUTRRR` | 否 | `true` | 低内存部署（≤ 512MB）设 `false`，trim 阶段整块移除 forwarder（单项约回收 ~20–30MB 常驻 RSS，量级见 §10.3） | `true` / `false` |
 | `ISP_EVENTS_ENABLED` | 否 | `true` | **生产者侧总开关**：容器内 `events.py` 的 `emit_event()` 在此为 `false` 时直接 return，**不发任何容器内事件**（ISP 测速 / 重测 / 订阅拉取等）。与 `ENABLE_SHOUTRRR`（消费者侧整块移除 forwarder）正交 | `true` / `false` |
 
 > `readme.md` / `CHANGELOG.md` / `docker-compose.yml` 里的默认值均应与本表一致，分歧以本表为准。
@@ -565,7 +565,7 @@ docker exec sb-xray jq '.routing.rules[] | select(.webhook) | {ruleTag, dedup: .
 
 ### 10.3 低内存节点关闭 forwarder
 
-🔧 VPS RAM ≤ 512MB 时建议关闭（按 `config_builder.py` 注释，trim 阶段约可回收 `~220–320MB` 常驻 RSS）：
+🔧 VPS RAM ≤ 512MB 时建议关闭。注意量级归属：`config_builder.py` 注释的 `~220–320MB` 是**全部降载 flag 合计**的回收量；仅关 forwarder 单项约回收 `~20–30MB`（各 flag 单项量级见 [09. 特性开关 §11](./09-feature-flags-and-capabilities.md) 速查表）：
 
 ```yaml
 - ENABLE_SHOUTRRR=false

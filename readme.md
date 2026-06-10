@@ -98,7 +98,7 @@ flowchart TD
 
 - **🚀 智能双核引擎驱动**：Xray 主理 Reality + XTLS-Vision 隐蔽主干，Sing-box 承载 TUIC / AnyTLS 弱网竞速，双核分工互补。原理见 [01. 架构](./docs/01-architecture-and-traffic.md)，协议手册见 [02. 协议与安全](./docs/02-protocols-and-security.md)。
 - **🛡️ 零信任前置网关**：Nginx 统一接管 443，握手阶段按 SNI 透明分流 Reality / CDN / 管理面板，对外只暴露高纯度 Web 伪装。原理见 [01. 架构](./docs/01-architecture-and-traffic.md)。
-- **🔐 金融级抗量子加密**：XHTTP / VLESS 通道实装 MLKEM768 后量子密码学（NIST FIPS 203），内置 ACME 机器人自动签发并 90 天无感续期泛域名证书。见 [02. 协议与安全](./docs/02-protocols-and-security.md)。
+- **🔐 金融级抗量子加密**：XHTTP / VLESS 通道实装 MLKEM768 后量子密码学（NIST FIPS 203），内置 ACME 机器人自动签发泛域名证书并在到期前无感重签。见 [02. 协议与安全](./docs/02-protocols-and-security.md)。
 - **🔀 业务级智能路由分发**：多 ISP SOCKS5 落地按带宽 + RTT 自动选优（`isp-auto`），流媒体 / AI 按服务独立 balancer，`CN_EXIT_MODE=balance` 双腿动态主备回国，内嵌 Sub-Store 在下发前清洗节点。见 [03. 路由与客户端](./docs/03-routing-and-clients.md)、[04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)、[08. Reverse Bridge](./docs/08-xray-reverse-bridge.md)。
 
 > 完整运行时闭环架构图见 [01. 架构 §7.4](./docs/01-architecture-and-traffic.md#74-完整运行时闭环)；全部 env 开关见 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量完整参考)。
