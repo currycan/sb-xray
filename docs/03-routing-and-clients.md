@@ -584,7 +584,7 @@ flowchart TD
 告警样式：
 
 ```text
-[sb-xray:dc99-3.ansandy.com] 🔴 订阅拉取失败
+[sb-xray:dc99-3.example.com] 🔴 订阅拉取失败
 
 ✗ ssrdog (机场) — HTTP 403
 ✗ 多宝 — HTTP 500
