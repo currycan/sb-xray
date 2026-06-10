@@ -19,7 +19,7 @@
 [MetaCubeX/meta-rules-dat: rules-dat for mihomo](https://github.com/MetaCubeX/meta-rules-dat)
 
 https://sub.example.com/sub?
-http://172.18.18.254:25500/sub?
+http://<内网网关IP>:25500/sub?
 
 https://raw.githubusercontent.com/currycan/sb-xray/main/sources/ACL4SSR/Blacklist-Full.ini
 https://raw.githubusercontent.com/currycan/sb-xray/main/sources/ACL4SSR/Blacklist-Lite.ini
@@ -31,11 +31,11 @@ https://raw.githubusercontent.com/currycan/sb-xray/main/sources/ACL4SSR/ACL4SSR_
 ## Sub-store
 
 ```bash
-# http://172.18.18.254:3010/sDFye2FvHNJwheeCkXQpGaGRQBtupYGS
+# http://<内网网关IP>:3010/<sub-store后端路径>
 docker run -it -d \
 --restart=always \
 -e "SUB_STORE_CRON=55 23 ** *" \
--e SUB_STORE_FRONTEND_BACKEND_PATH=/sDFye2FvHNJwheeCkXQpGaGRQBtupYGS \
+-e SUB_STORE_FRONTEND_BACKEND_PATH=/<sub-store后端路径> \
 -p 3010:3001 \
 -v /etc/sub-store:/opt/app/data \
 --name sub-store \
@@ -80,7 +80,7 @@ mv tailscale_${VERSION}_${ARCH}/tailscaled /usr/sbin/
 ```
 
 ```bash
-tailscale up --accept-dns=false --accept-routes --advertise-exit-node --advertise-routes=172.18.18.0/23 --hostname=n305-op
+tailscale up --accept-dns=false --accept-routes --advertise-exit-node --advertise-routes=<内网网段> --hostname=<节点名>
 
 tailscale up --accept-dns=false --accept-routes --advertise-exit-node --advertise-routes=192.168.8.0/24 --hostname=mt3000
 

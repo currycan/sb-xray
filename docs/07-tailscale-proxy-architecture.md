@@ -634,3 +634,12 @@ sh openwrt/install.sh
 ---
 
 > **相关文档**：[08. Xray Reverse Bridge 回国架构设计与配置](./08-xray-reverse-bridge.md) · [01. 系统架构与流量链路](./01-architecture-and-traffic.md) · [05. VLESS Reverse Proxy（出境代理另一方案）](./05-reverse-proxy-guide.md)
+
+## 上游组件出处
+
+本文回国链路涉及的上游：
+
+- Tailscale — <https://github.com/tailscale/tailscale>
+- OpenClash — <https://github.com/vernesong/OpenClash>（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)；OpenWrt 备选客户端 nikki 见 [`../sources/nikki/`](../sources/nikki/README.md)）
+- Mihomo（OpenClash 内核）— <https://github.com/MetaCubeX/mihomo>
+- geosite / geoip 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

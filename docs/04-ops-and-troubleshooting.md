@@ -975,3 +975,20 @@ dmesg | grep -i "killed process"   # 无新 OOM kill 事件
 
 - 主节点接管订阅服务，小内存节点仅作纯转发
 - 保留上一个已知稳定版镜像标签作为紧急回滚兜底：`docker pull <镜像>:<上一稳定标签>`
+
+---
+
+## 上游组件出处
+
+本文管理面板与运维涉及的上游：
+
+- Xray-core — <https://github.com/XTLS/Xray-core>
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo（external-controller / 面板内核）— <https://github.com/MetaCubeX/mihomo>
+- Zashboard（面板 UI）— <https://github.com/Zephyruso/zashboard>
+- Sub-Store — <https://github.com/sub-store-org/Sub-Store>
+- Dufs — <https://github.com/sigoden/dufs>
+- acme.sh — <https://github.com/acmesh-official/acme.sh>
+- Tailscale — <https://github.com/tailscale/tailscale>
+- OpenClash — <https://github.com/vernesong/OpenClash>（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)）
+- geoip / geosite 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

@@ -625,3 +625,4 @@ docker exec sb-xray jq '.routing.rules[] | select(.webhook) | {ruleTag, dedup: .
   - supervisord program：`templates/supervisord/daemon.ini` 的 `[program:shoutrrr-forwarder]`
   - 单测：`tests/test_shoutrrr.py`
 - **相关文档**：[05. VLESS Reverse Proxy](./05-reverse-proxy-guide.md) · [08. Xray Reverse Bridge 回国架构](./08-xray-reverse-bridge.md)（`ban_geoip_cn` 随回国模式消失的来龙去脉）
+- **上游组件出处**：Xray-core [XTLS/Xray-core](https://github.com/XTLS/Xray-core) · shoutrrr [containrrr/shoutrrr](https://github.com/containrrr/shoutrrr) · Sub-Store [sub-store-org/Sub-Store](https://github.com/sub-store-org/Sub-Store) · geosite/geoip 规则数据 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat)

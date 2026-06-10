@@ -34,12 +34,12 @@ docker run -d --name AdGuard-Home --net host -v /opt/docker/AGH_Docker:/opt/adgu
 ```bash
 
 # 创建网络
-docker network create --subnet=172.18.10.0/24 --gateway 172.18.10.1 MyNET
+docker network create --subnet=<内网网段>/24 --gateway <内网网关IP> MyNET
 
 # 启动应用
 
-docker run -d --name AdGuard-Home1 -v /opt/docker/AGH_Docker1:/opt/adguardhome/work -v /opt/docker/AGH_Docker1:/opt/adguardhome/conf -p 3001:3000 --restart always --net MyNET --ip 172.18.10.2 adguard/adguardhome:latest
+docker run -d --name AdGuard-Home1 -v /opt/docker/AGH_Docker1:/opt/adguardhome/work -v /opt/docker/AGH_Docker1:/opt/adguardhome/conf -p 3001:3000 --restart always --net MyNET --ip <容器固定IP> adguard/adguardhome:latest
 
 ```
 
-上海电信DNS：202.96.209.133 / 116.228.111.118
+本地运营商 DNS：`<运营商DNS主>` / `<运营商DNS备>`（按所在地区填写当地运营商的公共 DNS）

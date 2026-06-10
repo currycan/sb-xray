@@ -570,3 +570,15 @@ flowchart TD
 - [04. 运维管理与故障排查手册](./04-ops-and-troubleshooting.md) — 环境变量全集与线上排障
 - 仓库根 `../CLAUDE.md` — Watchtower 自动更新发布纪律（漂移缓解契约）
 - [../CHANGELOG.md](../CHANGELOG.md) — 历次构建/发布变更记录
+
+### 上游组件出处
+
+构建时从各上游 release 拉取的组件：
+
+- Xray-core — <https://github.com/XTLS/Xray-core>
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo（Http-Meta 内核）— <https://github.com/MetaCubeX/mihomo>
+- Sub-Store — <https://github.com/sub-store-org/Sub-Store>
+- Dufs — <https://github.com/sigoden/dufs>
+- Shoutrrr — <https://github.com/containrrr/shoutrrr>
+- acme.sh — <https://github.com/acmesh-official/acme.sh>

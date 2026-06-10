@@ -747,3 +747,6 @@ DoH 请求 → 1.1.1.1:443 → 规则匹配 → MATCH,兜底流量
 - **策略参考**: [666OS/YYDS 复合规则库](https://github.com/666OS/YYDS)
 - **Mihomo Smart 模式**: [Mihomo 文档 — Proxy Groups](https://wiki.metacubex.one/config/proxy-groups/)
 - **Sub-Store**: [sub-store-org/Sub-Store](https://github.com/sub-store-org/Sub-Store)
+- **Sing-box**: [SagerNet/sing-box](https://github.com/SagerNet/sing-box)
+- **OpenClash**: [vernesong/OpenClash](https://github.com/vernesong/OpenClash)（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)、订阅模板 [`../sources/ACL4SSR/`](../sources/ACL4SSR/readme.md)）
+- **Tailscale**: [tailscale/tailscale](https://github.com/tailscale/tailscale)（回国链路见 [07. Tailscale 代理架构](./07-tailscale-proxy-architecture.md)）

@@ -461,3 +461,16 @@ docker exec sb-xray xray api statsquery --server=127.0.0.1:7978 2>/dev/null \
 | `XRAY_REVERSE_UUID` | reverse 隧道专用 UUID，与正向代理 UUID 隔离 |
 | `cn-exit` | SOCKS5 回国出站（方案一），balance 时与 r-tunnel 并挂 |
 | `cn-exit-balance` | balance 模式的 leastPing balancer 标签 |
+
+---
+
+## 上游组件出处
+
+本文回国架构涉及的上游：
+
+- Xray-core（VLESS 原生 reverse）— <https://github.com/XTLS/Xray-core>
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo（OpenClash 内核）— <https://github.com/MetaCubeX/mihomo>
+- Tailscale — <https://github.com/tailscale/tailscale>
+- OpenClash — <https://github.com/vernesong/OpenClash>（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)）
+- geosite / geoip 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

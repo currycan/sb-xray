@@ -33,7 +33,7 @@
 scp sources/hack/cdn-speedtest.sh root@openwrt:/root/cdn-speedtest.sh
 
 # 赋予执行权限
-ssh root@openwrt “chmod +x /root/cdn-speedtest.sh”
+ssh root@openwrt "chmod +x /root/cdn-speedtest.sh"
 
 # 或者下载
 wget https://raw.githubusercontent.com/currycan/sb-xray/main/sources/hack/cdn-speedtest.sh
@@ -101,6 +101,49 @@ echo "0 4 * * * CDNDOMAIN=example.com /usr/bin/cdn-speedtest.sh run  # optimize 
 ### 日志
 
 测速日志写入 `/var/log/cdn-speedtest.log`，包含时间戳、优选 IP、延迟和速度信息。
+
+---
+
+## check_ip_type.sh — IP 质量体检
+
+对一台节点的出口 IP 做体检：基础归属信息、风险评分、流媒体/AI 服务解锁情况。基于 xykt 的 IP 质量检测脚本改写，适配容器环境（精简依赖、curl 参数数组化避免注入）。常用于上线一台 VPS 后判断该出口 IP 是「家宽 / 机房 / 商业」类型、是否被风控、能否解锁 Netflix / YouTube / TikTok / ChatGPT 等。
+
+### 功能
+
+- **基础信息与类型**：聚合 Maxmind、IPinfo、IPregistry、IP2Location、AbuseIPDB 等多个数据库，判定 IP 用途类型（家宽 / 机房 / 商业 / 教育 / CDN / 手机 等）。
+- **风险评分**：Scamalytics 欺诈分数、IPAPI 风险等级。
+- **流媒体 / AI 解锁**：TikTok、Netflix、YouTube Premium、Disney+、ChatGPT 等区域解锁检测。
+- 同时检测 IPv4 / IPv6，可指定出口网卡或代理。
+
+### 使用
+
+```bash
+# 默认同时体检 IPv4 + IPv6
+./check_ip_type.sh
+
+# 仅 IPv4 / 仅 IPv6
+./check_ip_type.sh -4
+./check_ip_type.sh -6
+
+# 显示完整 IP（默认打码）
+./check_ip_type.sh -f
+
+# 指定出口网卡（多线路机器选某条腿体检）
+./check_ip_type.sh -i eth0
+
+# 经指定代理体检（验证落地出口而非本机出口）
+./check_ip_type.sh -x socks5://127.0.0.1:1080
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-4` | 只检测 IPv4 |
+| `-6` | 只检测 IPv6 |
+| `-f` | 显示完整 IP（默认对 IP 打码） |
+| `-i interface` | 指定 curl 出口网卡 |
+| `-x proxy` | 指定 curl 代理 |
+
+> 依赖 `curl` 与 `jq`；联网调用多个第三方 IP 数据库 API，结果受网络与各 API 可用性影响。
 
 ---
 

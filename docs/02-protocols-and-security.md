@@ -1110,3 +1110,12 @@ Xray 最新版本对 TUN 入站进行了大幅优化，可在 Linux/macOS 上实
 * **Mihomo (Clash Meta)**: v1.19.13+ 已支持 VLESS Encryption
 * **Xray-core**: v1.8.8+ 原生支持
 * **Google Trust Services CA**: [acme.sh Wiki](https://github.com/acmesh-official/acme.sh/wiki/Google-Trust-Services-CA)
+
+### 上游组件出处
+
+本文涉及的核心与客户端：
+
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- OpenClash — <https://github.com/vernesong/OpenClash>（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)）
+- Dufs — <https://github.com/sigoden/dufs>
+- geoip / geosite 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

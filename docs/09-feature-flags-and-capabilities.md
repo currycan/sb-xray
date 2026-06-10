@@ -609,3 +609,14 @@ docker exec sb-xray sh -c 'grep -c "^\[program:sub-store\]" /etc/supervisor.d/da
 - [docs/05-reverse-proxy-guide.md](./05-reverse-proxy-guide.md) —— VLESS Reverse Proxy 部署指南
 - [docs/06-event-bus-shoutrrr.md](./06-event-bus-shoutrrr.md) —— 事件总线完整文档
 - [references/implementation-notes.md](../references/implementation-notes.md) —— 实施过程笔记（本地维护）
+
+### 上游组件出处
+
+本文涉及的客户端内核与规则源：
+
+- Xray-core — <https://github.com/XTLS/Xray-core>
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo（Karing / OpenClash 内核）— <https://github.com/MetaCubeX/mihomo>
+- OpenClash — <https://github.com/vernesong/OpenClash>（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)）
+- Sub-Store — <https://github.com/sub-store-org/Sub-Store>
+- geosite / geoip 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

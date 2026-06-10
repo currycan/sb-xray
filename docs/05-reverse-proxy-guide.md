@@ -484,3 +484,10 @@ bridge 端无需特殊处理，它会持续重试连接并失败——自行 `sy
 | `XRAY_UUID` | 普通翻墙客户端用的正向代理 UUID |
 | `REVERSE_DOMAINS` | 走 reverse 隧道做内网穿透的域名匹配列表 |
 | simplified 格式 | bridge 出站必须用的扁平 VLESS 格式（地址/端口/id 直接写在 settings） |
+
+---
+
+## 上游组件出处
+
+- Xray-core（VLESS 原生 reverse）— <https://github.com/XTLS/Xray-core>
+- geosite / geoip 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

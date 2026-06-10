@@ -775,3 +775,14 @@ flowchart TB
 * **XHTTP 标准探讨**: [XTLS/Xray-core#4113](https://github.com/XTLS/Xray-core/discussions/4113)
 * **Unix Domain Socket 原理**: POSIX.1-2001 `unix(7)` 规范 — 进程间通信 (IPC) 的高效数据交换机制
 * **Nginx Stream 模块**: [Nginx ngx_stream_ssl_preread_module](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) — 在不解密 TLS 的前提下提取 SNI 信息
+
+### 上游组件出处
+
+本文涉及的核心与客户端：
+
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo — <https://github.com/MetaCubeX/mihomo>
+- Sub-Store — <https://github.com/sub-store-org/Sub-Store>
+- Dufs — <https://github.com/sigoden/dufs>
+- acme.sh — <https://github.com/acmesh-official/acme.sh>
+- geosite / geoip 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>
