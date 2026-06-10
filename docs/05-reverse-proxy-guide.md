@@ -255,7 +255,7 @@ flowchart TB
 
 | 块 | 作用 |
 |---|---|
-| **inbounds** | 一个 `dokodemo-door` api 入站（`127.0.0.1:7979`），仅供本机看连接状态 / 多节点端口错开，不接业务流量 |
+| **inbounds** | 一个 `dokodemo-door` api 入站（`127.0.0.1:7979`，端口写死），仅供本机看连接状态，不接业务流量 |
 | **outbounds** | ① `reverse-bridge`：VLESS over REALITY 拨向 portal，带 `reverse:r-tunnel`；② `direct`：freedom 直出 |
 | **routing** | 唯一一条规则 `inboundTag:["r-tunnel"] → direct`——隧道进来的流量一律 freedom 直出 |
 
@@ -263,14 +263,17 @@ flowchart TB
 
 ### 3.3 占位符与一键渲染
 
-🔧 bridge 模板里有 6 个 `${...}` 占位符，由 portal 自动填好：
+🔧 bridge 模板里有 **5 个** `${...}` 占位符，由 portal 自动填好；api 入站端口**写死为 `7979`**，不是占位符：
 
 | 占位符 | 来源 |
 |---|---|
 | `${XRAY_REVERSE_UUID}` | 容器首启生成 |
 | `${DOMAIN}` | portal 域名 |
-| `${DEST_HOST}` / `${XRAY_REALITY_PUBLIC_KEY}` / `${XRAY_REALITY_SHORTID}` | portal 的 REALITY 参数 |
-| `${LISTENING_PORT}` | api 入站端口 |
+| `${DEST_HOST}` | portal 的 REALITY 目标 SNI |
+| `${XRAY_REALITY_PUBLIC_KEY}` | portal 的 REALITY 公钥 |
+| `${XRAY_REALITY_SHORTID}` | portal 的 REALITY shortId |
+
+> 🔬 **`${LISTENING_PORT}` 只是注释里的遗留字样，不是真占位符**：模板的 api 入站端口在 `inbounds[0].port` 处**硬编码为 `7979`**（`templates/reverse_bridge/client.json`），`${LISTENING_PORT}` 仅出现在文件顶部 `_usage` 注释的「手动替换」清单里，渲染时不会被替换、也无需替换。
 
 `docker exec sb-xray show` 会渲染出一份**占位符已全部填充**的 `reverse_bridge_client.json`，并给出带 token 的下载链接——bridge 直接 wget 即可，不必手抄参数（手抄最易把 UUID / publicKey 抄错）。
 
@@ -282,6 +285,8 @@ flowchart TB
 
 ### 4.1 portal 启用（公网 sb-xray）
 
+> 📘 **`ENABLE_REVERSE` 默认姿态以 04 为权威**：用 `docker-compose.yml` 拉起的标准节点，reverse **默认已开**（compose `ENABLE_REVERSE=${ENABLE_REVERSE:-true}`）；镜像内默认 `false` 仅作 watchtower 重建场景的兜底。完整双口径见 [docs/04 §2.7 「ENABLE_REVERSE 默认姿态」](./04-ops-and-troubleshooting.md)（04 是该 env 的权威 owner，本篇不另立口径）。下面显式写 `ENABLE_REVERSE=true` 是为表意清晰，标准 compose 部署下即便不写也已为 `true`；真正需要你按需配置的是 `REVERSE_DOMAINS`。
+
 🔧 改 `docker-compose.yml`：
 
 ```yaml
@@ -289,11 +294,11 @@ services:
   sb-xray:
     environment:
       # ... 已有变量 ...
-      - ENABLE_REVERSE=true
+      - ENABLE_REVERSE=true   # 标准 compose 部署默认已是 true；显式写出仅为表意
       - REVERSE_DOMAINS=domain:home.lan,domain:nas.lan,domain:router.lan
 ```
 
-- `ENABLE_REVERSE=true` 触发上面 §3.1 的注入逻辑。
+- `ENABLE_REVERSE=true` 触发上面 §3.1 的注入逻辑（标准 compose 部署下默认即开，见上方 callout）。
 - `REVERSE_DOMAINS` 逗号分隔，支持 `domain:` / `full:` / `geosite:` 前缀，命中才走隧道。
   - 留空也能用：隧道会建立但没有流量路由进来（**诊断用**，确认 bridge 能连上 portal）。
 
@@ -390,7 +395,9 @@ curl -x socks5h://<sb-xray-socks5>:1080 http://nas.lan/
 
 ### 5.3 故障告警（可选）
 
-🔧 bridge 断线时，portal 侧 observatory 会在约 1 分钟内标记隧道 dead。配合事件总线（见 [06](./06-event-bus-shoutrrr.md)），可在 `xr.json` 追加一条 webhook 规则，命中流量失败时推送到 shoutrrr：
+> 📘 **observatory 只在回国 balance 模式下创建**：纯内网穿透（仅 `ENABLE_REVERSE=true` + `REVERSE_DOMAINS`，不开回国）**不注册 observatory**——`config_builder.py` 仅在 `CN_EXIT_MODE=balance` 路径（`_apply_cn_exit_balance` → `_merge_observatory`）合入 observatory 做 `r-tunnel` 存活探测与主备故障转移。所以下面「约 1 分钟标记 dead」只在你同时开了回国 balance（见 [08](./08-xray-reverse-bridge.md)）时成立；纯穿透场景下隧道存活只能靠 access.log（§5.1）或下面的 webhook 规则自行观测。
+
+🔧 bridge 断线时，若已开回国 balance，portal 侧 observatory 会在约 1 分钟内标记隧道 dead。配合事件总线（见 [06](./06-event-bus-shoutrrr.md)），可在 `xr.json` 追加一条 webhook 规则，命中流量失败时推送到 shoutrrr：
 
 ```json
 {
