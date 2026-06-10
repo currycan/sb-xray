@@ -922,4 +922,4 @@ dmesg | grep -i "killed process"   # 无新 OOM kill 事件
 若仍触发 OOM，进一步措施：
 
 - 主节点接管订阅服务，小内存节点仅作纯转发
-- 保留 `before-m2` 回滚标签作为紧急兜底：`docker pull currycan/sb-xray:before-m2`
+- 保留上一个已知稳定版镜像标签作为紧急回滚兜底：`docker pull <镜像>:<上一稳定标签>`
