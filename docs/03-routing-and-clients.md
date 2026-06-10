@@ -116,7 +116,7 @@ flowchart LR
         B --> C{"最优代理速度\n> 60 Mbps?"}
         C -- "是" --> D["IS_8K_SMOOTH = true"]
         C -- "否" --> E["IS_8K_SMOOTH = false"]
-        F["VPS 直连测速\n（住宅VPS直出场景）"] --> G{"IP_TYPE=isp\n且 > 100 Mbps?"}
+        F["VPS 直连测速\n（住宅VPS直出场景）"] --> G{"IP_TYPE=isp\n且 > 60 Mbps?"}
     end
 
     subgraph show 子命令订阅生成
@@ -185,6 +185,11 @@ flowchart LR
 | `✈ good`  | ISP 代理激活 + 代理速度 > 60 Mbps（`ISP_8K_SMOOTH_MBPS` 可调）  | 通过 SOCKS5 代理实现 8K 流畅，适合所有需要解锁的业务 |    **+10**     |
 | `✈ super` | VPS 本身 IP 为住宅类型（`IP_TYPE=isp`）+ 直连速度 > 60 Mbps   | VPS 直出即为原生家宽，无需代理即可 8K，稀缺最高质量  |    **+30**     |
 
+> 📘 **good / super 的两个来源**：节点名上的 `good` / `super` 标签**不止测速一条来路**，系统有两条独立写入路径，OpenClash 端按字面字符串统一加分（见 §2.3），无需区分来源：
+>
+> 1. **服务端测速动态写入**（本节描述）：`node_meta.py` 根据 `IS_8K_SMOOTH` + `ISP_TAG` / `IP_TYPE` 判定后追加到 `NODE_SUFFIX`——good 走「ISP 代理激活且 8K 流畅」、super 走「VPS 自身住宅 IP 且直连 8K 流畅」。**两者共用 60 Mbps 闸门**（`isp.py` 中 `is_8k_smooth = ref_speed > 60`，good 取代理速度、super 取直连速度作 `ref_speed`）。
+> 2. **机场订阅静态注入**（`templates/providers/providers.yaml`）：部分高质量机场源在 `proxy-providers` 里用 `additional-suffix: " super"` / `" good"` 给该源**所有节点**钉死一个静态后缀，与测速无关——这是把人工已知的优质机场直接抬权。
+
 > **关键设计理念**：ISP SOCKS5 代理的目的是**解锁 geo 限制**（ChatGPT/Netflix 等）。选路决策链如下：
 >
 > 1. `DEFAULT_ISP` 非空 → 手动锁定出口，跳过所有判断
@@ -204,6 +209,55 @@ flowchart LR
 | < 25 Mbps   | 1080P 勉强           | IS_8K_SMOOTH=false → 无质量标签  |
 
 > 阈值默认 60 Mbps（`ISP_8K_SMOOTH_MBPS` 可调），与内部评级梯子 8K 档对齐——旧值 100 对跨境单连接 SOCKS5 几乎不可达。
+
+---
+
+### 1.5 媒体 / AI 服务的 A/B 风险二分路由
+
+📘 **为什么要分两类**：「这个服务该走直连还是走住宅 ISP 代理？」这个问题对不同服务有**两种不同的正确答案**，因为风险性质不同。服务端 `routing/media.py` 据此把受管服务切成 A / B 两类，分别用不同策略判定各自的 `${*_OUT}` 出站取值（`direct` 或 `isp-auto` 回退）。
+
+| 类别 | 服务 | 风险性质 | 判定方式 |
+| :--- | :--- | :--- | :--- |
+| **A 类 · 账号敏感** | ChatGPT、Claude、Gemini、社交平台、TikTok | 风险是**账号封禁**——无法靠探测预判 | **不探测**。住宅宽带 IP → `direct`；其余 → 回退 `isp-auto`，最大化保守 |
+| **B 类 · 流媒体解锁** | Netflix、Disney+、YouTube | 风险是**该 IP 能否解锁片库**——机房 IP 也可能解锁，值得一探 | **抓正文**。`GET` 落地页读 body，按 `ContentSignature` 判 REAL/BLOCKED |
+
+🔬 **统一判定顺序**（优先级从高到低，命中即短路，见 `media.py` 文件头）：
+
+```text
+L0  仅 Gemini：GEMINI_DIRECT 覆盖 — true → direct，false → 回退
+L1  受限地区（is_restricted_region GEOIP_INFO）→ 回退        ← 顶层安全网
+L2  IP_TYPE == "isp"（家庭宽带）→ direct
+L3  非住宅 IP，按类别分流：
+      A 类 → 回退（硬编码，不探测）
+      B 类 → GET 探测：REAL → direct，其余 → 回退
+```
+
+> **L1 受限地区守卫刻意压在 L2 住宅短路之上**：一个恰好落在审查地区的家宽节点，绝不能把这些服务直连出去（审查 + 账号双重风险）。
+
+🔬 **B 类的正文指纹（`ContentSignature`）**：`HEAD 200` 会被封禁页/验证码页骗过，所以 B 类必须读 body。判定规则——`blocked_substrings` / `blocked_url_patterns` 命中优先于 `real_substrings`（封禁页里也可能含品牌词）；什么都不匹配 → `UNKNOWN`，调用方按 fail-safe 走住宅回退。**指纹错了也只会变慢、不会失守**（绝不 fail-open）。各服务的探测 URL 与指纹字面值集中登记在 `routing/service_spec.py`（见 §1.6 的中央注册表说明）。
+
+> **GEMINI_DIRECT 覆盖**（L0，仅 Gemini）：`GEMINI_DIRECT=true` 强制 Gemini 直连、`=false` 强制回退；留空则 Gemini 退回 A 类默认判定。用于运维侧针对 Gemini 单服务手动钉死走向。
+
+---
+
+### 1.6 新增服务扩展点：service_spec 中央注册表
+
+🔬 **一处登记、三方共享**：所有受管流媒体 / AI 服务的「身份」集中声明在 `routing/service_spec.py` 的 `SERVICE_SPECS` 元组里，是路由子系统的**单一事实来源**。每条 `ServiceSpec` 声明四个字段，被三个上游各取所需：
+
+| 字段 | 含义 | 谁消费 |
+| :--- | :--- | :--- |
+| `env_var` | `*_OUT` 出站变量名（`NETFLIX_OUT` / `CHATGPT_OUT`…） | `config_builder` 快照 / 覆盖、渲染时 splice 进 sb.json |
+| `slug` | 小写标识，派生 `sb_tag` = `isp-auto-<slug>` | `routing/isp` 为每服务生成独立 sing-box urltest balancer |
+| `probe_url` | HTTPS 探测端点 | `media`（B 类抓正文）、sing-box urltest 探测 |
+| `signature`（可选） | `ContentSignature` 正文/URL 指纹 | `media._streaming_unlock` 判 REAL/BLOCKED；仅 B 类设置，A 类为 `None` |
+
+**新增一个受管服务的扩展点**，只需在 `SERVICE_SPECS` 追加一条 `ServiceSpec`，三方行为随之自动展开：
+
+1. **探测**：A 类（账号敏感）留空 `signature`，走 `media._account_sensitive` 不抓正文；B 类（流媒体解锁）填 `ContentSignature`，走 `_streaming_unlock` 抓正文判定（指纹字面值应带「证据 + 观测日期」注释，便于站点改版后复核）。
+2. **per-service balancer**：`ISP_PER_SERVICE_SB=true` 时，`routing/isp` 据 `slug` 自动产出 `isp-auto-<slug>` urltest 出站，`config_builder` 把该服务 `*_OUT` 从共享 `isp-auto` 改写为专属 tag。默认关闭时所有服务复用单个 `isp-auto`。
+3. **渲染**：`config_builder` 据 `env_var` 快照/覆盖该 `*_OUT`，sb.json 渲染时 splice 对应出站。
+
+> Xray 侧不做 per-service 拆分——其 `observatory` 是全局单例（整个 xray 实例共用一个探测 URL），多 balancer 结构上需要第二个 xray 进程，故 xray 始终走单 observatory / 单 balancer 模型。
 
 ---
 
@@ -247,7 +301,7 @@ flowchart LR
 | 维度类别     | 提取示例                        | 在系统中的用途                                                                   |
 | :----------- | :------------------------------ | :------------------------------------------------------------------------------- |
 | **地区标识** | `🇭🇰HK`, `🇺🇸US`, `🇯🇵JP`          | 定点分流，如 AI 节点强行加权美国区                                               |
-| **特性标签** | `super`, `good`, `高速`         | 业务定速，识别具有极佳体验的专线（`good`/`super` 由服务端测速自动写入，见 §1.4） |
+| **特性标签** | `super`, `good`, `高速`         | 业务定速，识别具有极佳体验的专线（`good`/`super` 由服务端测速或机场订阅静态注入写入，双源见 §1.4） |
 | **协议类型** | `Reality`, `Hysteria2`, `VMess` | 降延迟与抗封锁，新一代协议天然高分                                               |
 | **质量后缀** | `super`, `good`                 | 区分节点池的头等舱和经济舱                                                       |
 
@@ -273,6 +327,8 @@ flowchart LR
 | **地区偏好** | _因策略而异_        | _见下方各策略模板_ | —                     | 不同场景有不同地区权重         |
 
 > **关键词大小写敏感**：Mihomo 的 `policy-priority` 关键词匹配为**区分大小写**的字符串包含匹配。节点名中出现什么大小写形式，权重关键词就必须与之完全一致，否则不得分。
+>
+> **`good` / `super` 的双来源**：打分阶段只认节点名上的字面后缀，不关心它怎么来的。该后缀有两条独立写入路径——服务端测速动态写入（`node_meta.py`，60 Mbps 8K 闸门）与机场订阅静态注入（`providers.yaml` 的 `additional-suffix`，把人工已知优质机场直接抬权）。两者最终都落成同一个 `✈ super` / `✈ good` 字符串，加分规则统一（详见 §1.4「good / super 的两个来源」）。
 
 ### 2.4 Filter 筛选器详解
 
@@ -314,7 +370,7 @@ _图解：当节点延迟差距小于 300ms 时，系统绝对服从高权重分
 
 > **Claude / Gemini 稳定入口**：`OneSmartPro.yaml` 中的 `SelectStable` 现在直接以 `家宽-智选` 为首选，后接 `AI-智选`、`默认代理` 等通用兜底；客户端侧不再额外暴露家宽锁定 fallback 分组。需要固定服务端 ISP 出口时，继续使用 §1.3 的 `DEFAULT_ISP` 锁定模式。
 
-### 2.7 六套 Policy-Priority 策略模板
+### 2.7 五套 Policy-Priority 策略模板
 
 以下是 `OneSmartPro.yaml` 中定义的完整策略模板（基础权重 + 地区偏好）：
 
@@ -543,18 +599,27 @@ flowchart TD
 
 ### 4.1 模板类型对比
 
-| 模板                 | 定位         | 内核          | 核心机制                              | 策略组 | 适用场景                               |
-| :------------------- | :----------- | :------------ | :------------------------------------ | :----: | :------------------------------------- |
-| **OneSmartPro.yaml** | 智能完整版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |  46    | OpenClash / Mihomo 自动选择最优节点    |
-| **FallBackPro.yaml** | 故障转移版   | Mihomo        | Fallback 故转 + url-test 自动切换     |  ~50   | OpenClash / ClashMi 稳定优先、自动容灾 |
-| **stash.yaml**       | 移动端精简版 | Clash (Stash) | Fallback 故转 + url-test 自动切换     |  ~25   | iOS / macOS Stash 客户端，精简分流     |
-| **surge.conf**       | Surge 配置   | Surge         | url-test + 正则分组                   |  ~15   | macOS / iOS Surge 客户端               |
+客户端模板按两个维度组织：**机制双轨**（Smart 智选 vs Fallback 故转）× **规模双轨**（Pro 完整版 vs Lite 精简版）。订阅面板（`/sb-xray/` 控制台）会自动列出模板目录下所有 `*.yaml` 与 `surge.conf`，按需取用。
+
+| 模板                  | 定位          | 内核          | 核心机制                              | 策略组 | 适用场景                               |
+| :-------------------- | :------------ | :------------ | :------------------------------------ | :----: | :------------------------------------- |
+| **OneSmartPro.yaml**  | 智选·完整版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |   46   | OpenClash / Mihomo 自动选择最优节点    |
+| **OneSmartLite.yaml** | 智选·精简版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |   25   | 同上，砍掉细分服务分组的轻量版         |
+| **FallBackPro.yaml**  | 故转·完整版   | Mihomo        | Fallback 故转 + url-test 自动切换     |   67   | OpenClash / ClashMi 稳定优先、自动容灾 |
+| **FallBackLite.yaml** | 故转·精简版   | Mihomo        | Fallback 故转 + url-test 自动切换     |   46   | 同上，分组精简的轻量容灾版             |
+| **stash.yaml**        | 移动端精简版  | Clash (Stash) | Fallback 故转 + url-test 自动切换     |   27   | iOS / macOS Stash 客户端，精简分流     |
+| **surge.conf**        | Surge 配置    | Surge         | url-test + 正则分组                   |   21   | macOS / iOS Surge 客户端               |
 
 > [!NOTE]
-> **两套 Mihomo 模板的核心区别**：
+> **机制双轨——Smart vs Fallback**：
 >
-> - **OneSmartPro** 使用 Mihomo 最新的 `smart` 策略组类型，通过 `policy-priority` 进行**多维度加权打分**（协议、地区、质量标签），每个场景只需一个策略组即可智能决策。
-> - **FallBackPro** 使用传统的 `fallback` + `url-test` 组合，每个地区/场景拆分为「故转 → 自动/手动」**三层嵌套**，更加稳健但策略组数量更多。
+> - **OneSmart\*** 使用 Mihomo 最新的 `smart` 策略组类型，通过 `policy-priority` 进行**多维度加权打分**（协议、地区、质量标签），每个场景只需一个策略组即可智能决策。
+> - **FallBack\*** 使用传统的 `fallback` + `url-test` 组合，每个地区/场景拆分为「故转 → 自动/手动」**多层嵌套**，更加稳健但策略组数量更多（故转版组数普遍高于同档智选版）。
+>
+> **规模双轨——Pro vs Lite**：
+>
+> - **\*Pro** 为每类服务单独建组（Netflix / Disney / HBO / 各社交平台 / 各国外服务……），分流最细。
+> - **\*Lite** 砍掉这些细分服务组，只保留核心智选组 + 地区组 + 少量聚合分组，订阅体积与策略组数量更小，适合节点少或只要基本分流的场景。
 
 ### 4.2 核心变量说明
 
