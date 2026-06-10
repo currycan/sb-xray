@@ -77,6 +77,13 @@ read_digest() {
     docker inspect -f '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$_cid" 2>/dev/null
 }
 
+# 读镜像构建标识（org.opencontainers.image.version label，如 26.6.10-<sha>），
+# 作为通知里「镜像构建」字段；label 缺失时返回空，由调用方回退到 digest 末段。
+read_version() {
+    docker inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+        "$CONTAINER" 2>/dev/null
+}
+
 # ── 中文告警：POST 到 forwarder，未知事件 fallback 渲染成「中文 key: value」正文，
 #    标题自动带容器侧 SHOUTRRR_TITLE_PREFIX（[sb-xray:<域名>]）。──
 notify() {
@@ -104,6 +111,9 @@ runbook_text() {
 
 # ── 主流程 ────────────────────────────────────────────────────────
 CUR_DIGEST=$(read_digest || printf '')
+# 「镜像构建」友好标识：优先版本 label，缺失时回退 digest 末段 12 位（formatter 再兜底「未知」）
+BUILT=$(read_version || printf '')
+[ -n "$BUILT" ] || BUILT=$(printf '%s' "${CUR_DIGEST##*:}" | cut -c1-12)
 PREV_DIGEST=$([ -f "$DIGEST_STATE" ] && cat "$DIGEST_STATE" 2>/dev/null || printf '')
 UPDATED=0
 # PREV 为空 = 首次运行（只落盘，不报「已更新」）
@@ -122,16 +132,16 @@ retry '回国链路'   check_cn_exit || add_fail '回国链路端到端'
 
 if [ -n "$FAILS" ]; then
     log "自检失败：$FAILS"
-    BODY=$(printf '{"role":"%s","fails":"%s","image":"%s","runbook":"%s"}' \
-        "$ROLE" "$FAILS" "${CUR_DIGEST:-未知}" "$(runbook_text)")
+    BODY=$(printf '{"role":"%s","fails":"%s","image":"%s","built":"%s","runbook":"%s"}' \
+        "$ROLE" "$FAILS" "${CUR_DIGEST:-未知}" "${BUILT:-未知}" "$(runbook_text)")
     notify 'watchtower.canary.failed' "$BODY"
     exit 1
 fi
 
 log "自检通过（4/4）"
 if [ "$UPDATED" = 1 ]; then
-    BODY=$(printf '{"role":"%s","old":"%s","new":"%s"}' \
-        "$ROLE" "${PREV_DIGEST:-（首次记录）}" "$CUR_DIGEST")
+    BODY=$(printf '{"role":"%s","old":"%s","new":"%s","built":"%s"}' \
+        "$ROLE" "${PREV_DIGEST:-（首次记录）}" "$CUR_DIGEST" "${BUILT:-未知}")
     notify 'watchtower.canary.updated' "$BODY"
 else
     log "无更新，静默"

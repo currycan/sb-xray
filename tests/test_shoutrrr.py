@@ -533,3 +533,19 @@ def test_format_message_canary_updated_card():
 def test_format_message_canary_missing_built_shows_unknown():
     _title, body = shoutrrr._format_message("watchtower.canary.updated", {"role": "canary"}, "[p]")
     assert "镜像构建: 未知" in body
+
+
+def test_format_message_canary_updated_falls_back_to_new_digest():
+    # 旧版脚本只发 old/new（无 built）；formatter 须回退到 new digest，绝不显示「未知」。
+    payload = {"role": "worker", "old": "x@sha256:aaa", "new": "currycan/sb-xray@sha256:bbb"}
+    _title, body = shoutrrr._format_message("watchtower.canary.updated", payload, "[p]")
+    assert "镜像构建: currycan/sb-xray@sha256:bbb" in body
+    assert "未知" not in body
+
+
+def test_format_message_canary_failed_falls_back_to_image_digest():
+    # 失败事件脚本发 image（无 built）；formatter 回退到 image，不显示「未知」。
+    payload = {"role": "worker", "fails": "回国链路端到端", "image": "currycan/sb-xray@sha256:ccc"}
+    _title, body = shoutrrr._format_message("watchtower.canary.failed", payload, "[p]")
+    assert "镜像构建: currycan/sb-xray@sha256:ccc" in body
+    assert "未知" not in body
