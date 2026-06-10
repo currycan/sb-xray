@@ -593,7 +593,7 @@ flowchart TD
 
 ### 6.4 xray_exit_listener：崩溃诊断 eventlistener
 
-🔬 `[eventlistener:xray_exit_listener]`（`daemon.ini:103`）订阅 supervisord 的 `PROCESS_STATE_EXITED` 事件，运行 `python3 /scripts/entrypoint.py xray-exit-listener`（`scripts/entrypoint.py:165-167`）。xray 进程一旦异常退出，它记录退出码与上一状态，便于定位崩溃根因（如 `SIGKILL` 指向 OOM 嫌疑）。它与 `xray-run` 配对：前者清场让 xray 能重启，后者留痕让人能查清为什么崩。
+🔬 `[eventlistener:xray_exit_listener]`（`daemon.ini:103`）订阅 supervisord 的 `PROCESS_STATE_EXITED` 事件，运行 `python3 /scripts/entrypoint.py xray-exit-listener`（`scripts/entrypoint.py:165-167`）。xray 进程一旦异常退出，它记录退出码与上一状态，便于定位崩溃根因（如 `SIGKILL` 指向 OOM 嫌疑）。它与 `xray-run` 配对：前者清场让 xray 能重启，后者留痕让人能查清为什么崩。运维侧的崩溃排查方法（`[xray-exit]` 日志字段解读、OOM 场景）见 [04. 运维 §6.6](./04-ops-and-troubleshooting.md)。
 
 ### 6.5 shoutrrr-forwarder：事件总线常驻
 

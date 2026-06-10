@@ -220,7 +220,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 
 | 变量 | 说明 |
 |:---|:---|
-| `PUBLIC_USER` | 统一用户名（X-UI / S-UI / HTTP Basic Auth 共用） |
+| `PUBLIC_USER` | 统一用户名（X-UI / HTTP Basic Auth 共用） |
 | `PUBLIC_PASSWORD` | 统一密码 |
 | `<PREFIX>_ISP_IP` | ISP 落地节点 IP（如 `LA_ISP_IP`） |
 | `<PREFIX>_ISP_PORT` | ISP 落地节点端口 |
@@ -483,7 +483,7 @@ environment:
 
 ### 3.3 认证方式二：HTTP 基础认证（备用）
 
-使用与 X-UI / S-UI 相同的用户名和密码（来自 `/.env/secret`）：
+使用与 X-UI 相同的用户名和密码（来自 `/.env/secret`）：
 
 **使用方法**：
 
@@ -949,7 +949,7 @@ services:
 | 变量 | 默认 | 设 `false` 的副作用 |
 |------|-----|--------------------|
 | `ENABLE_SUBSTORE` | true（保留） | 本节点无法对外托管订阅聚合/转换，客户端改从主节点订阅 |
-| `ENABLE_XUI` | **`false`**（`docker-compose.yml` 默认不启用；镜像 ENV 为 `true`，需用时改 compose 为 `true`） | 无 X-UI 面板；xray 仍正常运行，改用 S-UI 或直接编辑 JSON |
+| `ENABLE_XUI` | **`false`**（`docker-compose.yml` 默认不启用；镜像 ENV 为 `true`，需用时改 compose 为 `true`） | 无 X-UI 面板；xray 仍正常运行，改为直接编辑 JSON 配置 |
 | `ENABLE_SUI` | —（已废弃，s-ui 不再内置，此开关无效） | s-ui 二进制已从镜像移除；此行仅作历史参考 |
 | `ENABLE_SHOUTRRR` | true（保留） | xray `rules.webhook` 事件不再转发到 Telegram/Discord |
 
