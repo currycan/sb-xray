@@ -12,13 +12,13 @@
 #   TS_AUTHKEY_FILE 改从文件读 authkey（TS_AUTHKEY 为空时生效，避免 key 进程表/历史泄露）
 #   TS_HOSTNAME     本机在 tailnet 的设备名（默认取 hostname）
 #   CN_EXIT_MODE    回国模式（默认 balance）
-#   REVERSE_DOMAINS 经 bridge 出的内网域名，逗号分隔（可选，16 台建议统一）
+#   REVERSE_DOMAINS 经 bridge 出的内网域名，逗号分隔（可选，各节点建议统一）
 #   VPS_DOMAIN      本节点对外域名（可选，写进 .env domain）
 #   SHOUTRRR_URLS   事件总线告警 URL（可选）
 #   COMPOSE_URL     docker-compose.yml 下载源（默认仓库 main 的 raw）
 #   SKIP_COMPOSE_UPDATE  设 1 跳过 compose 同步（默认 0，会拉最新覆盖）
 #   SKIP_PULL       设 1 跳过 docker compose pull（只 up -d，不升级镜像；默认 0）
-#   SBX_CANARY_ROLE 本节点 watchtower 角色 canary|worker（默认 worker；dc99-3 设 canary）
+#   SBX_CANARY_ROLE 本节点 watchtower 角色 canary|worker（默认 worker；指定一台金丝雀节点设 canary）
 #   CANARY_URL      sbx-canary-check.sh 下载源（默认仓库 main 的 raw）
 #   SKIP_CANARY_WIRING  设 1 跳过 watchtower 自检护栏安装（默认 0）
 #
@@ -124,7 +124,7 @@ exec docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
 EOF
     chmod 755 /usr/local/bin/sbx-update
 
-    # (b) 装/更新 sbx-canary-check.sh（更新后业务自检 + 中文告警，全 16 台同构）
+    # (b) 装/更新 sbx-canary-check.sh（更新后业务自检 + 中文告警，全部节点同构）
     CANARY_URL="${CANARY_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/sbx-canary-check.sh}"
     _canary="$SBXRAY_DIR/sbx-canary-check.sh"
     if curl -fsSL "$CANARY_URL" -o "$_canary.new" && [ -s "$_canary.new" ] && head -1 "$_canary.new" | grep -q '#!/bin/sh'; then
@@ -136,7 +136,7 @@ EOF
         rm -f "$_canary.new"; warn "  canary-check 下载失败且本地缺失，自检护栏未装（手动放置后重跑本脚本）"
     fi
 
-    # (c) 角色：canary（dc99-3）让 watchtower 提前 1h（北京 03:00），自检 03:05；
+    # (c) 角色：canary（指定的金丝雀节点）让 watchtower 提前 1h（北京 03:00），自检 03:05；
     #     worker 走 compose 默认 04:00，自检 04:05。错峰留出 1h 人工叫停窗口。
     if [ "$SBX_CANARY_ROLE" = "canary" ]; then
         upsert_env WATCHTOWER_SCHEDULE "0 0 3 * * *"

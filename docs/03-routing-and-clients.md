@@ -53,7 +53,7 @@ flowchart TD
 > - `ISP_RETEST_INTERVAL_HOURS` — 默认 6h 周期重测,仅已配置线路集/路由类别变化才重启 daemon（分钟位按 hostname 打散错峰，见 `ISP_RETEST_JITTER`）
 > - `ISP_SPEED_CACHE_TTL_MIN` — 冷启动 TTL 缓存(默认 60 min) + 后台异步刷新
 >
-> 完整运行时闭环架构图见 [docs/01-architecture-and-traffic.md §6.4](./01-architecture-and-traffic.md#64-完整运行时闭环); env 变量与典型组合见 [docs/04-ops-and-troubleshooting.md §2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
+> 完整运行时闭环架构图见 [docs/01-architecture-and-traffic.md §7.4](./01-architecture-and-traffic.md#74-完整运行时闭环); env 变量与典型组合见 [docs/04-ops-and-troubleshooting.md §2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
 
 ### 1.3 多 ISP 环境注入实操
 
@@ -116,7 +116,7 @@ flowchart LR
         B --> C{"最优代理速度\n> 60 Mbps?"}
         C -- "是" --> D["IS_8K_SMOOTH = true"]
         C -- "否" --> E["IS_8K_SMOOTH = false"]
-        F["VPS 直连测速\n（住宅VPS直出场景）"] --> G{"IP_TYPE=isp\n且 > 100 Mbps?"}
+        F["VPS 直连测速\n（住宅VPS直出场景）"] --> G{"IP_TYPE=isp\n且 > 60 Mbps?"}
     end
 
     subgraph show 子命令订阅生成
@@ -141,42 +141,45 @@ flowchart LR
 
 #### 启动日志结构示例
 
-容器启动时，`docker logs sb-xray` 会打印完整决策链路，可直接对照排查：
+容器启动时，`docker logs sb-xray` 会打印完整决策链路，可直接对照排查。每条日志的实际行首还有 ISO-8601 时间戳前缀（形如 `[2026-06-10T12:00:00.123+08:00]`），下例为省版面统一省略；`[INFO]` 之后的方括号是模块 logger 名（测速在 `sb_xray.speed_test`，出站注入在 `sb_xray.routing.isp`，段头在 `sb_xray.entrypoint`）：
 
 ```
-[阶段 2] 测速与选路...
-[阶段 2] 清除服务路由缓存（与 ISP_TAG 同步刷新）...
-[阶段 2] 环境: IP_TYPE=hosting | 地区=US | DEFAULT_ISP=未设置（自动选路）
-[阶段 2] 直连基准: 28.50 Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）
-[阶段 2] 发现 ISP 节点: 2 个，开始逐节点测速（采样=2次）...
-[测速] 开始: KR_ISP | 测速源: https://... | 采样: 2次
-[测速] KR_ISP | 第 1/2 轮: 9830 KB/s → 75.00 Mbps
-[测速] KR_ISP | 第 2/2 轮: 10240 KB/s → 78.12 Mbps
-[测速] KR_ISP: 2/2 有效样本，截断均值 76.56 Mbps，标准差 1.56 Mbps [稳定]
-[测速] proxy-kr-isp: 76.56 Mbps → 新最优
-[测速] 开始: JP_ISP | 测速源: https://... | 采样: 2次
-[测速] JP_ISP | 第 1/2 轮: ...
-[测速] JP_ISP: 2/2 有效样本，截断均值 70.00 Mbps，标准差 2.10 Mbps [稳定]
-[测速] proxy-jp-isp: 70.00 Mbps (最优仍: proxy-kr-isp 76.56 Mbps)
-[选路] ════════════════════════════════════════════
-[选路] 决策输入:
-[选路]   IP_TYPE       = hosting (机房/托管 IP)
-[选路]   地区          = US
-[选路]   DEFAULT_ISP   = 未设置（自动选路）
-[选路]   直连速度      = 28.50 Mbps（不参与选路）
-[选路]   最优 ISP 代理 = proxy-kr-isp (76.56 Mbps)
-[选路] 原则: 受限地区/非住宅IP→需代理解锁; 住宅IP+非受限→直连兜底
-[选路] 非住宅 IP (hosting)，需 ISP 代理解锁流媒体/AI
-[选路] 使用最优 ISP 代理: proxy-kr-isp (76.56 Mbps)
-[选路] IS_8K_SMOOTH: 出口=proxy-kr-isp | 参考速度=76.56 Mbps | 阈值=60 Mbps → true  → good 标签
-[选路] ✓ 最终决策: ISP_TAG=proxy-kr-isp | IS_8K_SMOOTH=true
-[选路] ════════════════════════════════════════════
-[阶段 4] 生成客户端/服务端配置片段...
-[ISP] 注入出站: proxy-kr-isp (76.56 Mbps)
-[ISP] 注入出站: proxy-jp-isp (70.00 Mbps)
-[ISP] Sing-box urltest 已生成: outbounds=["proxy-kr-isp", "proxy-jp-isp", "direct"]
-[ISP] Xray observatory + balancer 已生成: selector=["proxy-kr-isp", "proxy-jp-isp"]
+[INFO] [sb_xray.entrypoint] ▶ Stage 5/17 speed: ISP 测速与选路
+[INFO] [sb_xray.speed_test] IP_TYPE=hosting | 地区=US | DEFAULT_ISP=未设置
+[INFO] [sb_xray.speed_test] 开始: 节点 | 测速源: https://speed.cloudflare.com/__down?bytes=25000000 | 采样: 2次 | sampler=v2
+[INFO] [sb_xray.speed_test] 节点 | 第 1/2 轮: 3645 KB/s → 28.48 Mbps
+[INFO] [sb_xray.speed_test] 节点 | 第 2/2 轮: 3651 KB/s → 28.52 Mbps
+[INFO] [sb_xray.speed_test] 节点: 2/2 有效样本，截断均值 28.50 Mbps，标准差 0.02 Mbps [稳定]
+========================================
+ 8K 测速报告 — Direct
+========================================
+ 速度: 28.50 Mbps
+ 评级: 流畅 4K，8K 可能卡顿
+========================================
+[INFO] [sb_xray.speed_test] 直连基准: 28.50 Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）
+[INFO] [sb_xray.speed_test] 发现 ISP 节点 2 个，逐节点采样 2 次 | sampler=v2
+[INFO] [sb_xray.speed_test] 开始(diag): KR_ISP | 代理: socks5h://<IP>:<端口> | 测速源: https://... | 采样: 2次
+========================================
+ 8K 测速报告 — KR_ISP
+========================================
+ 速度: 76.56 Mbps
+ 评级: 流畅播放 8K
+========================================
+[INFO] [sb_xray.speed_test] proxy-kr-isp: 76.56 Mbps → 新最优
+[INFO] [sb_xray.speed_test] 开始(diag): JP_ISP | 代理: socks5h://<IP>:<端口> | 测速源: https://... | 采样: 2次
+（…JP_ISP 的 8K 测速报告块，略…）
+[INFO] [sb_xray.speed_test] proxy-jp-isp: 70.00 Mbps (最优仍: proxy-kr-isp 76.56 Mbps)
+[INFO] [sb_xray.speed_test] ISP_TAG=proxy-kr-isp IS_8K_SMOOTH=true
+[INFO] [sb_xray.entrypoint] ✓ Stage 5/17 speed ok in 45210ms
+（…Stage 6/17 media、Stage 7/17 keys，略…）
+[INFO] [sb_xray.entrypoint] ▶ Stage 8/17 outbounds: 生成客户端/服务端配置片段
+[INFO] [sb_xray.routing.isp] 注入出站: proxy-kr-isp (76.56 Mbps)
+[INFO] [sb_xray.routing.isp] 注入出站: proxy-jp-isp (70.00 Mbps)
+[INFO] [sb_xray.routing.isp] balancer configured: probe=https://speed.cloudflare.com/__down?bytes=1048576 interval=1m tolerance=300ms nodes=2 per_service_sb=False
+[INFO] [sb_xray.entrypoint] ✓ Stage 8/17 outbounds ok in 12ms
 ```
+
+> 📘 几个易混点：直连基准测速的节点标签就叫 `节点`（`measure()` 未传 name 时的默认值），而 `8K 测速报告` 框里显示 `Direct`；该报告框走 stderr 直写，**没有**时间戳/logger 前缀。逐 ISP 节点测速走 v2 采样器的 `开始(diag):` 路径，不逐行打印单轮明细，最终均值体现在 `proxy-<x>-isp: NN.NN Mbps` 行。选路决策没有独立的「决策块」，最终结论就是一行 `ISP_TAG=<tag> IS_8K_SMOOTH=<true/false>`。
 
 #### 两种质量标签的含义
 
@@ -184,6 +187,11 @@ flowchart LR
 | :-------- | :----------------------------------------------------------- | :--------------------------------------------------- | :------------: |
 | `✈ good`  | ISP 代理激活 + 代理速度 > 60 Mbps（`ISP_8K_SMOOTH_MBPS` 可调）  | 通过 SOCKS5 代理实现 8K 流畅，适合所有需要解锁的业务 |    **+10**     |
 | `✈ super` | VPS 本身 IP 为住宅类型（`IP_TYPE=isp`）+ 直连速度 > 60 Mbps   | VPS 直出即为原生家宽，无需代理即可 8K，稀缺最高质量  |    **+30**     |
+
+> 📘 **good / super 的两个来源**：节点名上的 `good` / `super` 标签**不止测速一条来路**，系统有两条独立写入路径，OpenClash 端按字面字符串统一加分（见 §2.3），无需区分来源：
+>
+> 1. **服务端测速动态写入**（本节描述）：`node_meta.py` 根据 `IS_8K_SMOOTH` + `ISP_TAG` / `IP_TYPE` 判定后追加到 `NODE_SUFFIX`——good 走「ISP 代理激活且 8K 流畅」、super 走「VPS 自身住宅 IP 且直连 8K 流畅」。**两者共用 60 Mbps 闸门**（`isp.py` 中 `is_8k_smooth = ref_speed > 60`，good 取代理速度、super 取直连速度作 `ref_speed`）。
+> 2. **机场订阅静态注入**（`templates/providers/providers.yaml`）：部分高质量机场源在 `proxy-providers` 里用 `additional-suffix: " super"` / `" good"` 给该源**所有节点**钉死一个静态后缀，与测速无关——这是把人工已知的优质机场直接抬权。
 
 > **关键设计理念**：ISP SOCKS5 代理的目的是**解锁 geo 限制**（ChatGPT/Netflix 等）。选路决策链如下：
 >
@@ -204,6 +212,55 @@ flowchart LR
 | < 25 Mbps   | 1080P 勉强           | IS_8K_SMOOTH=false → 无质量标签  |
 
 > 阈值默认 60 Mbps（`ISP_8K_SMOOTH_MBPS` 可调），与内部评级梯子 8K 档对齐——旧值 100 对跨境单连接 SOCKS5 几乎不可达。
+
+---
+
+### 1.5 媒体 / AI 服务的 A/B 风险二分路由
+
+📘 **为什么要分两类**：「这个服务该走直连还是走住宅 ISP 代理？」这个问题对不同服务有**两种不同的正确答案**，因为风险性质不同。服务端 `routing/media.py` 据此把受管服务切成 A / B 两类，分别用不同策略判定各自的 `${*_OUT}` 出站取值（`direct` 或 `isp-auto` 回退）。
+
+| 类别 | 服务 | 风险性质 | 判定方式 |
+| :--- | :--- | :--- | :--- |
+| **A 类 · 账号敏感** | ChatGPT、Claude、Gemini、社交平台、TikTok | 风险是**账号封禁**——无法靠探测预判 | **不探测**。住宅宽带 IP → `direct`；其余 → 回退 `isp-auto`，最大化保守 |
+| **B 类 · 流媒体解锁** | Netflix、Disney+、YouTube | 风险是**该 IP 能否解锁片库**——机房 IP 也可能解锁，值得一探 | **抓正文**。`GET` 落地页读 body，按 `ContentSignature` 判 REAL/BLOCKED |
+
+🔬 **统一判定顺序**（优先级从高到低，命中即短路，见 `media.py` 文件头）：
+
+```text
+L0  仅 Gemini：GEMINI_DIRECT 覆盖 — true → direct，false → 回退
+L1  受限地区（is_restricted_region GEOIP_INFO）→ 回退        ← 顶层安全网
+L2  IP_TYPE == "isp"（家庭宽带）→ direct
+L3  非住宅 IP，按类别分流：
+      A 类 → 回退（硬编码，不探测）
+      B 类 → GET 探测：REAL → direct，其余 → 回退
+```
+
+> **L1 受限地区守卫刻意压在 L2 住宅短路之上**：一个恰好落在审查地区的家宽节点，绝不能把这些服务直连出去（审查 + 账号双重风险）。
+
+🔬 **B 类的正文指纹（`ContentSignature`）**：`HEAD 200` 会被封禁页/验证码页骗过，所以 B 类必须读 body。判定规则——`blocked_substrings` / `blocked_url_patterns` 命中优先于 `real_substrings`（封禁页里也可能含品牌词）；什么都不匹配 → `UNKNOWN`，调用方按 fail-safe 走住宅回退。**指纹错了也只会变慢、不会失守**（绝不 fail-open）。各服务的探测 URL 与指纹字面值集中登记在 `routing/service_spec.py`（见 §1.6 的中央注册表说明）。
+
+> **GEMINI_DIRECT 覆盖**（L0，仅 Gemini）：`GEMINI_DIRECT=true` 强制 Gemini 直连、`=false` 强制回退；留空则 Gemini 退回 A 类默认判定。用于运维侧针对 Gemini 单服务手动钉死走向。
+
+---
+
+### 1.6 新增服务扩展点：service_spec 中央注册表
+
+🔬 **一处登记、三方共享**：所有受管流媒体 / AI 服务的「身份」集中声明在 `routing/service_spec.py` 的 `SERVICE_SPECS` 元组里，是路由子系统的**单一事实来源**。每条 `ServiceSpec` 声明四个字段，被三个上游各取所需：
+
+| 字段 | 含义 | 谁消费 |
+| :--- | :--- | :--- |
+| `env_var` | `*_OUT` 出站变量名（`NETFLIX_OUT` / `CHATGPT_OUT`…） | `config_builder` 快照 / 覆盖、渲染时 splice 进 sb.json |
+| `slug` | 小写标识，派生 `sb_tag` = `isp-auto-<slug>` | `routing/isp` 为每服务生成独立 sing-box urltest balancer |
+| `probe_url` | HTTPS 探测端点 | `media`（B 类抓正文）、sing-box urltest 探测 |
+| `signature`（可选） | `ContentSignature` 正文/URL 指纹 | `media._streaming_unlock` 判 REAL/BLOCKED；仅 B 类设置，A 类为 `None` |
+
+**新增一个受管服务的扩展点**，只需在 `SERVICE_SPECS` 追加一条 `ServiceSpec`，三方行为随之自动展开：
+
+1. **探测**：A 类（账号敏感）留空 `signature`，走 `media._account_sensitive` 不抓正文；B 类（流媒体解锁）填 `ContentSignature`，走 `_streaming_unlock` 抓正文判定（指纹字面值应带「证据 + 观测日期」注释，便于站点改版后复核）。
+2. **per-service balancer**：`ISP_PER_SERVICE_SB=true` 时，`routing/isp` 据 `slug` 自动产出 `isp-auto-<slug>` urltest 出站，`config_builder` 把该服务 `*_OUT` 从共享 `isp-auto` 改写为专属 tag。默认关闭时所有服务复用单个 `isp-auto`。
+3. **渲染**：`config_builder` 据 `env_var` 快照/覆盖该 `*_OUT`，sb.json 渲染时 splice 对应出站。
+
+> Xray 侧不做 per-service 拆分——其 `observatory` 是全局单例（整个 xray 实例共用一个探测 URL），多 balancer 结构上需要第二个 xray 进程，故 xray 始终走单 observatory / 单 balancer 模型。
 
 ---
 
@@ -247,7 +304,7 @@ flowchart LR
 | 维度类别     | 提取示例                        | 在系统中的用途                                                                   |
 | :----------- | :------------------------------ | :------------------------------------------------------------------------------- |
 | **地区标识** | `🇭🇰HK`, `🇺🇸US`, `🇯🇵JP`          | 定点分流，如 AI 节点强行加权美国区                                               |
-| **特性标签** | `super`, `good`, `高速`         | 业务定速，识别具有极佳体验的专线（`good`/`super` 由服务端测速自动写入，见 §1.4） |
+| **特性标签** | `super`, `good`, `高速`         | 业务定速，识别具有极佳体验的专线（`good`/`super` 由服务端测速或机场订阅静态注入写入，双源见 §1.4） |
 | **协议类型** | `Reality`, `Hysteria2`, `VMess` | 降延迟与抗封锁，新一代协议天然高分                                               |
 | **质量后缀** | `super`, `good`                 | 区分节点池的头等舱和经济舱                                                       |
 
@@ -273,6 +330,8 @@ flowchart LR
 | **地区偏好** | _因策略而异_        | _见下方各策略模板_ | —                     | 不同场景有不同地区权重         |
 
 > **关键词大小写敏感**：Mihomo 的 `policy-priority` 关键词匹配为**区分大小写**的字符串包含匹配。节点名中出现什么大小写形式，权重关键词就必须与之完全一致，否则不得分。
+>
+> **`good` / `super` 的双来源**：打分阶段只认节点名上的字面后缀，不关心它怎么来的。该后缀有两条独立写入路径——服务端测速动态写入（`node_meta.py`，60 Mbps 8K 闸门）与机场订阅静态注入（`providers.yaml` 的 `additional-suffix`，把人工已知优质机场直接抬权）。两者最终都落成同一个 `✈ super` / `✈ good` 字符串，加分规则统一（详见 §1.4「good / super 的两个来源」）。
 
 ### 2.4 Filter 筛选器详解
 
@@ -314,7 +373,7 @@ _图解：当节点延迟差距小于 300ms 时，系统绝对服从高权重分
 
 > **Claude / Gemini 稳定入口**：`OneSmartPro.yaml` 中的 `SelectStable` 现在直接以 `家宽-智选` 为首选，后接 `AI-智选`、`默认代理` 等通用兜底；客户端侧不再额外暴露家宽锁定 fallback 分组。需要固定服务端 ISP 出口时，继续使用 §1.3 的 `DEFAULT_ISP` 锁定模式。
 
-### 2.7 六套 Policy-Priority 策略模板
+### 2.7 五套 Policy-Priority 策略模板
 
 以下是 `OneSmartPro.yaml` 中定义的完整策略模板（基础权重 + 地区偏好）：
 
@@ -525,7 +584,7 @@ flowchart TD
 告警样式：
 
 ```text
-[sb-xray:dc99-3.ansandy.com] 🔴 订阅拉取失败
+[sb-xray:dc99-3.example.com] 🔴 订阅拉取失败
 
 ✗ ssrdog (机场) — HTTP 403
 ✗ 多宝 — HTTP 500
@@ -537,24 +596,57 @@ flowchart TD
 
 **调节**：`SUBSTORE_CHECK_CRON` 控制频率（默认 `30 4 * * *` 每日 04:30，置空 `""` 禁用）；告警通道复用 `SHOUTRRR_URLS`（未配则仅写容器日志）。详见 [04](./04-ops-and-troubleshooting.md) 环境变量参考。
 
+### 3.8 引入外部机场订阅源（Provider）
+
+🔧 除自建节点外，系统可聚合外部机场订阅一并下发给客户端。两种引入方式，二选一即可：
+
+**方式一：环境变量 `PROVIDERS`**
+
+```yaml
+environment:
+  - |
+    PROVIDERS=机场名称A|https://example.com/subscribe?token=xxx|super
+    机场名称B|https://example2.com/sub?token=yyy|good
+```
+
+**方式二：文件挂载 `providers.yaml`**
+
+```bash
+# 在 ./sb-xray/providers 目录下创建 providers.yaml 文件
+echo '机场名称|https://xxx|super' > ./sb-xray/providers/providers.yaml
+```
+
+> 📘 **质量标签说明**：每行末尾的 `super` / `good` 是给该机场全部节点钉死的静态质量后缀——`super` = 住宅流畅级（权重 +30），`good` = 代理流畅级（权重 +10）。这等同于 `templates/providers/providers.yaml` 里 `additional-suffix` 的「机场订阅静态注入」路径，与服务端测速无关，把人工已知的优质机场直接抬权（双来源对照见 §1.4、打分规则见 §2.3）。
+
+> ⚠️ 部分机场只允许国内 IP 拉取订阅——这类受限源需单独配回国出口，见 §3.6。
+
 ---
 
 ## 4. 客户端模板对比与接入方式
 
 ### 4.1 模板类型对比
 
-| 模板                 | 定位         | 内核          | 核心机制                              | 策略组 | 适用场景                               |
-| :------------------- | :----------- | :------------ | :------------------------------------ | :----: | :------------------------------------- |
-| **OneSmartPro.yaml** | 智能完整版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |  46    | OpenClash / Mihomo 自动选择最优节点    |
-| **FallBackPro.yaml** | 故障转移版   | Mihomo        | Fallback 故转 + url-test 自动切换     |  ~50   | OpenClash / ClashMi 稳定优先、自动容灾 |
-| **stash.yaml**       | 移动端精简版 | Clash (Stash) | Fallback 故转 + url-test 自动切换     |  ~25   | iOS / macOS Stash 客户端，精简分流     |
-| **surge.conf**       | Surge 配置   | Surge         | url-test + 正则分组                   |  ~15   | macOS / iOS Surge 客户端               |
+客户端模板按两个维度组织：**机制双轨**（Smart 智选 vs Fallback 故转）× **规模双轨**（Pro 完整版 vs Lite 精简版）。订阅面板（`/sb-xray/` 控制台）会自动列出模板目录下所有 `*.yaml` 与 `surge.conf`，按需取用。
+
+| 模板                  | 定位          | 内核          | 核心机制                              | 策略组 | 适用场景                               |
+| :-------------------- | :------------ | :------------ | :------------------------------------ | :----: | :------------------------------------- |
+| **OneSmartPro.yaml**  | 智选·完整版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |   46   | OpenClash / Mihomo 自动选择最优节点    |
+| **OneSmartLite.yaml** | 智选·精简版   | Mihomo        | Smart 智选 + Policy-Priority 多维权重 |   25   | 同上，砍掉细分服务分组的轻量版         |
+| **FallBackPro.yaml**  | 故转·完整版   | Mihomo        | Fallback 故转 + url-test 自动切换     |   67   | OpenClash / ClashMi 稳定优先、自动容灾 |
+| **FallBackLite.yaml** | 故转·精简版   | Mihomo        | Fallback 故转 + url-test 自动切换     |   46   | 同上，分组精简的轻量容灾版             |
+| **stash.yaml**        | 移动端精简版  | Clash (Stash) | Fallback 故转 + url-test 自动切换     |   27   | iOS / macOS Stash 客户端，精简分流     |
+| **surge.conf**        | Surge 配置    | Surge         | url-test + 正则分组                   |   21   | macOS / iOS Surge 客户端               |
 
 > [!NOTE]
-> **两套 Mihomo 模板的核心区别**：
+> **机制双轨——Smart vs Fallback**：
 >
-> - **OneSmartPro** 使用 Mihomo 最新的 `smart` 策略组类型，通过 `policy-priority` 进行**多维度加权打分**（协议、地区、质量标签），每个场景只需一个策略组即可智能决策。
-> - **FallBackPro** 使用传统的 `fallback` + `url-test` 组合，每个地区/场景拆分为「故转 → 自动/手动」**三层嵌套**，更加稳健但策略组数量更多。
+> - **OneSmart\*** 使用 Mihomo 最新的 `smart` 策略组类型，通过 `policy-priority` 进行**多维度加权打分**（协议、地区、质量标签），每个场景只需一个策略组即可智能决策。
+> - **FallBack\*** 使用传统的 `fallback` + `url-test` 组合，每个地区/场景拆分为「故转 → 自动/手动」**多层嵌套**，更加稳健但策略组数量更多（故转版组数普遍高于同档智选版）。
+>
+> **规模双轨——Pro vs Lite**：
+>
+> - **\*Pro** 为每类服务单独建组（Netflix / Disney / HBO / 各社交平台 / 各国外服务……），分流最细。
+> - **\*Lite** 砍掉这些细分服务组，只保留核心智选组 + 地区组 + 少量聚合分组，订阅体积与策略组数量更小，适合节点少或只要基本分流的场景。
 
 ### 4.2 核心变量说明
 
@@ -658,3 +750,6 @@ DoH 请求 → 1.1.1.1:443 → 规则匹配 → MATCH,兜底流量
 - **策略参考**: [666OS/YYDS 复合规则库](https://github.com/666OS/YYDS)
 - **Mihomo Smart 模式**: [Mihomo 文档 — Proxy Groups](https://wiki.metacubex.one/config/proxy-groups/)
 - **Sub-Store**: [sub-store-org/Sub-Store](https://github.com/sub-store-org/Sub-Store)
+- **Sing-box**: [SagerNet/sing-box](https://github.com/SagerNet/sing-box)
+- **OpenClash**: [vernesong/OpenClash](https://github.com/vernesong/OpenClash)（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)、订阅模板 [`../sources/ACL4SSR/`](../sources/ACL4SSR/readme.md)）
+- **Tailscale**: [tailscale/tailscale](https://github.com/tailscale/tailscale)（回国链路见 [07. Tailscale 代理架构](./07-tailscale-proxy-architecture.md)）

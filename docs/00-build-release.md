@@ -140,6 +140,8 @@ flowchart TD
     S4 --> Final(("最终镜像\ncurrycan/sb-xray:latest"))
 ```
 
+🔬 **BuildKit cache mount 贯穿三阶段**：Dockerfile 头部声明 `# syntax`/需要 BuildKit 1.7+，各阶段的 `RUN` 用 `--mount=type=cache` 把高频可复用目录挂成持久缓存——apk 包缓存（`/var/cache/apk`）、pnpm/npm store（阶段一）、Go 模块与编译缓存（`/go/pkg/mod`、`/root/.cache/go-build`，阶段二）、pip 缓存（最终阶段）。这些缓存跨构建复用，重复构建时不必重新下载/编译。`build.sh` 与 CI 都用 `docker buildx`，BuildKit 默认启用。
+
 ### 3.1 阶段一：Sub-Store 构建层
 
 **基础镜像**: `node:alpine`
@@ -160,18 +162,20 @@ flowchart TD
 
 **环境特性**: `CGO_ENABLED=1`（启用 CGO 以支持 SQLite）
 
+🔬 **GOPROXY 默认走国内镜像**：Golang 主构建层声明 `ARG GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"`（国内构建友好）。CI 可用 `--build-arg GOPROXY=https://proxy.golang.org,direct` 覆盖。这只影响 `go build`（crypctl）拉取依赖的来源，不改产物。
+
 **构建产物**:
 
-| 组件 | 构建方式 | 压缩 |
+| 组件 | 构建方式 | UPX 压缩 |
 |:---|:---|:---|
-| **crypctl** | `go build` + UPX | ✅ |
-| **Dufs** | 预编译下载 + UPX | ✅ |
-| **Cloudflared** | 预编译下载 + UPX | ✅ |
-| **X-UI (3x-ui)** | 从源码 `go build` + UPX | ✅ |
-| **Sing-box** | 预编译下载 + UPX | ✅ |
-| **Xray** | 预编译 ZIP 下载 + UPX | ✅ |
+| **crypctl** | 从源码 `go build`（`-ldflags="-s -w" -trimpath`） | ✅ |
+| **Dufs** | 预编译 tar.gz 下载 | ✅ |
+| **Cloudflared** | 预编译二进制下载 | ✅ |
+| **X-UI (3x-ui)** | 预编译 tar.gz 下载（MHSanaei/3x-ui releases） | ❌ |
+| **Sing-box** | 预编译 tar.gz 下载 | ❌ |
+| **Xray** | 预编译 ZIP 下载 | ✅ |
 
-> **UPX 压缩**：所有二进制文件使用 `upx --lzma --best` 极限压缩，减小 50-70% 体积。
+> **UPX 压缩并非全员开启**：仅 crypctl / Dufs / Cloudflared / Xray 经 `upx --lzma --best` 极限压缩（减小 50-70% 体积）；**X-UI、Sing-box 不做 UPX**，直接安装解压后的官方二进制（其官方发布产物对 UPX 压缩不友好，强压可能导致启动异常）。
 
 ### 3.3 阶段三：最终镜像层
 
@@ -189,11 +193,16 @@ supervisor dumb-init fail2ban acme.sh
 
 | 配置项 | 值 | 说明 |
 |:---|:---|:---|
-| `ENTRYPOINT` | `dumb-init -- python3 /scripts/entrypoint.py run` | dumb-init 作为 PID 1，Python `entrypoint.py` 提供 `run` / `show` / `trim` 三个子命令；`run` 用纯 Python 一次性跑完 15 段初始化流水线（探测 → 选路 → 证书 → 模板渲染 → 面板初始化 → cron → `os.execvp` supervisord） |
+| `ENTRYPOINT` | `dumb-init -- python3 /scripts/entrypoint.py run` | dumb-init 作为 PID 1，Python `entrypoint.py` 提供 `run` / `show` / `trim` 等 9 个子命令（完整清单见 [01. 架构 §5](./01-architecture-and-traffic.md)）；`run` 用纯 Python 一次性跑完 17 段初始化流水线（探测 → 选路 → 证书 → 模板渲染 → 面板初始化 → cron → `os.execvp` supervisord） |
 | `CMD` | `supervisord` | Supervisor 管理所有子进程 |
 | `HEALTHCHECK` | `supervisorctl status xray` | 每 30 秒检查 Xray 存活 |
 | `EXPOSE` | `80 443` | 默认暴露端口 |
 | `TZ` | `Asia/Singapore` | 时区 |
+
+🔬 **运行时安全加固**：
+
+- **非 root 用户预置**：最终阶段 `addgroup -S appgroup && adduser -S appuser -G appgroup` 预创建非特权用户 `appuser`，供需要降权的进程使用（容器入口仍由 dumb-init/supervisord 以 PID 1 管理）。
+- **fail2ban 内置**：运行时安装 `fail2ban` 并预置 jail 配置——移除发行版自带的 `alpine-ssh.conf`、把 `jail.conf` 复制为 `jail.local` 并显式关闭 `[ssh]` / `[sshd]` jail（本镜像不跑 SSH）、开启 IPv6 支持。具体封禁 jail 由 entrypoint 在运行期按需启用。
 
 ---
 
@@ -561,3 +570,15 @@ flowchart TD
 - [04. 运维管理与故障排查手册](./04-ops-and-troubleshooting.md) — 环境变量全集与线上排障
 - 仓库根 `../CLAUDE.md` — Watchtower 自动更新发布纪律（漂移缓解契约）
 - [../CHANGELOG.md](../CHANGELOG.md) — 历次构建/发布变更记录
+
+### 上游组件出处
+
+构建时从各上游 release 拉取的组件：
+
+- Xray-core — <https://github.com/XTLS/Xray-core>
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo（Http-Meta 内核）— <https://github.com/MetaCubeX/mihomo>
+- Sub-Store — <https://github.com/sub-store-org/Sub-Store>
+- Dufs — <https://github.com/sigoden/dufs>
+- Shoutrrr — <https://github.com/containrrr/shoutrrr>
+- acme.sh — <https://github.com/acmesh-official/acme.sh>

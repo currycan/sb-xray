@@ -2,7 +2,16 @@
 
 把 sb-xray 容器里**默认即生效的进阶能力**（Hy2 由 Xray 接管、XHTTP/3+BBR、两轨订阅）和**按需打开的可选特性**（内网穿透、事件总线、抗封锁紧急通道）一次讲清。每个能力按"**做什么 / 何时用 / 怎么开 / 如何验证 / 故障排查**"五段式组织，新手照着开，工程师看懂为什么。
 
-> **默认安全姿态**：不改任何 env 时，容器行为是 —— Hy2 由 Xray 接管但客户端参数无感；所有实验性入站（XICMP / XDNS / ECH）关闭；Reverse Proxy 关闭；webhook 事件总线以 dry-run 模式运行（仅本地日志，不发外部通知）。**升级即用，零配置不踩雷。**
+> **默认安全姿态（镜像内默认）**：不改任何 env、用镜像内默认值时，容器行为是 —— Hy2 由 Xray 接管但客户端参数无感；所有实验性入站（XICMP / XDNS / ECH）关闭；`ENABLE_REVERSE` 镜像内默认 `false`；webhook 事件总线以 dry-run 模式运行（仅本地日志，不发外部通知）。**升级即用，零配置不踩雷。**
+>
+> ⚠️ **标准 compose 部署不同**：`docker-compose.yml` 把 `ENABLE_REVERSE` 有意覆盖为 `true`（`${ENABLE_REVERSE:-true}`），故标准 compose 部署下 reverse **默认开**。两个默认值都正确、有意为之，权威口径见 §3 与 [docs/04](./04-ops-and-troubleshooting.md) §2.7（04 为 env 权威 owner）。
+
+> **本文定位（详述 vs 仅索引）**：本文是全部 feature flag 的**总索引**（§9 速查表），也是**无独立主文档的能力**——紧急通道（XICMP/XDNS，§6/§7）、两轨订阅（§2）、XHTTP/3 主轨（§5）、ECH 占位（§8）、降载 flag（§11）——的**唯一详述地**。已有独立主文档的能力，本文只放概念卡 + 入口，详述在对应文档：
+>
+> - **协议机制**（mKCP 参数、finalmask 封装、应急 inbound 模板）→ [docs/02](./02-protocols-and-security.md) §1.13（机制 owner；§6/§7 仅留开关与连通性验证）
+> - **env / 默认值权威口径**（含 `ENABLE_REVERSE` 双默认）→ [docs/04](./04-ops-and-troubleshooting.md) §2.7（env owner；本文引用，不自立口径）
+> - **Reverse Proxy 完整部署** → [docs/05](./05-reverse-proxy-guide.md)（§3 仅放概念卡 + 入口）
+> - **事件总线完整文档** → [docs/06](./06-event-bus-shoutrrr.md)（§1 仅放概念卡 + 入口）
 
 ## 阅读约定：三种信息块
 
@@ -28,8 +37,8 @@ flowchart TD
         SUB["两轨订阅<br/>v2rayn + common"]
     end
 
-    subgraph FLAG["② 开关可选 · 默认关"]
-        REV["ENABLE_REVERSE<br/>内网穿透"]
+    subgraph FLAG["② 开关可选 · 改 env"]
+        REV["ENABLE_REVERSE<br/>内网穿透<br/>镜像 false / compose true"]
         BUS["事件总线 (shoutrrr)<br/>SHOUTRRR_URLS 留空=dry-run"]
         ECH["ENABLE_ECH<br/>❗占位，暂无效果"]
     end
@@ -56,7 +65,7 @@ flowchart TD
 📘 **怎么读这张图**：
 
 - **绿色第①层**：你什么都不用做，升级后自动拥有。唯一要确认的是宿主机防火墙放行了 XHTTP/3 的 UDP 端口（见 §5）。
-- **黄/灰第②层**：改 `docker-compose.yml` 一两个环境变量即可，互不影响，按需打开。
+- **黄/灰第②层**：改 `docker-compose.yml` 一两个环境变量即可，互不影响，按需开关。注意 `ENABLE_REVERSE` 镜像内默认 `false` 但**标准 compose 部署已默认 `true`**（回国 `balance` 链路依赖），双口径见 §3 与 [docs/04](./04-ops-and-troubleshooting.md) §2.7。
 - **红色第③层**：仅在**常规通道全被封**的极端场景才用，牺牲带宽换可达性，且需要额外前置条件。
 
 **读者导航**：
@@ -64,6 +73,7 @@ flowchart TD
 - **想暴露家宽服务 / 流媒体落地** → §3（Reverse Proxy）
 - **想收安全告警** → §1（事件总线）
 - **被重度封锁找备选** → §6（XICMP）/ §7（XDNS）
+- **小内存机器要瘦身** → §11（降载 flag）
 
 ---
 
@@ -177,12 +187,16 @@ flowchart LR
 - 想让流媒体（Netflix / Disney）走家宽真实 ISP 出口以匹配 residential IP 需求
 - VPS 要让部分业务"落地"到家宽以获得更好的国内访问路径
 
-🔧 **怎么开**：完整部署步骤见 [`05-reverse-proxy-guide.md`](./05-reverse-proxy-guide.md)。核心 env 配置：
+🔧 **怎么开**：完整部署步骤见 [`05-reverse-proxy-guide.md`](./05-reverse-proxy-guide.md)。
+
+> 📘 **`ENABLE_REVERSE` 双默认**：镜像内默认 `false`（watchtower 兜底）；标准 compose 部署经 `${ENABLE_REVERSE:-true}` 覆盖为 `true`，故标准 compose 部署下 reverse **已默认开**。权威口径见 [docs/04](./04-ops-and-troubleshooting.md) §2.7（env owner，本文不自立口径）。下方示例为显式声明，标准 compose 部署可省 `ENABLE_REVERSE`（已默认 `true`），仅需补 `REVERSE_DOMAINS`。
+
+核心 env 配置：
 
 ```yaml
     environment:
       # VPS（portal）侧
-      - ENABLE_REVERSE=true
+      - ENABLE_REVERSE=true            # 标准 compose 部署已默认 true，可省
       - REVERSE_DOMAINS=domain:home.lan,domain:nas.example.com,domain:jellyfin.example.com
 ```
 
@@ -247,9 +261,10 @@ flowchart LR
 docker exec sb-xray ss -ulnp | grep 6443
 # 期望：users:(("xray",pid=...))
 
-# entrypoint 启动日志
-docker logs sb-xray 2>&1 | grep '阶段 1'
-# 期望：[阶段 1] 完成 hy2=6443(xray) tuic=8443 anytls=4433
+# entrypoint 启动日志（基础端口在 Stage 4/17 probe 段打印）
+docker logs sb-xray 2>&1 | grep 'base ports'
+# 期望：[<时间戳>] [INFO] [sb_xray.entrypoint] base ports: hy2=6443 tuic=8443 anytls=4433
+# （端口归属进程以上面 ss 输出的 users:(("xray",…)) 为准，日志行本身不标注进程）
 
 # sing-box 目录只剩 tuic + anytls
 docker exec sb-xray ls /sb-xray/sing-box/
@@ -334,7 +349,7 @@ docker exec sb-xray sh -c 'base64 -d /sb-xray/subscribe/v2rayn | grep Xhttp-H3'
 
 ## 6. XICMP 紧急通道
 
-📘 **抗封锁备选**：把代理流量藏进网络包的载荷里，伪装成普通的网络诊断流量穿过封锁。XICMP 用 **ICMP echo（ping）报文**承载，XDNS（§7）用 **DNS 查询**承载。
+📘 **抗封锁备选**：把代理流量藏进网络包的载荷里，伪装成普通的网络诊断流量穿过封锁。XICMP 用 **ICMP echo（ping）报文**承载，XDNS（§7）用 **DNS 查询**承载。两条通道的协议机制（mKCP 参数、finalmask 封装、inbound 模板）详见 [docs/02](./02-protocols-and-security.md) §1.13；本节聚焦开关与连通性验证。
 
 ```mermaid
 flowchart LR
@@ -358,11 +373,13 @@ flowchart LR
 
 🔧 **怎么开**：
 
-1. **容器必须有 NET_RAW 能力**（默认没有，需要在 `docker-compose.yml` 取消注释）：
+1. **容器必须有 NET_RAW 能力**（默认没有）。标准 `docker-compose.yml` 的 `cap_add` 只含 `NET_ADMIN` / `SYS_MODULE`，**需自行新增 `NET_RAW`**（不是取消注释，compose 里无此注释行）：
 
 ```yaml
     cap_add:
-      - NET_RAW
+      - NET_ADMIN     # compose 已有
+      - SYS_MODULE    # compose 已有
+      - NET_RAW       # ← 按需自加（XICMP 必需）
 ```
 
 2. **env 启用**：
@@ -450,7 +467,7 @@ dig @ns1.example.com TXT probe.ns1.example.com
 | `ENABLE_XICMP` | `false` | XICMP **紧急通道**（需 `cap_add=NET_RAW`；极端封锁场景备选） | `templates/xray/05_xicmp_emergency_inbounds.json` |
 | `ENABLE_XDNS` | `false` | XDNS **紧急通道**（需 `XDNS_DOMAIN`；极端封锁场景备选） | `templates/xray/06_xdns_emergency_inbounds.json` |
 | `ENABLE_ECH` | `false` | ❗占位，暂无效果 | - |
-| `ENABLE_REVERSE` | `false` | VLESS Reverse Proxy 内网穿透 | `templates/reverse_bridge/client.json` |
+| `ENABLE_REVERSE` | 镜像 `false` / compose `true` | VLESS Reverse Proxy 内网穿透。**双口径**：镜像内默认 `false`（Dockerfile `ENV`，watchtower 兜底）；标准 compose 部署覆盖为 `true`（`${ENABLE_REVERSE:-true}`，回国 `balance` 链路依赖）。**权威说明见 [docs/04](./04-ops-and-troubleshooting.md) §2.7（env owner）** | `templates/reverse_bridge/client.json` |
 | `PORT_XHTTP_H3` | `4443` | XHTTP/3 监听 UDP 端口 | - |
 | `PORT_XICMP_ID` | `12345` | XICMP 的 16-bit ICMP id | - |
 | `PORT_XDNS` | `5353` | XDNS 监听 UDP 端口 | - |
@@ -462,6 +479,9 @@ dig @ns1.example.com TXT probe.ns1.example.com
 | `SHOUTRRR_URLS` | `""` | shoutrrr 推送 URL（dry-run 留空） | `scripts/sb_xray/shoutrrr.py` |
 | `SHOUTRRR_FORWARDER_PORT` | `18085` | forwarder HTTP 端口 | - |
 | `SHOUTRRR_TITLE_PREFIX` | `[sb-xray]` | 推送标题前缀 | - |
+| `ENABLE_SUBSTORE` | 镜像 `true` / compose `true` | **降载开关**（opt-out）。`=false` 关掉 sub-store + http-meta（省 ~130–200 MB） | `scripts/sb_xray/config_builder.py` |
+| `ENABLE_XUI` | 镜像 `true` / compose `false` | **降载开关**（opt-out）。`=false` 关掉 x-ui 面板（省 ~35–55 MB）；标准 compose 已设 `false` | `scripts/sb_xray/config_builder.py` |
+| `ENABLE_SHOUTRRR` | 镜像 `true` / compose `true` | **降载开关**（opt-out）。`=false` 关掉 shoutrrr-forwarder 事件转发（省 ~20–30 MB） | `scripts/sb_xray/config_builder.py` |
 | `LOG_LEVEL` | `warning` | xray + sing-box 日志级别（debug/info/warning/error） | - |
 | `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）；与 `LOG_LEVEL` 分离避免冲突 | - |
 | `NO_COLOR` | *(空)* | 非空 → 禁用 entrypoint 日志 ANSI 彩色；容器 stdout 非 TTY 时自动禁用 | - |
@@ -491,13 +511,23 @@ docker exec sb-xray sh -c 'grep -rn "\\\${[A-Z_]*}" /sb-xray/xray/ || echo "all 
 # 出现字面量说明 env 变量未设置；检查 Dockerfile ENV 或 docker-compose environment
 ```
 
-### 10.3 smoke test 运行
+### 10.3 发布前校验（两道质量门）
+
+发布镜像前跑两个独立脚本，都以**退出码**作为质量门（`0` 通过 / 非 `0` 失败），CI 与本地一致：
 
 ```bash
 cd /path/to/sb-xray
+
+# 门 1：smoke test —— 配置渲染 + 运行时行为
 SKIP_COMPOSE=1 bash scripts/test_smoke.sh   # 仅静态（CI 用）
 bash scripts/test_smoke.sh                  # 含 docker 运行时检查（需要本地跑着 sb-xray 容器）
 # 期望：通过: 52  失败: 0
+
+# 门 2：geosite 质量门 —— 下载 manifest 里的 geosite.dat，验证回国路由两条硬性要求：
+#   ① geosite:cn 干净（不含被上游 @cn 标记的海外 CDN，避免 Google Play 等被误送回国）
+#   ② 服务端引用的全部 geosite 分类齐全（缺任一分类对应分流规则会失效）
+.venv/bin/python scripts/verify_geosite_clean.py
+# 退出码 0 = 通过（"geosite:cn 干净且所需分类齐全"）；退出码 1 = 不达标（逐条打印缺失/污染）
 ```
 
 ### 10.4 订阅输出
@@ -526,6 +556,49 @@ docker exec sb-xray tail -100 /var/log/supervisor/xray.err.log
 
 ---
 
+## 11. 降载 flag（低内存部署 opt-out）
+
+📘 一句话：**给 ≤512 MB RAM 的小机器瘦身**——三个 opt-out 开关按需关掉非核心常驻进程，合计可省 ~220–320 MB 常驻 RSS。代理核心（xray / sing-box / nginx）不受影响。
+
+**做什么**：`config_builder.py` 渲染 supervisord 的 `daemon.ini` 时，按每个进程对应的 `ENABLE_*` 开关决定是否纳入守护。语义是 **opt-out**——进程**默认保留**，仅当对应 flag 显式设为 `false`（大小写不敏感）才剔除：
+
+| 开关 | 关掉的进程 | 省下 RSS | 镜像默认 | 标准 compose |
+|---|---|---|---|---|
+| `ENABLE_SUBSTORE` | `sub-store` + `http-meta`（两个 V8 实例） | ~130–200 MB | `true` | `true` |
+| `ENABLE_XUI` | `x-ui` 面板 | ~35–55 MB | `true` | **`false`**（compose 已关） |
+| `ENABLE_SHOUTRRR` | `shoutrrr-forwarder` 事件转发 | ~20–30 MB | `true` | `true` |
+
+🔬 **三方默认值为何不一致**：镜像内 `ENV` 全为 `true`（watchtower 兜底，保功能完整）；`docker-compose.yml` 把 `ENABLE_XUI` 有意设为 `false`（x-ui 面板对多数部署非必需，默认省内存），`ENABLE_SUBSTORE` / `ENABLE_SHOUTRRR` 标准 compose 维持 `true`。关掉 `ENABLE_SHOUTRRR` 同时会停掉事件总线（§1），按需取舍。
+
+**何时用**：宿主机内存吃紧（≤512 MB），且不需要对应能力——不用面板订阅管理就关 `ENABLE_XUI`，不用 sub-store 聚合订阅就关 `ENABLE_SUBSTORE`，不收事件告警就关 `ENABLE_SHOUTRRR`。
+
+🔧 **怎么开**：在 `docker-compose.yml` 的 `environment` 里把对应 flag 设为 `false`（compose 默认未列的 env 按需自加）：
+
+```yaml
+    environment:
+      - ENABLE_SUBSTORE=false   # 关掉 sub-store + http-meta
+      # ENABLE_XUI 标准 compose 已默认 false，无需重复
+      - ENABLE_SHOUTRRR=false   # 关掉事件转发（同时停用 §1 事件总线）
+```
+
+🔧 **如何验证**：
+
+```bash
+# supervisord 守护进程列表里不应再出现被关掉的进程
+docker exec sb-xray supervisorctl status
+# 期望：关掉的进程（如 sub-store / http-meta / x-ui / shoutrrr-forwarder）不在列表
+
+# 直接看渲染后的 daemon.ini
+docker exec sb-xray sh -c 'grep -c "^\[program:sub-store\]" /etc/supervisor.d/daemon.ini'
+# 期望：ENABLE_SUBSTORE=false 时为 0
+```
+
+**故障排查**：
+- 设了 `false` 但进程仍在：确认值是字面 `false`（大小写不敏感），非 `0` / `no`；改完需 `docker compose up -d` 重建容器让 entrypoint 重渲 `daemon.ini`
+- watchtower 自动更新后又出现被关进程：watchtower 不读 compose，仅从旧容器 inspect env 重建；若旧容器没带该 `false` env，新镜像会用镜像内默认 `true`——运维 `git pull && docker compose up -d` 同步后恢复
+
+---
+
 ## 相关资源
 
 - [CHANGELOG.md](../CHANGELOG.md) —— 版本发布日志
@@ -537,3 +610,14 @@ docker exec sb-xray tail -100 /var/log/supervisor/xray.err.log
 - [docs/05-reverse-proxy-guide.md](./05-reverse-proxy-guide.md) —— VLESS Reverse Proxy 部署指南
 - [docs/06-event-bus-shoutrrr.md](./06-event-bus-shoutrrr.md) —— 事件总线完整文档
 - [references/implementation-notes.md](../references/implementation-notes.md) —— 实施过程笔记（本地维护）
+
+### 上游组件出处
+
+本文涉及的客户端内核与规则源：
+
+- Xray-core — <https://github.com/XTLS/Xray-core>
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo（Karing / OpenClash 内核）— <https://github.com/MetaCubeX/mihomo>
+- OpenClash — <https://github.com/vernesong/OpenClash>（仓库内配置见 [`../sources/openclash/`](../sources/openclash/readme.md)）
+- Sub-Store — <https://github.com/sub-store-org/Sub-Store>
+- geosite / geoip 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

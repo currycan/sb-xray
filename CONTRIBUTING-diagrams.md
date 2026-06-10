@@ -70,7 +70,7 @@ classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:3px,color:#fff
 - ❌ 节点标签写成一整句话(用 `<br/>` 分行或拆成两个节点)
 - ❌ 图与正文无关联,读者只能看完从头开始猜
 - ❌ 同一份文档内混用 `graph LR` / `flowchart LR` / `graph TD` / `flowchart TD`
-- ❌ 标签内出现开发阶段术语(Phase/Sprint/M1 等,参见全局规则 `common/documentation.md`)
+- ❌ 标签内出现开发阶段术语(Phase/Sprint/M1 等,参见全局规则 `common/documentation.md`——外部规范，非本仓库内文件)
 
 ## 审查 checklist
 

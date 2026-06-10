@@ -70,7 +70,7 @@ flowchart LR
 - **不配置也能跑** —— `SHOUTRRR_URLS` 留空时进入 **dry-run**，事件只进容器日志，不外发。
 - **零外网暴露** —— forwarder 只绑定 `127.0.0.1`，容器外无法访问，无需开任何端口。
 - **多通道** —— 同一条事件可同时发 Telegram + Discord + Slack + Gotify。
-- **低内存可关** —— `ENABLE_SHOUTRRR=false` 让 trim 阶段整块移除 forwarder 进程（省约 30MB RSS）。
+- **低内存可关** —— `ENABLE_SHOUTRRR=false` 让 trim 阶段整块移除 forwarder 进程（单项约回收 ~20–30MB 常驻 RSS，量级见 §10.3）。
 - **失败透明化** —— shoutrrr 子进程的 exit code 和 stderr 都写进 forwarder 日志（token 不泄露），杜绝「204 但没收到消息」的盲区。
 
 ---
@@ -167,12 +167,14 @@ sequenceDiagram
 
 🔬 模板的 `routing.rules` 里预置了 4 条带 `webhook` 的封禁规则。命中即 ① 阻断流量（`outboundTag: block`）② 向 forwarder POST 一条事件：
 
-| X-Event | ruleTag | 匹配条件 | `deduplication` | 阻断 |
-|---|---|---|---|---|
-| `ban_bt` | `bt` | `protocol: bittorrent` | `300`（5 分钟） | ✅ |
-| `ban_geoip_cn` | `cn-ip` | `ip: geoip:cn` | `600`（10 分钟） | ✅ |
-| `ban_ads` | `ad-domain` | `domain: geosite:category-ads-all` | `900`（15 分钟） | ✅ |
-| `ban_private_ip` | `private-ip` | `ip: geoip:private` | `1800`（30 分钟） | ✅ |
+| X-Event | ruleTag | 匹配条件 | `deduplication` | `marktag` | 阻断 |
+|---|---|---|---|---|---|
+| `ban_bt` | `bt` | `protocol: bittorrent` | `300`（5 分钟） | `ban_bt` | ✅ |
+| `ban_geoip_cn` | `cn-ip` | `ip: geoip:cn` | `600`（10 分钟） | `ban_geoip_cn` | ✅ |
+| `ban_ads` | `ad-domain` | `domain: geosite:category-ads-all` | `900`（15 分钟） | —（无） | ✅ |
+| `ban_private_ip` | `private-ip` | `ip: geoip:private` | `1800`（30 分钟） | —（无） | ✅ |
+
+> 🔬 **`marktag` 与 `webhook` 是两个独立字段，别混淆**：`webhook` 决定「命中是否 POST 一条事件」（推送由它触发，4 条规则全有）；`marktag` 只是 Xray 给命中连接打的一个**标记标签**，便于在别处按标签引用——当前模板里**只有 `bt` / `cn-ip` 两条带 `marktag`**，`ad-domain` / `private-ip` 没有。事件推送**不依赖 `marktag`**。回国模式下 `cn-ip` 规则被改写时，其 `marktag` 与 `webhook` 一并被剥离（见下方第 3 点 + [`config_builder.py`](../scripts/sb_xray/config_builder.py) 注释），停止对正常回国流量误报。
 
 单条规则长这样：
 
@@ -232,6 +234,7 @@ flowchart TB
 |---|---|
 | **事件类型识别** | 取 `X-Event` 请求头（Xray webhook 走这条）；缺失则读 body 里的 `event` 字段（容器内 `events.py` POST 到 `/xray` 时事件名包在 body 里），再退回 URL 路径（`/ban_bt` → `ban_bt`），最后 `unknown` |
 | **消息拼装** | 4 个内置 ban 事件 → 人话摘要：标题 = `"{SHOUTRRR_TITLE_PREFIX} 🚫 BT 下载已拦截"` 等中文标题，正文 = 「用户 X 尝试连接 Y」+ 来源/入站/时间；`isp.speed_test.result` → 标题 `📊 ISP 测速结果`，正文 = 选定线路/评级/直连基准 + 各线路逐行（含 ✓/✗ 与失败原因）；`isp.retest.completed` → 标题 `🔄 ISP 重测 · 线路已切换`，正文 = 切换结论（`old → new`）+ 原因/重启状态 + 折入的测速摘要；`isp.retest.noop` → 标题 `🔁 ISP 重测 · 线路不变`，正文 = 测速摘要 + 维持结论（含波动百分比）；**这两类 retest 卡发出时，同一重测周期内那次 `isp.speed_test.result` 的独立推送被抑制**（仍记日志不外推），测速摘要折进 retest 卡，使「测速 + 切换决策」合为一条通知；`substore.sub_fetch.failed` → 标题 `🔴 订阅拉取失败`，正文 = 失败订阅逐行（含是否机场 + 原因）+ 共 N/M 条失败；未登记的事件 → 标题 = `"{SHOUTRRR_TITLE_PREFIX} {event}"`，正文 = 每字段一行 `key: value`（剔除空值与 `event` 键、`ts` 转可读） |
+| **`notify=false` 静默** | **边沿触发告警**：仅 `isp.speed_test.result` 事件，payload 带 `notify: false` 时记日志 `speed_test result not notable — skipping push (notify=false)` 并直接 return，**不外推也不进 dry-run**。只有「线路成员变化 / 选定 tag 变化 / 评级档跳变 / 首次运行」才置 `notify=true`，纯带宽抖动保持静默。**缺 `notify` 键 → 照推**（向后兼容旧 payload） |
 | **多 URL 发送** | **同一事件的多条 URL 顺序发送**（`for url in urls`），每条独立 `try` + 10s 超时；单条失败 `continue`，不影响后续 |
 | **多事件并发** | `ThreadingHTTPServer`——不同事件各开线程处理，互不阻塞 |
 | **token 安全** | 日志只记 URL 的 **scheme**（`telegram`/`discord`），从不打印完整 URL |
@@ -282,9 +285,14 @@ services:
 | `SHOUTRRR_URLS` | 否（空 = dry-run） | `""` | 分号分隔的 shoutrrr URL 列表 | `telegram://...;discord://...` |
 | `SHOUTRRR_FORWARDER_PORT` | 否 | `18085` | forwarder 监听端口（仅 127.0.0.1） | `18085` |
 | `SHOUTRRR_TITLE_PREFIX` | 否 | `[sb-xray]` | 推送消息的标题前缀 | `[sb-xray:jp01]` |
-| `ENABLE_SHOUTRRR` | 否 | `true` | 低内存部署（≤ 512MB）设 `false`，trim 阶段整块移除 forwarder（省约 30MB RSS） | `true` / `false` |
+| `ENABLE_SHOUTRRR` | 否 | `true` | 低内存部署（≤ 512MB）设 `false`，trim 阶段整块移除 forwarder（单项约回收 ~20–30MB 常驻 RSS，量级见 §10.3） | `true` / `false` |
+| `ISP_EVENTS_ENABLED` | 否 | `true` | **生产者侧总开关**：容器内 `events.py` 的 `emit_event()` 在此为 `false` 时直接 return，**不发任何容器内事件**（ISP 测速 / 重测 / 订阅拉取等）。与 `ENABLE_SHOUTRRR`（消费者侧整块移除 forwarder）正交 | `true` / `false` |
 
 > `readme.md` / `CHANGELOG.md` / `docker-compose.yml` 里的默认值均应与本表一致，分歧以本表为准。
+
+> 📘 **两个开关的分工**（都默认 `true`，按需各自关闭）：
+> - `ENABLE_SHOUTRRR=false` —— **消费者侧**。trim 阶段整块移除 forwarder 进程，Xray webhook 仍会 POST 但本地端口连不上（§10.3）。省内存用。
+> - `ISP_EVENTS_ENABLED=false` —— **生产者侧**。让容器内 `events.py` 不再发起 ISP 类事件（测速 / 重测 / 订阅），forwarder 仍在跑、Xray 的 4 个 ban 事件不受影响（它们走 Xray webhook，不经 `events.py`）。只想静音 ISP 噪声时用。
 
 ### 4.2 `SHOUTRRR_TITLE_PREFIX` 里的 shell 变量展开
 
@@ -557,7 +565,7 @@ docker exec sb-xray jq '.routing.rules[] | select(.webhook) | {ruleTag, dedup: .
 
 ### 10.3 低内存节点关闭 forwarder
 
-🔧 VPS RAM ≤ 512MB 时建议关闭（省约 30MB RSS）：
+🔧 VPS RAM ≤ 512MB 时建议关闭。注意量级归属：`config_builder.py` 注释的 `~220–320MB` 是**全部降载 flag 合计**的回收量；仅关 forwarder 单项约回收 `~20–30MB`（各 flag 单项量级见 [09. 特性开关 §11](./09-feature-flags-and-capabilities.md) 速查表）：
 
 ```yaml
 - ENABLE_SHOUTRRR=false
@@ -617,3 +625,4 @@ docker exec sb-xray jq '.routing.rules[] | select(.webhook) | {ruleTag, dedup: .
   - supervisord program：`templates/supervisord/daemon.ini` 的 `[program:shoutrrr-forwarder]`
   - 单测：`tests/test_shoutrrr.py`
 - **相关文档**：[05. VLESS Reverse Proxy](./05-reverse-proxy-guide.md) · [08. Xray Reverse Bridge 回国架构](./08-xray-reverse-bridge.md)（`ban_geoip_cn` 随回国模式消失的来龙去脉）
+- **上游组件出处**：Xray-core [XTLS/Xray-core](https://github.com/XTLS/Xray-core) · shoutrrr [containrrr/shoutrrr](https://github.com/containrrr/shoutrrr) · Sub-Store [sub-store-org/Sub-Store](https://github.com/sub-store-org/Sub-Store) · geosite/geoip 规则数据 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat)

@@ -64,7 +64,7 @@ config mixin 'mixin'
 	option rule_provider '0'
 	option mixin_file_content '0'
 	option ui_path 'ui'
-	option api_secret '831926'
+	option api_secret '<api_secret>'
 	option unify_delay '1'
 	option tcp_concurrent '1'
 	option tcp_keep_alive_idle '600'
@@ -133,7 +133,7 @@ config lan_access_control
 config authentication
 	option enabled '1'
 	option username 'nikki'
-	option password '831926'
+	option password '<password>'
 
 config hosts
 	option enabled '0'

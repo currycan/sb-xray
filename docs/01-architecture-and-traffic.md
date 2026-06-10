@@ -1,6 +1,6 @@
 # 01. 系统架构与全流量链路引擎
 
-> 本文档深入剖析 SB-Xray 的核心架构设计——从 Nginx 边界网关的流量拦截与分发，到双引擎内核的协议处理，再到容器启动的 15 段分层初始化流水线——进行全景式解读。
+> 本文档深入剖析 SB-Xray 的核心架构设计——从 Nginx 边界网关的流量拦截与分发，到双引擎内核的协议处理，再到容器启动的 17 段分层初始化流水线与 supervisord 进程拓扑——进行全景式解读。
 
 ---
 
@@ -11,8 +11,9 @@
 3. [内部通信链路：Unix Domain Socket 清单](#3-内部通信链路unix-domain-socket-清单)
 4. [架构方案对比与选型分析](#4-架构方案对比与选型分析)
 5. [Entrypoint 守护进程生命周期](#5-entrypoint-守护进程生命周期)
-6. [出站路由与多 ISP 链式落地引擎](#6-出站路由与多-isp-链式落地引擎)
-7. [参考文献](#7-参考文献)
+6. [supervisord 进程拓扑](#6-supervisord-进程拓扑)
+7. [出站路由与多 ISP 链式落地引擎](#7-出站路由与多-isp-链式落地引擎)
+8. [参考文献](#8-参考文献)
 
 ---
 
@@ -24,7 +25,7 @@
 
 ### 为什么选择 Nginx 作为守门人？
 
-如果由 Xray 独占 443 端口（Xray 前置），虽然配置极简，但其只能作为单一的 Reality 代理服务器。一旦您需要同时运行 **多个可视化 Web 面板 (X-UI/S-UI)**、提供 **文件网盘 (Dufs)**，或是处理来自 **Cloudflare 的 CDN 备用流量**，Xray 简单的 `fallbacks` 机制将捉襟见肘。
+如果由 Xray 独占 443 端口（Xray 前置），虽然配置极简，但其只能作为单一的 Reality 代理服务器。一旦您需要同时运行 **可视化 Web 面板 (X-UI)**、提供 **文件网盘 (Dufs)**，或是处理来自 **Cloudflare 的 CDN 备用流量**，Xray 简单的 `fallbacks` 机制将捉襟见肘。
 
 **SB-Xray 的 Nginx 前置三大核心优势：**
 
@@ -112,14 +113,12 @@ flowchart TD
         AppVMess["Xray VMess 协议"]:::xray
         AppWeb["伪装站点 / 404"]:::app
         AppXUI["X-UI 管理面板"]:::app
-        AppSUI["S-UI 管理面板<br/>(已移除)"]:::app
         AppFiles["Dufs 文件服务"]:::app
     end
 
     NginxWeb -- "/xhttp (gRPC)" --> AppXHTTP
     NginxWeb -- "/vmess (WS)" --> AppVMess
     NginxWeb -- "/xui" --> AppXUI
-    NginxWeb -- "/sui" --> AppSUI
     NginxWeb -- "/myfiles" --> AppFiles
     NginxWeb -- "其他路径" --> AppWeb
 ```
@@ -192,10 +191,20 @@ flowchart TD
     NginxWeb -- "/xhttp (gRPC)" --> Xhttp["Xray XHTTP 安全隧道"]:::xray
     NginxWeb -- "/vmess (WebSocket)" --> VMess["Xray VMess CDN 兼容节点"]:::xray
     NginxWeb -- "/xui" --> XUI["X-UI 协议管理面板"]:::app
-    NginxWeb -- "/sui" --> SUI["S-UI 监控面板<br/>(已移除)"]:::app
     NginxWeb -- "/myfiles" --> Dufs["Dufs 私密文件网盘"]:::app
     NginxWeb -- "其他路径" --> FakeWeb["伪装站点 / 404"]:::app
 ```
+
+🔧 上图为主干路径示意。Nginx Web（`templates/nginx/http.conf`）实际还承载以下业务 location，按目标拆分：
+
+| location 路径 | 后端 | 说明 |
+|:---|:---|:---|
+| `/${XRAY_URL_PATH}-xhttp/` | `grpc_pass unix:/dev/shm/udsxhttp.sock` | XHTTP 主轨（mlkem 加密） |
+| `/${XRAY_URL_PATH}-xhttp-compat/` | `grpc_pass unix:/dev/shm/udsxhttp-compat.sock` | XHTTP 兼容轨（`decryption:none`，供 mihomo / sing-box 客户端） |
+| `/${XRAY_URL_PATH}-vmessws` | `proxy_pass http://unix:/dev/shm/udsvmessws.sock` | VMess+WS CDN 兼容节点 |
+| `/supervisor/` | `proxy_pass http://unix:/var/run/supervisor.sock:/` | supervisord Web 管理界面（进程状态 / 日志） |
+| `${SUB_STORE_FRONTEND_BACKEND_PATH}/` | `proxy_pass http://127.0.0.1:${SUB_STORE_BACKEND_API_PORT}/` | Sub-Store 后端 API |
+| `${SUB_STORE_WEBBASEPATH}` 等前端路由 | `proxy_pass http://127.0.0.1:${SUB_STORE_FRONTEND_PORT}` | Sub-Store 前端（`my`/`subs`/`preview`/`edit`/`sync` 等） |
 
 ### 2.5 四大场景详细流程
 
@@ -249,6 +258,7 @@ flowchart TD
 | **`cdnh2.sock`** | Nginx Stream → Nginx Web | TCP / SSL 加密 | **CDN/主站入口**。Nginx 内部 SSL 监听器输送流量，在此解密 HTTPS 请求。 |
 | **`nginx.sock`** | Reality Fallback → Nginx Web | HTTP / 明文 | **Reality 回落通道**。Reality 解密后发现不是代理流量，通过此通道把明文请求"退货"给 Nginx。 |
 | **`udsxhttp.sock`** | Nginx Web → Xray Xhttp | HTTP/2 gRPC / 明文 | **Xhttp 代理通道**。Nginx 将 Xhttp 请求通过 gRPC 协议转发给 Xray 入站接口。 |
+| **`udsxhttp-compat.sock`** | Nginx Web → Xray Xhttp（兼容轨） | HTTP/2 gRPC / 明文 | **Xhttp 兼容通道**。`decryption:none` 入站，服务不支持 VLESS mlkem 加密的客户端（mihomo / sing-box），对应 `/${XRAY_URL_PATH}-xhttp-compat/` 路径（`templates/nginx/http.conf`）。 |
 | **`udsvmessws.sock`** | Nginx Web → Xray VMess | WebSocket / 明文 | **VMess 代理通道**。Nginx 将 VMess WebSocket 请求转发给 Xray 入站接口。 |
 
 ---
@@ -303,7 +313,7 @@ flowchart LR
 | 特性 | Xray 前置 (方案 A) | Nginx 前置 (本项目) | 本项目选择理由 |
 |:---|:---|:---|:---|
 | **性能** | ⭐⭐⭐⭐⭐ 极致 | ⭐⭐⭐⭐⭐ TCP层分流损耗忽略 | 两者性能差距肉眼不可见 |
-| **Web 能力** | ⭐⭐ 仅能简单回落 | ⭐⭐⭐⭐⭐ 路由/压缩/缓存/重写 | 需运行 X-UI、S-UI、Dufs 等多个 Web 服务 |
+| **Web 能力** | ⭐⭐ 仅能简单回落 | ⭐⭐⭐⭐⭐ 路由/压缩/缓存/重写 | 需运行 X-UI、Dufs 等多个 Web 服务 |
 | **CDN 支持** | ⭐⭐⭐ 配置繁琐 | ⭐⭐⭐⭐⭐ 原生支持 | 需完美处理 CDN 回源 IP 和 Headers |
 | **隐蔽性** | ⭐⭐⭐⭐⭐ 原生 Reality | ⭐⭐⭐⭐⭐ 透明分流 | Nginx Stream 不解密 Reality 流量，隐蔽性等同 |
 | **维护性** | ⭐⭐⭐ 单点故障 | ⭐⭐⭐⭐ 模块解耦 | Nginx 崩溃不影响 Sing-box；Xray 崩溃 Nginx 仍可展示 Web |
@@ -316,39 +326,50 @@ flowchart LR
 
 容器启动或 `docker compose restart` 时，Python 脚本 `scripts/entrypoint.py` 作为 PID 1（由 `dumb-init` 包裹）按固定顺序跑完启动流水线，最后用 `os.execvp` 把进程交给 `supervisord`，由后者守护 xray / sing-box / nginx 等所有常驻服务。
 
-Entrypoint 有三个子命令:
+Entrypoint 注册了 9 个子命令（`scripts/entrypoint.py:113-168`）：`run` 是容器启动入口，其余八个分别供 `docker exec`、cron 与 supervisord 调用。
 
 | 子命令 | 用途 |
 |---|---|
-| `run`（默认） | 容器启动时执行完整流水线,最终接管 supervisord |
-| `show` | 打印订阅链接 banner + TLS 诊断,不改任何文件 |
+| `run`（默认） | 容器启动时执行完整 17 段流水线，最终 `os.execvp` 接管 supervisord |
+| `show` | 打印订阅链接 banner + TLS 诊断，不改任何文件 |
 | `trim` | 按 `ENABLE_*` 开关对已渲染的 `daemon.ini` 做幂等过滤 |
+| `geo-update` | cron 入口：强制刷新 GeoIP/GeoSite 规则库并触发 xray reload |
+| `shoutrrr-forward` | 常驻：事件总线 HTTP 接收器，由 supervisord 守护（见 [06](./06-event-bus-shoutrrr.md)） |
+| `isp-retest` | cron 入口：重跑 ISP 测速，组成变化时热重载 balancer |
+| `substore-check` | cron 入口：产出所有远端 Sub-Store 订阅，拉取失败时告警 |
+| `xray-run` | supervisord 入口：清理 `/dev/shm` 中 stale UDS socket 后 `exec xray`（见 §6） |
+| `xray-exit-listener` | supervisord eventlistener：记录 xray 异常退出明细（见 §6） |
 
-流水线分 15 段,每段一个明确目标,可通过 `--skip-stage <name>` 单独跳过用于排障:
+`run` 流水线分 17 段（`TOTAL_STAGES=17`，`scripts/entrypoint.py`），每段有唯一 machine name，可通过 `--skip-stage <name>` 用 machine name 单独跳过排障。**本文档全篇段号统一以代码 `stage_table`（`scripts/entrypoint.py:584`）的 machine name 为唯一坐标系**：
 
-| # | 阶段 | 作用 |
-|---:|:---|:---|
-| 1 | 加载环境 | 读取 `ENV_FILE` + `STATUS_FILE` + `SECRET_FILE` 到 `os.environ` |
-| 2 | 基础网络探测 | 检测 IPv4/IPv6、GeoIP、IP_TYPE、受限地区标志 |
-| 3 | ISP 测速选路 | 逐个 ISP 节点带宽实测（v2 流式采样器：warmup 丢弃 + 时间窗 + 首字节起算 + 结构化诊断），按 Mbps 排序写入 `_ISP_SPEEDS_JSON`；每 tag 诊断写入 `_ISP_SPEEDS_DIAG_JSON`（见 [§2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)） |
-| 4 | 流媒体/AI 可达性探针 | 试探 Netflix / OpenAI / Claude / Gemini 等服务的直连状态 |
-| 5 | 密钥对生成 | VLESS UUID、Reality / MLKEM768 密钥、订阅 Token 首次生成并持久化 |
-| 6 | 出站 JSON 装配 | 把 ISP 节点渲染成 xray / sing-box 的 SOCKS5 出站,生成 `isp-auto` balancer |
-| 7 | TLS 证书 | 调 `acme.sh` 申请 / 续签通配证书(Let's Encrypt / ZeroSSL / Google) |
-| 8 | DH 参数 | 生成或复用 Nginx `dhparam.pem`(首次 ~30s,其后秒级) |
-| 9 | GeoIP / GeoSite | 按 TTL 更新 `/geo` 下的规则库,dual-symlink 到 xray + sing-box 工作目录 |
-| 10 | 模板渲染 | 把 `templates/` 下的 xray / sing-box / nginx / supervisord 模板 envsubst 到 `${WORKDIR}` |
-| 11 | 程序裁剪 | 按 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤(小内存节点降载) |
-| 12 | X-UI / S-UI | 面板数据库初始化,仅在对应 `ENABLE_*` 为 true 时执行 |
-| 13 | Nginx htpasswd | 写订阅端点的 HTTP Basic Auth 凭据 |
-| 14 | Cron 安装 | 注册 `geo-update`(每日 03:00) + `isp-retest`(每 `ISP_RETEST_INTERVAL_HOURS`) |
-| 15 | Supervisord 接管 | `os.execvp("supervisord", ...)` — Python 进程退出,supervisord 继续守护 |
+| # | machine name | 阶段 | 作用 |
+|---:|:---|:---|:---|
+| 1 | `init` | 初始化目录与文件 | 建立 `${WORKDIR}` 下工作目录与文件骨架 |
+| 2 | `secrets` | 解密远端密钥库 + 加载密钥 | 拉取并解密远端密钥库，加载到 `os.environ` |
+| 3 | `bootstrap` | 加载持久化状态 | 读取 `ENV_FILE` + `STATUS_FILE` 持久化缓存 |
+| 4 | `probe` | 基础环境变量初始化 | 检测 IPv4/IPv6、GeoIP、IP_TYPE、受限地区标志；VLESS UUID / 订阅 Token 首次生成持久化 |
+| 5 | `speed` | ISP 测速与选路 | 逐 ISP 节点带宽实测（v2 流式采样器：warmup 丢弃 + 时间窗 + 首字节起算 + 结构化诊断），按 Mbps 排序写入 `_ISP_SPEEDS_JSON`；每 tag 诊断写入 `_ISP_SPEEDS_DIAG_JSON`（见 [§2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)） |
+| 6 | `media` | 流媒体/AI 可达性检测 | 试探 Netflix / OpenAI / Claude / Gemini 等服务的直连状态，计算 `*_OUT` 策略 |
+| 7 | `keys` | 生成加密密钥对 | Reality / MLKEM768 密钥对首次生成并持久化到密钥库 |
+| 8 | `outbounds` | 生成客户端/服务端配置片段 | 把 ISP 节点渲染成 xray / sing-box 的 SOCKS5 出站，生成 `isp-auto` balancer |
+| 9 | `cert` | TLS 证书申请/续签 | 调 `acme.sh` 申请 / 续签通配证书（Let's Encrypt / ZeroSSL / Google） |
+| 10 | `dhparam` | 生成 DH 参数 | 生成或复用 Nginx `dhparam.pem`（首次 ~30s，其后秒级） |
+| 11 | `geoip` | 更新 GeoIP/GeoSite 数据库 | 按 TTL 更新 `/geo` 下规则库，dual-symlink 到 xray + sing-box 工作目录 |
+| 12 | `config` | 渲染配置模板 | 把 `templates/` 下 xray / sing-box / nginx / supervisord 模板 envsubst 到 `${WORKDIR}` |
+| 13 | `providers` | 导出 Proxy Providers | 导出代理订阅 Provider 文件 |
+| 14 | `trim` | 精简 `ENABLE_*` 开关 | 按 `ENABLE_*` 对 `daemon.ini` 做幂等 in-place 过滤（小内存节点降载） |
+| 15 | `panels` | 初始化 X-UI 管理面板 | 面板数据库初始化，仅在对应 `ENABLE_*` 为 true 时执行 |
+| 16 | `nginx_auth` | 配置 Nginx Basic Auth | 写订阅端点的 HTTP Basic Auth 凭据 |
+| 16 | `cron` | 安装 cron 任务 | 注册 `geo-update`（每日 03:00）+ `isp-retest`（每 `ISP_RETEST_INTERVAL_HOURS`）等 |
+| 17 | `show` | 打印订阅链接 banner | best-effort 打印订阅链接 banner |
 
-流水线结束后,所有 daemon 由 supervisord 管理,重启策略、日志重定向、退出码处理都在 `daemon.ini` 中声明。
+> **坐标系说明**：`stage_table` 中 `nginx_auth` 与 `cron` 共享显示序号 16（`scripts/entrypoint.py:606-607`），故 17 段对应 17 个 machine name 但显示序号到 16 + 末段 `show`。跳过用 machine name（如 `--skip-stage cron`），而非显示序号。
+
+流水线结束后由 `show` 段 best-effort 打印 banner，随即 `os.execvp("supervisord", ...)` 把 Python 进程替换为 supervisord，由后者守护 xray / sing-box / nginx 等所有常驻服务（拓扑见 §6）。重启策略、日志重定向、退出码处理都在 `daemon.ini` 中声明。
 
 ### 5.1 整体生命周期流转图
 
-下图把上节 15 段流水线按**职能**聚合成 5 个阶段,展示从容器冷启动到 supervisord 接管的完整路径,以及唯一一处可以"秒速开机"的缓存短路。
+下图把上节 17 段流水线按**职能**聚合成 5 个阶段,展示从容器冷启动到 supervisord 接管的完整路径,以及唯一一处可以"秒速开机"的缓存短路。
 
 ```mermaid
 flowchart TB
@@ -391,7 +412,7 @@ flowchart TB
         R1["出站 JSON 装配<br/>isp-auto / 按服务分桶 balancer"]:::process
         R2["模板渲染<br/>xray · sing-box · nginx · supervisord"]:::process
         R3["按 ENABLE_* 开关裁剪 daemon.ini<br/>关闭小内存节点的可选子进程"]:::process
-        R4["X-UI / S-UI 数据库初始化<br/>Nginx htpasswd 凭据"]:::process
+        R4["X-UI 数据库初始化<br/>Nginx htpasswd 凭据"]:::process
         R5["Cron 安装<br/>geo-update (03:00) · isp-retest (每 6h)"]:::process
         R1 --> R2 --> R3 --> R4 --> R5
     end
@@ -403,7 +424,7 @@ flowchart TB
         F1 --> F2
     end
 
-    Daemons[["xray · sing-box · nginx · cron · X-UI / S-UI / shoutrrr-forwarder<br/>(supervisord 守护,策略在 daemon.ini 中声明)"]]:::external
+    Daemons[["xray · sing-box · nginx · cron · X-UI · shoutrrr-forwarder<br/>(supervisord 守护,策略在 daemon.ini 中声明)"]]:::external
 
     Start --> P1 --> P2
     S2 --> P3
@@ -424,14 +445,16 @@ flowchart TB
 
 ### 5.2 各层核心功能透视
 
-#### §1-6 基础工具层
+> 本节按**职能层**而非流水线段号聚合（一个职能层往往横跨多个 stage）。段号引用统一沿用 §5 的 machine name 坐标系。
+
+#### 基础工具层（贯穿 `init` / `bootstrap` / `probe`）
 
 * **定位**：纯粹被动调用的函数合集，所有上层逻辑的基础设施。
 * **代表组件**：
-  * `ensure_var`（§6）：三分支缓存系统——① 变量已在当前 shell 则直接返回；② 已在持久化文件 `/.env/sb-xray` 则读取并 export 到 shell；③ 两者均无则执行计算、export 后写文件。
-  * HTTP 探测基建（§3）：带伪装 UA、短超时的探测器，两种形态——**HEAD 取状态码**（连通性 / 测速），以及 **读正文 GET**（B 类流媒体解锁判定：读页面正文做内容签名分类，因为 HEAD 200 可能藏着封锁 / 验证页）。A 类账号敏感服务不探测。
+  * `ensure_var`：三分支缓存系统——① 变量已在当前 shell 则直接返回；② 已在持久化文件 `/.env/sb-xray` 则读取并 export 到 shell；③ 两者均无则执行计算、export 后写文件。
+  * HTTP 探测基建：带伪装 UA、短超时的探测器，两种形态——**HEAD 取状态码**（连通性 / 测速），以及 **读正文 GET**（B 类流媒体解锁判定：读页面正文做内容签名分类，因为 HEAD 200 可能藏着封锁 / 验证页）。A 类账号敏感服务不探测。
 
-#### §7-9 网络探测与状态缓存层
+#### 网络探测与状态缓存层（`probe` / `speed` / `media`）
 
 这是整个系统的**智能短路核心**，决定了出海方向与极致的容器重启效能。
 
@@ -446,12 +469,12 @@ flowchart TB
 
 一旦代码侦测到挂载的 `status` 文件内已经存留有效的探针成绩记录，系统直接触发**短路截断**——**抛弃耗时的并发跑分，0.5 秒内完成组件渲染并极速上线**。这避免了容器每次重启都去调用海外 API 测速（导致重启极慢且易被 API 封禁）。
 
-#### §12 证书管理层
+#### 证书管理层（`cert`）
 
 * 与 ACME CA 层接轨，负责域名申请签注和私钥分发。
 * 引入了 `openssl x509 -checkend 604800` 安全检查，仅对剩余寿命不足 7 天的证书发起强制轮换流，降低被 CA 封禁 IP 的风险。
 
-#### §13-15 配置渲染与流程启动层
+#### 配置渲染与流程启动层（`outbounds` / `config` / `trim` / `show`）
 
 * **绝不测速发请求**：该阶段只读内存资源集
 * **客户端配置**：遍历 IP 环境变量构建服务端出站配置
@@ -512,11 +535,77 @@ flowchart TD
 
 ---
 
-## 6. 出站路由与多 ISP 链式落地引擎
+## 6. supervisord 进程拓扑
+
+流水线 `show` 段后，`os.execvp("supervisord", ...)` 让 supervisord 成为 PID 1，按 `templates/supervisord/daemon.ini` 声明的 `priority` 顺序拉起并守护全部常驻进程。本节按五段式说明这套进程拓扑。
+
+### 6.1 做什么
+
+📘 **一句话**：supervisord 是容器内的「进程管家」——它按优先级启动 xray / sing-box / nginx 等常驻服务，崩了自动重启，并把每个进程的 stdout/stderr 汇到统一日志。其中两个进程是为生产稳定性专门加的运维包装：`xray-run` 启动器与 `xray_exit_listener` 崩溃诊断器。
+
+```mermaid
+flowchart TD
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef sing     fill:#55efc4,stroke:#00b894,stroke-width:2px,color:#333
+    classDef gateway  fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef app      fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
+
+    Sup(["supervisord (PID 1)"]):::entry
+
+    Sup -- "priority 5" --> XUI["x-ui 管理面板"]:::app
+    Sup -- "priority 10" --> Cron["cron (crond -f)"]:::process
+    Sup -- "priority 15" --> Dufs["dufs 文件服务"]:::app
+    Sup -- "priority 15" --> HMeta["http-meta (Sub-Store)"]:::app
+    Sup -- "priority 15" --> SubStore["sub-store (Sub-Store)"]:::app
+    Sup -- "priority 18" --> Shoutrrr["shoutrrr-forwarder 事件总线"]:::process
+    Sup -- "priority 20" --> XrayRun["xray-run 启动器"]:::xray
+    Sup -- "priority 20" --> SingBox["sing-box 内核"]:::sing
+    Sup -- "priority 25" --> Nginx["nginx 网关"]:::gateway
+
+    XrayRun -- "清 stale UDS 后 exec" --> Xray(("xray 内核")):::xray
+    Listener["xray_exit_listener<br/>eventlistener"]:::process -. "订阅 PROCESS_STATE_EXITED" .-> Xray
+```
+
+### 6.2 进程清单
+
+🔧 进程按 `priority` 升序启动（数字越小越先起），全部 `autorestart=true`。清单与 `daemon.ini` 一一对应：
+
+| 进程 | priority | command | 角色 |
+|:---|:---:|:---|:---|
+| `x-ui` | 5 | `x-ui` | 协议管理面板（`ENABLE_XUI` 控制） |
+| `cron` | 10 | `/usr/sbin/crond -f` | 周期任务（geo-update / isp-retest / substore-check） |
+| `dufs` | 15 | `dufs -c …/conf.yml …` | 私密文件网盘 |
+| `http-meta` | 15 | `node /sub-store/http-meta.bundle.js` | Sub-Store 元数据后端 |
+| `sub-store` | 15 | `node /sub-store/sub-store.bundle.js` | Sub-Store 订阅前后端 |
+| `shoutrrr-forwarder` | 18 | `python3 /scripts/entrypoint.py shoutrrr-forward` | 事件总线常驻接收器 |
+| `xray` | 20 | `python3 /scripts/entrypoint.py xray-run` | xray 内核（经 `xray-run` 启动器） |
+| `xray_exit_listener` | — | `python3 /scripts/entrypoint.py xray-exit-listener` | eventlistener：xray 崩溃诊断 |
+| `sing-box` | 20 | `sing-box run -C …/sing-box/` | sing-box 内核（TUIC / AnyTLS） |
+| `nginx` | 25 | `/usr/sbin/nginx -g "daemon off;"` | 边界网关（最后起，依赖上游 socket 就绪） |
+
+### 6.3 xray-run：清 stale UDS 后启动 xray
+
+🔬 xray 不由 supervisord 直接 `exec`，而是经 `python3 /scripts/entrypoint.py xray-run` 包装（`daemon.ini:89-101`）。该启动器先删除 `/dev/shm/uds*.sock` 残留再 `os.execvp("xray", …)`（`scripts/sb_xray/stages/xray_run.py:42-51`）。
+
+📘 **为什么需要它**：xray 把入站监听（XHTTP / Reality / VMess+WS）绑在 `/dev/shm` 下的 UDS。若 xray 崩溃，旧 `uds*.sock` 文件残留；supervisord `autorestart` 拉起的新进程 `bind` 时撞上 `EADDRINUSE`，于是陷入「起→bind 失败→退→再起」的 autorestart 死循环，xray 入站永远起不来（`scripts/sb_xray/stages/xray_run.py:1-9`）。`xray-run` 在每次（含崩溃后自动重启）启动前清场，根除该生产故障。清理动作会打印日志 `xray-run 清理 stale UDS socket: …`（`scripts/sb_xray/stages/xray_run.py:50`）。
+
+### 6.4 xray_exit_listener：崩溃诊断 eventlistener
+
+🔬 `[eventlistener:xray_exit_listener]`（`daemon.ini:103`）订阅 supervisord 的 `PROCESS_STATE_EXITED` 事件，运行 `python3 /scripts/entrypoint.py xray-exit-listener`（`scripts/entrypoint.py:165-167`）。xray 进程一旦异常退出，它记录退出码与上一状态，便于定位崩溃根因（如 `SIGKILL` 指向 OOM 嫌疑）。它与 `xray-run` 配对：前者清场让 xray 能重启，后者留痕让人能查清为什么崩。运维侧的崩溃排查方法（`[xray-exit]` 日志字段解读、OOM 场景）见 [04. 运维 §6.6](./04-ops-and-troubleshooting.md)。
+
+### 6.5 shoutrrr-forwarder：事件总线常驻
+
+🔧 `shoutrrr-forwarder`（`daemon.ini:74-87`）常驻运行事件总线 HTTP 接收器：接收 xray `rules.webhook` 推送的结构化事件，经 shoutrrr CLI 转发到 Telegram / Discord / Slack 等。`SHOUTRRR_URLS` 留空即 dry-run（仅日志、不外发）。机制与事件清单见 [06. 事件总线](./06-event-bus-shoutrrr.md)。
+
+---
+
+## 7. 出站路由与多 ISP 链式落地引擎
 
 为解决 VPS 机房 IP 无法观看 Netflix、Disney+ 及无法正常访问 ChatGPT 等服务的痛点，后端引擎配置了针对流媒体与海外 AI 的全自动链式跳板引擎，并内置**运行时健康检测与自动回退**机制。
 
-### 6.1 出站路由决策
+### 7.1 出站路由决策
 
 ```mermaid
 flowchart TD
@@ -549,7 +638,7 @@ flowchart TD
 
 > **全程透明**：所有的解锁动作在服务器端默默完成，客户端无需任何繁琐的前置 (Dialer) 设置。
 
-### 6.3 ISP 健康检测工作机制
+### 7.3 ISP 健康检测工作机制
 
 容器启动时对每个 ISP 节点做一次带宽实测,把所有节点按速度降序全部注入 xray / sing-box 的出站列表,并生成一个 `isp-auto` 健康选优出站。服务路由(Netflix / OpenAI / Disney 等)指向 `isp-auto`,由内核在运行时持续探测、自动选最低延迟节点、ISP 故障时按策略回退。
 
@@ -599,7 +688,7 @@ flowchart LR
 
 由 `build_xray_service_rules()` 在 `analyze_ai_routing_env()` 之后调用，遍历所有 `*_OUT` 变量动态拼接注入 `${XRAY_SERVICE_RULES}` 占位符。
 
-### 6.4 完整运行时闭环
+### 7.4 完整运行时闭环
 
 `isp-auto` 是一个「冷启动缓存 → 速度测量 → 配置渲染 → 内核健康选优 → 周期重测」的完整闭环,操作员通过约十二个 env flag 控制节奏、可观测性与失败语义。
 
@@ -680,9 +769,20 @@ flowchart TB
 
 ---
 
-## 7. 参考文献
+## 8. 参考文献
 
 * **架构参考**: [XTLS/Xray-core#4118 — Reality 端口共存模型](https://github.com/XTLS/Xray-core/discussions/4118)
 * **XHTTP 标准探讨**: [XTLS/Xray-core#4113](https://github.com/XTLS/Xray-core/discussions/4113)
 * **Unix Domain Socket 原理**: POSIX.1-2001 `unix(7)` 规范 — 进程间通信 (IPC) 的高效数据交换机制
 * **Nginx Stream 模块**: [Nginx ngx_stream_ssl_preread_module](https://nginx.org/en/docs/stream/ngx_stream_ssl_preread_module.html) — 在不解密 TLS 的前提下提取 SNI 信息
+
+### 上游组件出处
+
+本文涉及的核心与客户端：
+
+- Sing-box — <https://github.com/SagerNet/sing-box>
+- Mihomo — <https://github.com/MetaCubeX/mihomo>
+- Sub-Store — <https://github.com/sub-store-org/Sub-Store>
+- Dufs — <https://github.com/sigoden/dufs>
+- acme.sh — <https://github.com/acmesh-official/acme.sh>
+- geosite / geoip 规则数据 — <https://github.com/MetaCubeX/meta-rules-dat>

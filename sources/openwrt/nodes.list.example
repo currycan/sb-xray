@@ -13,8 +13,8 @@
 # 未列入热备的即冷备：平时不拨、仅靠 socks5 腿回国，故障时 cn-bridge up <名> 顶上。
 #
 # 名        域名                       token
-# jp        jp.ansandy.com             <jp_token>
-# dc99      dc99.ansandy.com           <dc99_token>
-# dc99-3    dc99-3.ansandy.com         <dc99-3_token>
-# cn2       cn2.ansandy.com            <cn2_token>
-# ...（共 16 台，按需增删）
+# jp        jp.example.com             <jp_token>
+# dc99      dc99.example.com           <dc99_token>
+# dc99-3    dc99-3.example.com         <dc99-3_token>
+# cn2       cn2.example.com            <cn2_token>
+# ...（多台节点，按需增删）

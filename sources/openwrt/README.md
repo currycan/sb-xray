@@ -80,7 +80,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    subgraph pool["VPS 池（16 台配置完全一致，配一次永不改）"]
+    subgraph pool["VPS 池（多台配置完全一致，配一次永不改）"]
         H1["dc99（热备）<br/>双腿：r-tunnel + socks5"]
         H2["jp（热备）<br/>双腿：r-tunnel + socks5"]
         C1["cn2（冷备）<br/>仅 socks5 腿，照样回国"]
@@ -95,10 +95,10 @@ flowchart LR
     style H2 fill:#e8f5e9,stroke:#2e7d32
 ```
 
-- **热备**（`BRIDGE_HOT` 指定，建议 2 台）：常驻拨通，双腿齐全，回国质量最优。
+- **热备**（`BRIDGE_HOT` 指定，建议两个节点）：常驻拨通，双腿齐全，回国质量最优。
 - **冷备**（清单里其余节点）：平时不拨，**仅靠 socks5 腿照样回国**；某热备故障时 `cn-bridge up <名>` 一条命令秒级顶上。
 
-VPS 侧 16 台配置完全一致（都是 `balance`），**配一次永不改**；切换全部在 OpenWrt 侧用 `cn-bridge` 完成。
+VPS 侧多台配置完全一致（都是 `balance`），**配一次永不改**；切换全部在 OpenWrt 侧用 `cn-bridge` 完成。
 
 ### 1.4 设计要点
 
@@ -223,7 +223,7 @@ vi nodes.list
 
 ```sh
 CN_EXIT_MODE=balance
-BRIDGE_HOT=dc99,jp                 # 常驻拨通的热备（建议 2 台）；其余自动为冷备
+BRIDGE_HOT=dc99,jp                 # 常驻拨通的热备（建议两个节点）；其余自动为冷备
 SUBSCRIBE_TOKEN=xxxxxxxx           # 任填一台的 token（各节点 token 已在清单里）
 XRAY_VERSION=26.3.27
 PEER_TS_IP=100.x.y.z               # 任一热备 VPS 的 Tailscale IP
@@ -294,7 +294,7 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | `TS_HOSTNAME` | socks5 / balance | 本机在 Tailscale 网络的名字 |
 | `TS_VERSION` | socks5 / balance | Tailscale 版本号 |
 | `TS_PORT` | 可选 | tailscaled 固定 UDP 端口，默认 41641，别改 |
-| `TS_ADVERTISE_ROUTES` | 可选 | subnet router 通告网段，默认 `172.18.18.0/23`，按实际 lan 改 |
+| `TS_ADVERTISE_ROUTES` | socks5 / balance | subnet router 通告网段，**必填**，填本机实际 lan 网段（如 `192.168.1.0/24`） |
 | `ARCH_OVERRIDE` | 可选 | 留空自动检测；可强制 `arm64` / `amd64` |
 | `RELOAD_OPENCLASH` | 可选 | `1` = 安装末尾自动 reload OpenClash 使规则立即生效，默认 `0` 只提示 |
 | `DOWNLOAD_RETRIES` | 可选 | 下载失败重试次数，默认 3 |

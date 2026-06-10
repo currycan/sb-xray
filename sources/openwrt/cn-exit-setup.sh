@@ -35,7 +35,7 @@ sb-xray OpenWrt 回国出口（CN exit）一键配置。幂等可重跑，按 CN
 
 关键变量（完整说明见 config.env.example）:
   节点清单    NODES_FILE(默认同目录 nodes.list) / BRIDGE_NODES / VPS_DOMAIN+SUBSCRIBE_TOKEN
-  Tailscale   PEER_TS_IP TS_HOSTNAME TS_VERSION TS_PORT(默认 41641) TS_ADVERTISE_ROUTES
+  Tailscale   PEER_TS_IP TS_HOSTNAME TS_VERSION TS_PORT(默认 41641) TS_ADVERTISE_ROUTES(必填,本机 lan 网段)
   reverse     XRAY_VERSION BRIDGE_HOT；监控 ALERT_TG_TOKEN ALERT_TG_CHAT
   其他        RELOAD_OPENCLASH=1（完成后自动重启 OpenClash）ARCH_OVERRIDE=arm64|amd64
 
@@ -129,7 +129,7 @@ load_config() {
     # CN_EXIT_MODE 未设默认 balance（两套都装，与历史 install.sh 行为一致，不破坏既有部署）
     CN_EXIT_MODE="${CN_EXIT_MODE:-balance}"
     TS_PORT="${TS_PORT:-41641}"
-    TS_ADVERTISE_ROUTES="${TS_ADVERTISE_ROUTES:-172.18.18.0/23}"
+    # TS_ADVERTISE_ROUTES 无默认值：lan 网段因部署而异，必须显式提供（validate_config 校验）
     RELOAD_OPENCLASH="${RELOAD_OPENCLASH:-0}"
     DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
     case "$CN_EXIT_MODE" in
@@ -150,9 +150,9 @@ validate_config() {
     if [ ! -f "$_nsrc" ] && [ -z "$BRIDGE_NODES" ] && [ -z "$VPS_DOMAIN" ]; then
         die "需提供节点清单文件（NODES_FILE / 同目录 nodes.list）、BRIDGE_NODES 或 VPS_DOMAIN"
     fi
-    # 必填项按模式裁剪：socks5/balance 需 Tailscale 三项；reverse/balance 需 xray 版本
+    # 必填项按模式裁剪：socks5/balance 需 Tailscale 四项；reverse/balance 需 xray 版本
     _req=""
-    mode_uses_tailscale && _req="$_req PEER_TS_IP TS_HOSTNAME TS_VERSION"
+    mode_uses_tailscale && _req="$_req PEER_TS_IP TS_HOSTNAME TS_VERSION TS_ADVERTISE_ROUTES"
     mode_uses_reverse && _req="$_req XRAY_VERSION"
     # 单节点旧用法（无 nodes 文件、无 BRIDGE_NODES）的 reverse/balance 还需
     # SUBSCRIBE_TOKEN；多节点的 token 已随清单每项提供。
