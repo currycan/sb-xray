@@ -201,7 +201,7 @@ def _format_canary_failed(payload: dict, title_prefix: str) -> tuple[str, str]:
     fails = str(payload.get("fails") or "")
     if fails:
         head.append(f"失败项: {fails}")
-    head.append(f"镜像构建: {payload.get('built') or '未知'}")
+    head.append(f"镜像构建: {payload.get('built') or payload.get('image') or '未知'}")
     blocks = ["\n".join(head)]
     runbook = str(payload.get("runbook") or "")
     if runbook:
@@ -212,7 +212,7 @@ def _format_canary_failed(payload: dict, title_prefix: str) -> tuple[str, str]:
 def _format_canary_updated(payload: dict, title_prefix: str) -> tuple[str, str]:
     """watchtower.canary.updated → 自动更新成功且自检通过的中文卡片。"""
     title = f"{title_prefix} ✅ 已自动更新"
-    built = str(payload.get("built") or "未知")
+    built = str(payload.get("built") or payload.get("new") or "未知")
     return title, "\n\n".join([f"镜像构建: {built}", "四项自检全部通过"])
 
 
