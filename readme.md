@@ -37,7 +37,8 @@
     <a href="#-核心企业级特性-enterprise-features">核心特性</a> •
     <a href="#-官方文档全集-documentation">官方文档</a> •
     <a href="#-安装与快速接入-quick-start">快速接入</a> •
-    <a href="#-完整配置指南-configuration">配置指南</a>
+    <a href="#-完整配置指南-configuration">配置指南</a> •
+    <a href="#-目录结构-project-layout">目录结构</a>
   </p>
 </div>
 
@@ -93,28 +94,14 @@ flowchart TD
 
 ## 🌟 核心企业级特性 (Enterprise Features)
 
-### 1. 🚀 智能双核引擎驱动 (Dual-Core Engine)
+每条特性给一句卖点 + 深入文档指针，机制原理在对应 docs 内详述。
 
-- **Xray 核心 (隐蔽主干)**: 主理 Reality 协议与 XTLS-Vision 流控，在提供极高防探测能力的同时，确保高频数据通信（如日常网络代理、AI 接口调用）的绝对稳定。
-- **Sing-box 核心 (竞速加速)**: 专注处理 TUIC、AnyTLS 等 UDP 竞速协议（Hysteria2 由 Xray 原生承载，客户端订阅参数无感），在严重丢包弱网环境下暴力竞速压榨带宽。
+- **🚀 智能双核引擎驱动**：Xray 主理 Reality + XTLS-Vision 隐蔽主干，Sing-box 承载 TUIC / AnyTLS 弱网竞速，双核分工互补。原理见 [01. 架构](./docs/01-architecture-and-traffic.md)，协议手册见 [02. 协议与安全](./docs/02-protocols-and-security.md)。
+- **🛡️ 零信任前置网关**：Nginx 统一接管 443，握手阶段按 SNI 透明分流 Reality / CDN / 管理面板，对外只暴露高纯度 Web 伪装。原理见 [01. 架构](./docs/01-architecture-and-traffic.md)。
+- **🔐 金融级抗量子加密**：XHTTP / VLESS 通道实装 MLKEM768 后量子密码学（NIST FIPS 203），内置 ACME 机器人自动签发并 90 天无感续期泛域名证书。见 [02. 协议与安全](./docs/02-protocols-and-security.md)。
+- **🔀 业务级智能路由分发**：多 ISP SOCKS5 落地按带宽 + RTT 自动选优（`isp-auto`），流媒体 / AI 按服务独立 balancer，`CN_EXIT_MODE=balance` 双腿动态主备回国，内嵌 Sub-Store 在下发前清洗节点。见 [03. 路由与客户端](./docs/03-routing-and-clients.md)、[04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)、[08. Reverse Bridge](./docs/08-xray-reverse-bridge.md)。
 
-### 2. 🛡️ 零信任前置网关 (Zero-Trust Gateway)
-
-- **Nginx SNI 无缝分流**: 整个系统由 Nginx 统一接管 443 标准端口。它在握手阶段解析 SNI，将 Reality 伪装流量透明下发至 Xray，将 CDN 落地流量路由至 VMess，将管理请求分发至后台面板。即使面临主动探测，也只暴露高纯度的 Web 伪装内容。
-
-### 3. 🔐 金融级抗量子加密 (Quantum-Resistant Security)
-
-- **MLKEM 密码学加持**: 紧跟网络安全前沿，在 XHTTP 与 VLESS 通道中率先实装了 MLKEM768 后量子密码学协议（符合 NIST FIPS 203 标准），从容应对未来量子计算机的算力破解威胁。
-- **ACME 自动发证中枢**: 内置全自动证书机器人，仅需配置环境变量，即可自动向 ZeroSSL 或 Google CA 申请泛域名证书，并执行 90 天自动化无感续期。
-
-### 4. 🔀 业务级智能路由分发 (Smart Routing & Distribution)
-
-- **isp-auto 健康选优闭环**: 多 ISP SOCKS5 落地节点自动按带宽排序 + 运行时按 RTT 选最优；探测 URL 默认 Cloudflare 1 MiB 携带带宽信号（而非传统 0 字节 `generate_204`），被限速节点自然下沉；支持 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 按服务独立 balancer；每 6 小时 cron 周期重测，仅当节点组成或排序变化时重启守护进程。
-- **策略驱动 Fallback**: ISP 全部不可达时按 `ISP_FALLBACK_STRATEGY` 回退 —— 默认 `direct`，或 `block` 实现 fail-closed（适合 CN / HK / RU 拒绝静默走直连的场景）。
-- **回国双腿动态主备**: `CN_EXIT_MODE=balance` 把 reverse 隧道（`r-tunnel`）与 Tailscale SOCKS5（`cn-exit`）同挂一个 `leastPing` balancer，observatory 周期探测（默认 30s）、谁延迟低走谁——**没有写死的优先级**，r-tunnel 纯直出天然胜出为「主」、socks5 腿随时候补；任一腿断约一个探测周期内自动切换，两腿全断降级 `direct` 不黑洞，未拨隧道的冷备节点自动 100% 走 socks5 腿。机制详解见 [08. Reverse Bridge §3.2](./docs/08-xray-reverse-bridge.md#32-balance-模式cn_exit_modebalance主备故障转移)。
-- **自动化订阅节点清洗**: 系统内嵌 Sub-Store，在将节点下发给 Clash / Surge / Stash 客户端前自动执行地名标准化、挂载国旗 Emoji、过滤失效节点，提升客户端策略组分流精准度。
-
-> 完整运行时闭环架构图见 [01. 架构 §6.4](./docs/01-architecture-and-traffic.md#64-完整运行时闭环)；十余个可覆盖的 env 开关见 [04. 运维 §2.6](./docs/04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
+> 完整运行时闭环架构图见 [01. 架构 §7.4](./docs/01-architecture-and-traffic.md#74-完整运行时闭环)；全部 env 开关见 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量完整参考)。
 
 ---
 
@@ -202,7 +189,17 @@ docker compose up -d
 
 > Provider 订阅、Hysteria2 / TUIC / AnyTLS 端口覆盖、实验性 feature flag（`ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` / `ENABLE_REVERSE`）等非日常调整项也都在 [04. 运维 §2](./docs/04-ops-and-troubleshooting.md#2-环境变量完整参考) 内列出；海外节点回国出站（`CN_EXIT_MODE` 四档）见 [04. 运维 §2.7](./docs/04-ops-and-troubleshooting.md#27-回国出站cn_exit_mode-家族可选)。
 
-### 目录结构说明
+### 部署细节指针
+
+挂载卷表、Provider 订阅引入、运维命令清单按主题在 docs 内就地详述，门面只留指针：
+
+- **挂载卷与持久化目录**（证书 / 订阅文件 / 面板数据库 / 规则缓存的宿主机映射表）→ [04. 运维 §1.3](./docs/04-ops-and-troubleshooting.md#13-挂载卷与持久化目录)
+- **引入外部机场订阅源（Provider）**（`PROVIDERS` env / `providers.yaml` 文件挂载两种方式 + `super` / `good` 质量标签）→ [03. 路由与客户端 §3.8](./docs/03-routing-and-clients.md#38-引入外部机场订阅源provider)
+- **常用运维命令速查**（启停 / 查看配置 / 按核重启 / 进容器排障）→ [04. 运维 §1.4](./docs/04-ops-and-troubleshooting.md#14-常用运维命令速查)
+
+---
+
+## 🗂️ 目录结构 (Project Layout)
 
 ```
 sb-xray/
@@ -250,69 +247,6 @@ sb-xray/
 ```
 
 > 容器内 `/geo` 目录由 `./geo:/geo` 卷挂载，用于持久化 GeoIP / GeoSite 规则库（避免重启重下 ~100 MB）。
-
-### 挂载卷说明
-
-| 挂载路径          | 容器路径                  | 用途                                  |
-| :---------------- | :------------------------ | :------------------------------------ |
-| `./pki`           | `/pki`                    | TLS 证书存储                          |
-| `./acmecerts`     | `/acmecerts`              | ACME 账户与中间证书                   |
-| `./.envs`         | `/.env`                   | 运行时环境变量缓存（含 UUID、密钥等） |
-| `./sb-xray`       | `/sb-xray`                | 生成的订阅文件与客户端配置            |
-| `./data`          | `/data`                   | Dufs 文件服务的数据存储               |
-| `./x-ui`          | `/etc/x-ui/` + `/x-ui/db` | X-UI 数据库（持久化面板数据）         |
-| `./s-ui`          | `/s-ui/db`                | S-UI 数据库                           |
-| `./sub-store`     | `/sub-store/data`         | Sub-Store 数据库                      |
-| `./nginx/http`    | `/etc/nginx/conf.d`       | 自定义 Nginx HTTP 配置                |
-| `./nginx/tcp`     | `/etc/nginx/stream.d`     | 自定义 Nginx Stream 配置              |
-| `./nginx-dhparam` | `/etc/nginx/dhparam`      | DH 密钥参数（首次生成后缓存）         |
-| `./geo`           | `/geo`                    | GeoIP / GeoSite 规则缓存（避免重启重下 ~100 MB） |
-| `./logs`          | `/var/log`                | 所有日志文件                          |
-
-### Provider（外部订阅源）配置
-
-如需引入外部机场订阅，支持两种方式：
-
-**方式一：环境变量**
-
-```yaml
-environment:
-  - |
-    PROVIDERS=机场名称A|https://example.com/subscribe?token=xxx|super
-    机场名称B|https://example2.com/sub?token=yyy|good
-```
-
-**方式二：文件挂载**
-
-```bash
-# 在 ./sb-xray/providers 目录下创建 providers.yaml 文件
-echo '机场名称|https://xxx|super' > ./sb-xray/providers/providers.yaml
-```
-
-> **质量标签说明**：`super` = 住宅流畅级（权重+30），`good` = 代理流畅级（权重+10）
-
-### 常用运维命令
-
-```bash
-# 一键启动
-docker compose up -d
-
-# 查看日志
-docker logs -f sb-xray
-
-# 查看生成的配置与订阅链接
-docker exec sb-xray show
-
-# 重启所有服务
-docker compose restart
-
-# 仅重启某个核心
-docker exec sb-xray supervisorctl restart xray
-docker exec sb-xray supervisorctl restart sing-box
-
-# 进入容器终端
-docker exec -it sb-xray bash
-```
 
 ---
 

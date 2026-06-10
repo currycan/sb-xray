@@ -49,6 +49,58 @@ environment:
   - DUFS_SERVE_PATH=/data         # 文件存储路径
 ```
 
+### 1.3 挂载卷与持久化目录
+
+🔧 `docker-compose.yml` 把宿主机目录挂进容器，用于持久化证书、订阅文件、面板数据库与规则缓存。容器重建（`docker compose up -d` 拉新镜像）不丢这些数据。
+
+| 挂载路径          | 容器路径                  | 用途                                  |
+| :---------------- | :------------------------ | :------------------------------------ |
+| `./pki`           | `/pki`                    | TLS 证书存储                          |
+| `./acmecerts`     | `/acmecerts`              | ACME 账户与中间证书                   |
+| `./.envs`         | `/.env`                   | 运行时环境变量缓存（含 UUID、密钥等） |
+| `./sb-xray`       | `/sb-xray`                | 生成的订阅文件与客户端配置            |
+| `./data`          | `/data`                   | Dufs 文件服务的数据存储               |
+| `./x-ui`          | `/etc/x-ui/` + `/x-ui/db` | X-UI 数据库（持久化面板数据）         |
+| `./s-ui`          | `/s-ui/db`                | S-UI 数据库（s-ui 不再内置，卷保留仅兼容历史部署） |
+| `./sub-store`     | `/sub-store/data`         | Sub-Store 数据库                      |
+| `./nginx/http`    | `/etc/nginx/conf.d`       | 自定义 Nginx HTTP 配置                |
+| `./nginx/tcp`     | `/etc/nginx/stream.d`     | 自定义 Nginx Stream 配置              |
+| `./nginx-dhparam` | `/etc/nginx/dhparam`      | DH 密钥参数（首次生成后缓存，见 §4.3） |
+| `./geo`           | `/geo`                    | GeoIP / GeoSite 规则缓存（避免重启重下 ~100 MB，见 §5.4） |
+| `./logs`          | `/var/log`                | 所有日志文件                          |
+
+> 📘 `./geo:/geo` 卷持久化 GeoIP / GeoSite 规则库，避免每次重启重下 6 个 ~10–30 MB 文件；持久化卷要求详见 §5.4。
+
+### 1.4 常用运维命令速查
+
+🔧 容器名固定为 `sb-xray`。下列命令覆盖日常启停、查看配置、按核重启与进容器排障。
+
+```bash
+# 一键启动 / 拉取最新镜像后重建
+docker compose up -d
+
+# 查看 entrypoint 启动日志（测速、选路、证书、配置渲染全流程）
+docker logs -f sb-xray
+
+# 查看生成的配置、节点 UUID 与订阅链接
+docker exec sb-xray show
+
+# 重启所有服务
+docker compose restart
+
+# 仅重启某个核心（不重建容器）
+docker exec sb-xray supervisorctl restart xray
+docker exec sb-xray supervisorctl restart sing-box
+
+# 查看进程状态
+docker exec sb-xray supervisorctl status
+
+# 进入容器终端排障
+docker exec -it sb-xray bash
+```
+
+> 📘 更细的分场景命令（证书续期见 §4、GeoIP 更新见 §5、订阅端点监控见 §3.5、故障排查见 §6）在各对应章节就地给出。
+
 ---
 
 ## 2. 环境变量完整参考

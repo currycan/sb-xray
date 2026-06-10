@@ -593,6 +593,30 @@ flowchart TD
 
 **调节**：`SUBSTORE_CHECK_CRON` 控制频率（默认 `30 4 * * *` 每日 04:30，置空 `""` 禁用）；告警通道复用 `SHOUTRRR_URLS`（未配则仅写容器日志）。详见 [04](./04-ops-and-troubleshooting.md) 环境变量参考。
 
+### 3.8 引入外部机场订阅源（Provider）
+
+🔧 除自建节点外，系统可聚合外部机场订阅一并下发给客户端。两种引入方式，二选一即可：
+
+**方式一：环境变量 `PROVIDERS`**
+
+```yaml
+environment:
+  - |
+    PROVIDERS=机场名称A|https://example.com/subscribe?token=xxx|super
+    机场名称B|https://example2.com/sub?token=yyy|good
+```
+
+**方式二：文件挂载 `providers.yaml`**
+
+```bash
+# 在 ./sb-xray/providers 目录下创建 providers.yaml 文件
+echo '机场名称|https://xxx|super' > ./sb-xray/providers/providers.yaml
+```
+
+> 📘 **质量标签说明**：每行末尾的 `super` / `good` 是给该机场全部节点钉死的静态质量后缀——`super` = 住宅流畅级（权重 +30），`good` = 代理流畅级（权重 +10）。这等同于 `templates/providers/providers.yaml` 里 `additional-suffix` 的「机场订阅静态注入」路径，与服务端测速无关，把人工已知的优质机场直接抬权（双来源对照见 §1.4、打分规则见 §2.3）。
+
+> ⚠️ 部分机场只允许国内 IP 拉取订阅——这类受限源需单独配回国出口，见 §3.6。
+
 ---
 
 ## 4. 客户端模板对比与接入方式
