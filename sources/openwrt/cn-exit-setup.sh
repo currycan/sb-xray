@@ -571,6 +571,40 @@ RUBYEOF
     log "已注入 Tailscale 免认证到 OpenClash overwrite 钩子（需 restart 生效）"
 }
 
+setup_global_reorder() {
+    # 注入自定义 GLOBAL select 组，把内置 DIRECT/REJECT 排到选单最后（纯 UI 顺序，不影响路由）。
+    # 默认 mihomo 自动生成的 GLOBAL 把这两个固定排最前；显式定义同名组即可由用户接管顺序。
+    # 成员动态取自现有 proxy-groups 组名 + 末尾补 DIRECT/REJECT；幂等；订阅更新后本钩子自动重补。
+    _hook=/etc/openclash/custom/openclash_custom_overwrite.sh
+    [ -f "$_hook" ] || { warn "未找到 $_hook，跳过 GLOBAL 重排注入"; return 0; }
+    if grep -q "GLOBAL reorder inject" "$_hook"; then
+        log "overwrite 钩子已含 GLOBAL 重排注入，跳过"
+        return 0
+    fi
+    backup_file "$_hook"
+    sed -i '/^exit 0$/d' "$_hook"
+    # quoted here-doc：$CONFIG_FILE/$LOG_FILE 保持字面，留给 overwrite.sh 运行时展开
+    cat >> "$_hook" <<'RUBYEOF'
+
+# 自定义 GLOBAL 组：内置 DIRECT/REJECT 排到选单最后（sb-xray cn-exit-setup.sh 注入）。
+# 幂等：已有 GLOBAL 组则跳过；成员动态取组名，订阅改名也不会引用到不存在的代理。
+ruby -ryaml -rYAML -I "/usr/share/openclash" -E UTF-8 -e "
+   begin
+      Value = YAML.load_file('$CONFIG_FILE');
+      Value['proxy-groups'] ||= [];
+      unless Value['proxy-groups'].any?{|g| g['name'].to_s=='GLOBAL'};
+        names = Value['proxy-groups'].map{|g| g['name'].to_s}.reject{|n| n=='GLOBAL' || n.empty?};
+        Value['proxy-groups'].push({'name'=>'GLOBAL','type'=>'select','proxies'=>names + ['DIRECT','REJECT']});
+        File.open('$CONFIG_FILE','w') {|f| YAML.dump(Value, f)};
+      end;
+   rescue Exception => e
+      puts '[GLOBAL reorder inject] ' + e.message;
+   end" 2>/dev/null >> "$LOG_FILE"
+RUBYEOF
+    echo "exit 0" >> "$_hook"
+    log "已注入 GLOBAL 重排到 OpenClash overwrite 钩子（需 restart 生效）"
+}
+
 setup_openclash_decouple() {
     # 未装 OpenClash（纯 reverse 模式可能如此）则跳过：解耦只对 OpenClash 有意义
     [ -x /etc/init.d/openclash ] || { log "未检测到 OpenClash，跳过解耦"; return 0; }
@@ -836,6 +870,8 @@ main() {
     fi
     # 解耦对两套方案都适用（自身按是否存在 OpenClash 决定跑不跑）
     setup_openclash_decouple
+    # GLOBAL 组重排同样对两套方案适用（自身按 overwrite 钩子是否存在决定跑不跑）
+    setup_global_reorder
     if mode_uses_reverse; then
         install_xray_bridge
     fi
