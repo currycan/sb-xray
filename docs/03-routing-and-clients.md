@@ -53,7 +53,7 @@ flowchart TD
 > - `ISP_RETEST_INTERVAL_HOURS` — 默认 6h 周期重测,仅已配置线路集/路由类别变化才重启 daemon（分钟位按 hostname 打散错峰，见 `ISP_RETEST_JITTER`）
 > - `ISP_SPEED_CACHE_TTL_MIN` — 冷启动 TTL 缓存(默认 60 min) + 后台异步刷新
 >
-> 完整运行时闭环架构图见 [docs/01-architecture-and-traffic.md §6.4](./01-architecture-and-traffic.md#64-完整运行时闭环); env 变量与典型组合见 [docs/04-ops-and-troubleshooting.md §2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
+> 完整运行时闭环架构图见 [docs/01-architecture-and-traffic.md §7.4](./01-architecture-and-traffic.md#74-完整运行时闭环); env 变量与典型组合见 [docs/04-ops-and-troubleshooting.md §2.6](./04-ops-and-troubleshooting.md#26-isp-auto-优化控制变量可选)。
 
 ### 1.3 多 ISP 环境注入实操
 
