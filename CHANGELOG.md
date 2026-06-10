@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed（变更）
 
+- **Sub-Store 后端订阅同步默认时间 23:55 → 04:00**（`SUB_STORE_BACKEND_SYNC_CRON` 镜像内默认值，Dockerfile）：原 `55 23 * * *` 晚于次日 04:30 的 `substore-check` 拉取自检 4.5 小时，自检验证的是隔夜旧数据、因果顺序颠倒。改为 `0 4 * * *` 使同步先行 30 分钟，自检验证当天刚同步的结果。镜像内默认生效（watchtower 自动分发，无需 compose 同步）；在 compose 显式设过该 env 的部署不受影响。
 - **ISP 测速与选路优化（消除全队"不流畅"误报 + 杜绝无谓重启）**：电报里 16 台节点集体报「8K ⚠️ 不流畅」（proxy-us-isp ~5 Mbps）经实测是**测量假象**——同一上游代理裸 curl 单连接达 95–146 Mbps，生产函数与 curl 同时刻吻合。根因是全队 `0 */6` cron 在整点同一秒压同两个共享上游代理，自造惊群。本次系统性优化：
   - **错峰重测**：retest cron 分钟位按 `sha1(hostname) % 60` 打散（如 `52 */6` 而非 `0 */6`），16 台散布全小时、互不踩踏。`ISP_RETEST_JITTER=false` 可关。
   - **测量更稳健**：默认采样 3 次（`ISP_SPEED_SAMPLES` 此前被代码忽略，现已生效）、瞬时 `connect_fail`/`timeout` 单样本重试一次（`ISP_SPEED_SAMPLE_RETRIES`）、`n≥3` 取中位数抗离群。
