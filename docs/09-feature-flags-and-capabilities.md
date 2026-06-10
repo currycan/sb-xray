@@ -334,7 +334,7 @@ docker exec sb-xray sh -c 'base64 -d /sb-xray/subscribe/v2rayn | grep Xhttp-H3'
 
 ## 6. XICMP 紧急通道
 
-📘 **抗封锁备选**：把代理流量藏进网络包的载荷里，伪装成普通的网络诊断流量穿过封锁。XICMP 用 **ICMP echo（ping）报文**承载，XDNS（§7）用 **DNS 查询**承载。
+📘 **抗封锁备选**：把代理流量藏进网络包的载荷里，伪装成普通的网络诊断流量穿过封锁。XICMP 用 **ICMP echo（ping）报文**承载，XDNS（§7）用 **DNS 查询**承载。两条通道的协议机制（mKCP 参数、finalmask 封装、inbound 模板）详见 [docs/02](./02-protocols-and-security.md) §1.13；本节聚焦开关与连通性验证。
 
 ```mermaid
 flowchart LR
