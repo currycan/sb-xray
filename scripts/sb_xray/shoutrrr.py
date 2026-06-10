@@ -79,10 +79,19 @@ def _rating_line(value: object) -> str | None:
     return f"评级: {label}"
 
 
-def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
-    """isp.speed_test.result → 人话摘要：选定线路 / 评级 / 各线路逐行。"""
-    title = f"{title_prefix} 📊 ISP 测速结果"
+def _fmt_pct(value: object) -> str | None:
+    """数字 → 去尾零的百分比文本（如 20.27）；非数字返回 None。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return f"{value:g}"
 
+
+def _speed_blocks(payload: dict) -> list[str]:
+    """测速摘要 → 文本块列表：选定线路/评级/直连基准 + 各线路逐行。
+
+    供 ``isp.speed_test.result`` 测速卡与 ``isp.retest.{noop,completed}`` 合并卡
+    复用,字段同形（isp_tag / fastest_mbps / direct_mbps / speeds / diag）。
+    """
     isp_tag = str(payload.get("isp_tag") or "?")
     headline = f"选定线路: {isp_tag}"
     fastest = _fmt_mbps(payload.get("fastest_mbps"))
@@ -120,7 +129,13 @@ def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
             detail.append(line)
         blocks.append("\n".join(detail))
 
-    return title, "\n\n".join(blocks)
+    return blocks
+
+
+def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """isp.speed_test.result → 人话摘要：选定线路 / 评级 / 各线路逐行。"""
+    title = f"{title_prefix} 📊 ISP 测速结果"
+    return title, "\n\n".join(_speed_blocks(payload))
 
 
 def _format_substore_failure(payload: dict, title_prefix: str) -> tuple[str, str]:
@@ -148,43 +163,65 @@ def _format_substore_failure(payload: dict, title_prefix: str) -> tuple[str, str
     return title, "\n\n".join(blocks) or "订阅拉取失败"
 
 
-# isp.retest.completed reason → 人话（取值见 isp_retest._should_reload）
+# isp.retest.{completed,noop} reason → 人话（取值见 isp_retest._should_reload）
 _RETEST_REASON_LABEL: Final[dict[str, str]] = {
     "composition_changed": "节点集合变化",
     "routing_class_changed": "路由模式切换（直连 ↔ 代理）",
 }
 
 
-def _format_retest_completed(payload: dict, title_prefix: str) -> tuple[str, str]:
-    """isp.retest.completed → 人话：线路切换结论 + 触发原因 + 重启状态。
+def _format_retest_noop(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """isp.retest.noop → 合并卡：测速摘要 + 「线路不变」结论。
 
-    payload 只带路由决策元数据（reason / old_top_tag / new_top_tag /
-    delta_pct / restarted），不含测速数值，所以原先落到通用 key:value 兜底,
-    与 ``isp.speed_test.result`` 的中文卡片观感割裂。delta_pct 在 composition
-    变化时恒为 100%（新节点旧值为 0），属噪声,故不展示。
+    retest 一个周期 = 测速 + 切换决策。retest 内部那次 ``isp.speed_test.result``
+    的独立推送被抑制（见 speed_test.run_isp_speed_tests 的 suppress_result_push），
+    测速摘要改由 payload['speed'] 折进本卡,与决策结论合成一条,单条读完即闭环。
+    无 speed（disabled / 缓存命中 / 测试桩 outcome=None）时退化为只出结论行。
     """
-    title = f"{title_prefix} 🔄 ISP 线路已更新"
+    title = f"{title_prefix} 🔁 ISP 重测 · 线路不变"
+    speed = payload.get("speed")
+    blocks = _speed_blocks(speed) if isinstance(speed, dict) else []
+
+    top = str(payload.get("top_tag") or "")
+    concl = f"结论: 维持 {top}" if top else "结论: 线路不变"
+    delta = _fmt_pct(payload.get("delta_pct"))
+    if delta is not None:
+        concl += f"（波动 {delta}%，未达切换条件）"
+    blocks.append(concl)
+    return title, "\n\n".join(blocks)
+
+
+def _format_retest_completed(payload: dict, title_prefix: str) -> tuple[str, str]:
+    """isp.retest.completed → 合并卡：切换结论 + 触发原因/重启状态 + 测速摘要。
+
+    与 noop 同源:retest 把抑制掉的测速摘要 (payload['speed']) 折进本卡,所以切换
+    通知同时承载「切到哪条线」与「这条线测出来多少」。speed 缺失时只出切换结论
+    （向后兼容 watchtower 用旧 env 重建镜像、payload 尚无 speed 字段的过渡期）。
+    """
+    title = f"{title_prefix} 🔄 ISP 重测 · 线路已切换"
 
     old_top = str(payload.get("old_top_tag") or "")
     new_top = str(payload.get("new_top_tag") or "")
     if old_top and new_top and old_top != new_top:
-        headline = f"线路切换: {old_top} → {new_top}"
+        head = f"线路切换: {old_top} → {new_top}"
     elif new_top:
-        headline = f"当前线路: {new_top}"
+        head = f"当前线路: {new_top}"
     elif old_top:
-        headline = f"线路切换: {old_top} → 无可用线路"
+        head = f"线路切换: {old_top} → 无可用线路"
     else:
-        headline = "线路配置已更新"
+        head = "线路配置已更新"
 
-    details: list[str] = []
+    second: list[str] = []
     reason_label = _RETEST_REASON_LABEL.get(str(payload.get("reason") or ""))
     if reason_label:
-        details.append(f"原因: {reason_label}")
-    details.append(
-        "已重启 xray/sing-box 生效" if payload.get("restarted") else "未重启（启动阶段）"
-    )
+        second.append(f"原因: {reason_label}")
+    second.append("已重启 xray/sing-box 生效" if payload.get("restarted") else "未重启（启动阶段）")
 
-    return title, "\n\n".join([headline, "\n".join(details)])
+    blocks = ["\n".join([head, " · ".join(second)])]
+    speed = payload.get("speed")
+    if isinstance(speed, dict):
+        blocks.extend(_speed_blocks(speed))
+    return title, "\n\n".join(blocks)
 
 
 _CANARY_ROLE_LABEL: Final[dict[str, str]] = {
@@ -243,6 +280,8 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
         return _format_speed_test(payload, title_prefix)
     if event == "isp.retest.completed":
         return _format_retest_completed(payload, title_prefix)
+    if event == "isp.retest.noop":
+        return _format_retest_noop(payload, title_prefix)
     if event == "watchtower.canary.failed":
         return _format_canary_failed(payload, title_prefix)
     if event == "watchtower.canary.updated":

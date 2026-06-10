@@ -222,7 +222,7 @@ def test_format_message_retest_completed_switch_is_readable():
     title, body = shoutrrr._format_message(
         "isp.retest.completed", _RETEST_PAYLOAD, "[sb-xray:dc99-3]"
     )
-    assert title == "[sb-xray:dc99-3] 🔄 ISP 线路已更新"
+    assert title == "[sb-xray:dc99-3] 🔄 ISP 重测 · 线路已切换"
     assert "线路切换: proxy-la-isp → proxy-us-isp" in body
     assert "原因: 节点集合变化" in body
     assert "已重启 xray/sing-box 生效" in body
@@ -231,6 +231,65 @@ def test_format_message_retest_completed_switch_is_readable():
     assert "delta_pct" not in body
     assert "restarted" not in body
     assert "event:" not in body
+
+
+# Merged retest card: speed summary the cron folds in via payload["speed"]
+# (the standalone isp.speed_test.result push is suppressed in the retest path).
+_RETEST_SPEED = {
+    "isp_tag": "proxy-us-isp",
+    "fastest_mbps": 51.56,
+    "direct_mbps": 91.91,
+    "speeds": {"proxy-us-isp": 51.56, "proxy-la-isp": 20.97},
+    "diag": {
+        "proxy-us-isp": {"status": "ok", "ok": 2, "total": 2},
+        "proxy-la-isp": {"status": "ok", "ok": 2, "total": 2},
+    },
+}
+
+
+def test_format_message_retest_noop_merges_speed_and_conclusion():
+    payload = {
+        "event": "isp.retest.noop",
+        "reason": "no_change",
+        "top_tag": "proxy-us-isp",
+        "delta_pct": 20.27,
+        "speed": _RETEST_SPEED,
+    }
+    title, body = shoutrrr._format_message(
+        "isp.retest.noop", payload, "[sb-xray:zgocloud]"
+    )
+    assert title == "[sb-xray:zgocloud] 🔁 ISP 重测 · 线路不变"
+    # speed summary folded in
+    assert "选定线路: proxy-us-isp · 51.56 Mbps" in body
+    assert "评级: " in body
+    assert "直连基准: 91.91 Mbps" in body
+    assert "✓ proxy-us-isp  51.56 Mbps" in body
+    assert "✓ proxy-la-isp  20.97 Mbps" in body
+    # decision conclusion
+    assert "结论: 维持 proxy-us-isp（波动 20.27%，未达切换条件）" in body
+    # no raw key:value dump
+    assert "top_tag:" not in body
+    assert "delta_pct" not in body
+    assert "event:" not in body
+
+
+def test_format_message_retest_noop_without_speed_shows_conclusion_only():
+    """disabled / cache-hit / pre-merge payloads carry no speed → conclusion only."""
+    payload = {"reason": "no_change", "top_tag": "proxy-us-isp", "delta_pct": 5.0}
+    title, body = shoutrrr._format_message("isp.retest.noop", payload, "[p]")
+    assert title == "[p] 🔁 ISP 重测 · 线路不变"
+    assert body == "结论: 维持 proxy-us-isp（波动 5%，未达切换条件）"
+
+
+def test_format_message_retest_completed_folds_in_speed():
+    payload = {**_RETEST_PAYLOAD, "speed": _RETEST_SPEED}
+    _title, body = shoutrrr._format_message("isp.retest.completed", payload, "[p]")
+    # switch verdict still leads
+    assert "线路切换: proxy-la-isp → proxy-us-isp" in body
+    assert "原因: 节点集合变化 · 已重启 xray/sing-box 生效" in body
+    # speed summary now appended
+    assert "选定线路: proxy-us-isp · 51.56 Mbps" in body
+    assert "✓ proxy-la-isp  20.97 Mbps" in body
 
 
 def test_format_message_retest_completed_first_run_shows_no_arrow():
