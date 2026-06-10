@@ -192,18 +192,27 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 | `enable-cors` | `true` | 放开跨域，任意网页可发起跨源请求访问该文件服务 |
 | `render-spa` | `true` | 以单页应用方式渲染目录 |
 
-> ⚠️ **`DUFS_ALLOW_ALL` env 与 `conf.yml allow-all` 取「并集」——任一为 `true` 即生效 `true`，permissive 值胜出，二者无单向覆盖关系**（生产容器内 dufs 0.46.0 实测，A/B + 控制组交叉验证）。因此镜像 `Dockerfile` 的 `ENV DUFS_ALLOW_ALL="false"` **并不能关闭 allow-all**——`conf.yml` 硬编码的 `allow-all: true` 经并集胜出，effective 值恒为 `true`。结论:**生产 dufs 的 `allow-all` 实际处于开启状态**,前述「保守假设」由实测坐实为既成事实。
+> ⚠️ **优先级实测结论(生产容器内 dufs 0.46.0,受控 A/B + 控制组 + bind 双向交叉验证):dufs 取 `命令行 > 环境变量 > config 文件 > 内置默认`,`DUFS_` 环境变量严格优先于 `conf.yml`。** 用 `bind` 字段可干净判决:`conf=0.0.0.0 + env DUFS_BIND=127.0.0.1` → 实际监听 `127.0.0.1`;反向 `conf=127.0.0.1 + env=0.0.0.0` → 监听 `0.0.0.0`——两向均 **env 赢、conf 让位**。
 >
-> 但 `allow-all` 只管**操作权限**(上传/删除/搜索/打包),不等于放开**身份认证**:启动行的 `-a ${PUBLIC_USER}:${PUBLIC_PASSWORD}@/:rw` 规则仍强制 HTTP Basic 认证——实测对运行实例发未认证请求,落在 `DUFS_PATH_PREFIX` 下的访问返回 `401`。所以真正兜底暴露面的是「随机前缀 + Basic 认证」(见 §1.1),而非 `DUFS_ALLOW_ALL=false`。运维结论:**不要依赖 `DUFS_ALLOW_ALL=false` 收紧权限**(它被 conf 并集架空);要收紧须改 `conf.yml` 的 `allow-all`,且务必保留 `-a` 认证规则与随机前缀。
+> **但 `allow-all` 这个布尔 flag 是例外表象**:在 clap 里 `false` 等同「未提供该 flag」,无法与「显式 false」区分,于是 `false` 一方自动让位给 `true` 一方,表现得像「任一为 `true` 即放开」。实测:`env=false + conf=true` 放开、`env=true + conf=false` 放开、`env=false + conf=false`(及均缺省)拒绝(`403` 基线)。**底层仍是 env 优先,只是布尔 false 不算「提供值」**。
+>
+> 因此镜像 `Dockerfile` 的 `ENV DUFS_ALLOW_ALL="false"` **关不掉 allow-all**——它给的 `false` 被当「未提供」,`conf.yml` 硬编码的 `allow-all: true` 生效,effective 值恒为 `true`。**生产 dufs 的 `allow-all` 实际处于开启状态**,前述「保守假设」由实测坐实为既成事实。
+>
+> `allow-all` 只管**操作权限**(上传/删除/搜索/打包),不放开**身份认证**:启动行的 `-a ${PUBLIC_USER}:${PUBLIC_PASSWORD}@/:rw` 仍强制 HTTP Basic 认证——实测对运行实例发未认证请求,落在 `DUFS_PATH_PREFIX` 下返回 `401`。真正兜底暴露面的是「随机前缀 + Basic 认证」(见 §1.1),而非 `DUFS_ALLOW_ALL=false`。**运维结论**:① 不要依赖 `DUFS_ALLOW_ALL=false` 收紧权限(它被当「未提供」、被 conf 的 `true` 盖过),要收紧须改 `conf.yml` 的 `allow-all` 并保留 `-a` 认证 + 随机前缀;② 留意 `DUFS_BIND` env 严格压过 `conf.yml bind`——host 网络模式下若 env 设 `0.0.0.0` 会让文件服务监听全网卡(实测如此),暴露面以「随机端口 + 随机前缀 + Basic 认证」三重兜底。
 >
 > <details><summary>实测方法(可复现)</summary>
 >
-> 在跑着 sb-xray 容器的节点上,用容器内同一 dufs 二进制起隔离实例(绑 `127.0.0.1` 测试端口、唯一探针文件),发未认证 `PUT`/`DELETE` 看响应码:
-> - env=`false` + conf=`true` → `PUT 201 / DELETE 204`(放开)
-> - env=`true` + conf=`false` → `PUT 201 / DELETE 204`(放开)
-> - env=`false` + conf=`false`(及二者均缺省)→ `PUT 403 / DELETE 403`(拒绝,基线)
+> 在跑着 sb-xray 容器的节点上,用容器内同一 dufs 二进制 `docker exec` 起隔离实例(绑 `127.0.0.1` 测试端口、唯一探针文件、`env -i` 精确控制变量),实验后清理:
 >
-> 前两行任一为 `true` 即放开 ⇒ 并集语义;第三行 `403` 确认拒绝是真实信号而非「dufs 总是允许」。
+> `allow-all`(未认证 `PUT`/`DELETE` 响应码):
+> - `env=false + conf=true` → `201 / 204`(放开);`env 未设 + conf=true` → `201`(放开,证 conf 被读)
+> - `env=true + conf=false` → `201 / 204`(放开);`env 未设 + conf=false` → `403`(拒绝)
+> - `env=false + conf=false`(及均缺省)→ `403 / 403`(拒绝,基线,证 `403` 是真实拒绝而非「总是允许」)
+>
+> `bind`(实际监听地址):
+> - `conf=0.0.0.0 + env=127.0.0.1` → 监听 `127.0.0.1`;`conf=127.0.0.1 + env=0.0.0.0` → 监听 `0.0.0.0`(两向 env 赢)
+>
+> 判读:`bind` 双向证明 **env 严格优先**;`allow-all` 的「任一 true 即放开」是布尔 `false ≡ 未提供` 的假象,非真正的并集语义。
 > </details>
 
 #### Entrypoint 日志（Python stdlib logging）
