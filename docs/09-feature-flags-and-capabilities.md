@@ -261,9 +261,10 @@ flowchart LR
 docker exec sb-xray ss -ulnp | grep 6443
 # 期望：users:(("xray",pid=...))
 
-# entrypoint 启动日志
-docker logs sb-xray 2>&1 | grep '阶段 1'
-# 期望：[阶段 1] 完成 hy2=6443(xray) tuic=8443 anytls=4433
+# entrypoint 启动日志（基础端口在 Stage 4/17 probe 段打印）
+docker logs sb-xray 2>&1 | grep 'base ports'
+# 期望：[<时间戳>] [INFO] [sb_xray.entrypoint] base ports: hy2=6443 tuic=8443 anytls=4433
+# （端口归属进程以上面 ss 输出的 users:(("xray",…)) 为准，日志行本身不标注进程）
 
 # sing-box 目录只剩 tuic + anytls
 docker exec sb-xray ls /sb-xray/sing-box/

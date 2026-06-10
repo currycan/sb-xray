@@ -141,42 +141,45 @@ flowchart LR
 
 #### 启动日志结构示例
 
-容器启动时，`docker logs sb-xray` 会打印完整决策链路，可直接对照排查：
+容器启动时，`docker logs sb-xray` 会打印完整决策链路，可直接对照排查。每条日志的实际行首还有 ISO-8601 时间戳前缀（形如 `[2026-06-10T12:00:00.123+08:00]`），下例为省版面统一省略；`[INFO]` 之后的方括号是模块 logger 名（测速在 `sb_xray.speed_test`，出站注入在 `sb_xray.routing.isp`，段头在 `sb_xray.entrypoint`）：
 
 ```
-[阶段 2] 测速与选路...
-[阶段 2] 清除服务路由缓存（与 ISP_TAG 同步刷新）...
-[阶段 2] 环境: IP_TYPE=hosting | 地区=US | DEFAULT_ISP=未设置（自动选路）
-[阶段 2] 直连基准: 28.50 Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）
-[阶段 2] 发现 ISP 节点: 2 个，开始逐节点测速（采样=2次）...
-[测速] 开始: KR_ISP | 测速源: https://... | 采样: 2次
-[测速] KR_ISP | 第 1/2 轮: 9830 KB/s → 75.00 Mbps
-[测速] KR_ISP | 第 2/2 轮: 10240 KB/s → 78.12 Mbps
-[测速] KR_ISP: 2/2 有效样本，截断均值 76.56 Mbps，标准差 1.56 Mbps [稳定]
-[测速] proxy-kr-isp: 76.56 Mbps → 新最优
-[测速] 开始: JP_ISP | 测速源: https://... | 采样: 2次
-[测速] JP_ISP | 第 1/2 轮: ...
-[测速] JP_ISP: 2/2 有效样本，截断均值 70.00 Mbps，标准差 2.10 Mbps [稳定]
-[测速] proxy-jp-isp: 70.00 Mbps (最优仍: proxy-kr-isp 76.56 Mbps)
-[选路] ════════════════════════════════════════════
-[选路] 决策输入:
-[选路]   IP_TYPE       = hosting (机房/托管 IP)
-[选路]   地区          = US
-[选路]   DEFAULT_ISP   = 未设置（自动选路）
-[选路]   直连速度      = 28.50 Mbps（不参与选路）
-[选路]   最优 ISP 代理 = proxy-kr-isp (76.56 Mbps)
-[选路] 原则: 受限地区/非住宅IP→需代理解锁; 住宅IP+非受限→直连兜底
-[选路] 非住宅 IP (hosting)，需 ISP 代理解锁流媒体/AI
-[选路] 使用最优 ISP 代理: proxy-kr-isp (76.56 Mbps)
-[选路] IS_8K_SMOOTH: 出口=proxy-kr-isp | 参考速度=76.56 Mbps | 阈值=60 Mbps → true  → good 标签
-[选路] ✓ 最终决策: ISP_TAG=proxy-kr-isp | IS_8K_SMOOTH=true
-[选路] ════════════════════════════════════════════
-[阶段 4] 生成客户端/服务端配置片段...
-[ISP] 注入出站: proxy-kr-isp (76.56 Mbps)
-[ISP] 注入出站: proxy-jp-isp (70.00 Mbps)
-[ISP] Sing-box urltest 已生成: outbounds=["proxy-kr-isp", "proxy-jp-isp", "direct"]
-[ISP] Xray observatory + balancer 已生成: selector=["proxy-kr-isp", "proxy-jp-isp"]
+[INFO] [sb_xray.entrypoint] ▶ Stage 5/17 speed: ISP 测速与选路
+[INFO] [sb_xray.speed_test] IP_TYPE=hosting | 地区=US | DEFAULT_ISP=未设置
+[INFO] [sb_xray.speed_test] 开始: 节点 | 测速源: https://speed.cloudflare.com/__down?bytes=25000000 | 采样: 2次 | sampler=v2
+[INFO] [sb_xray.speed_test] 节点 | 第 1/2 轮: 3645 KB/s → 28.48 Mbps
+[INFO] [sb_xray.speed_test] 节点 | 第 2/2 轮: 3651 KB/s → 28.52 Mbps
+[INFO] [sb_xray.speed_test] 节点: 2/2 有效样本，截断均值 28.50 Mbps，标准差 0.02 Mbps [稳定]
+========================================
+ 8K 测速报告 — Direct
+========================================
+ 速度: 28.50 Mbps
+ 评级: 流畅 4K，8K 可能卡顿
+========================================
+[INFO] [sb_xray.speed_test] 直连基准: 28.50 Mbps（不参与选路；无代理时用于 IS_8K_SMOOTH 判定）
+[INFO] [sb_xray.speed_test] 发现 ISP 节点 2 个，逐节点采样 2 次 | sampler=v2
+[INFO] [sb_xray.speed_test] 开始(diag): KR_ISP | 代理: socks5h://<IP>:<端口> | 测速源: https://... | 采样: 2次
+========================================
+ 8K 测速报告 — KR_ISP
+========================================
+ 速度: 76.56 Mbps
+ 评级: 流畅播放 8K
+========================================
+[INFO] [sb_xray.speed_test] proxy-kr-isp: 76.56 Mbps → 新最优
+[INFO] [sb_xray.speed_test] 开始(diag): JP_ISP | 代理: socks5h://<IP>:<端口> | 测速源: https://... | 采样: 2次
+（…JP_ISP 的 8K 测速报告块，略…）
+[INFO] [sb_xray.speed_test] proxy-jp-isp: 70.00 Mbps (最优仍: proxy-kr-isp 76.56 Mbps)
+[INFO] [sb_xray.speed_test] ISP_TAG=proxy-kr-isp IS_8K_SMOOTH=true
+[INFO] [sb_xray.entrypoint] ✓ Stage 5/17 speed ok in 45210ms
+（…Stage 6/17 media、Stage 7/17 keys，略…）
+[INFO] [sb_xray.entrypoint] ▶ Stage 8/17 outbounds: 生成客户端/服务端配置片段
+[INFO] [sb_xray.routing.isp] 注入出站: proxy-kr-isp (76.56 Mbps)
+[INFO] [sb_xray.routing.isp] 注入出站: proxy-jp-isp (70.00 Mbps)
+[INFO] [sb_xray.routing.isp] balancer configured: probe=https://speed.cloudflare.com/__down?bytes=1048576 interval=1m tolerance=300ms nodes=2 per_service_sb=False
+[INFO] [sb_xray.entrypoint] ✓ Stage 8/17 outbounds ok in 12ms
 ```
+
+> 📘 几个易混点：直连基准测速的节点标签就叫 `节点`（`measure()` 未传 name 时的默认值），而 `8K 测速报告` 框里显示 `Direct`；该报告框走 stderr 直写，**没有**时间戳/logger 前缀。逐 ISP 节点测速走 v2 采样器的 `开始(diag):` 路径，不逐行打印单轮明细，最终均值体现在 `proxy-<x>-isp: NN.NN Mbps` 行。选路决策没有独立的「决策块」，最终结论就是一行 `ISP_TAG=<tag> IS_8K_SMOOTH=<true/false>`。
 
 #### 两种质量标签的含义
 
