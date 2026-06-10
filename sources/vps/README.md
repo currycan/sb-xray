@@ -48,6 +48,8 @@ flowchart LR
 | `COMPOSE_URL` | 可选 | `docker-compose.yml` 下载源，默认仓库 `main` 的 raw | — |
 | `SKIP_COMPOSE_UPDATE` | 可选 | 设 `1` 跳过 compose 同步；默认 `0`（拉最新覆盖，原始 compose 留存 `.bak`） | — |
 | `SKIP_PULL` | 可选 | 设 `1` 只 `up -d` 不 `pull`（不升级镜像）；默认 `0` | — |
+| `CANARY_URL` | 可选 | `sbx-canary-check.sh` 下载源，默认仓库 `main` 的 raw（见 §D） | — |
+| `SKIP_CANARY_WIRING` | 可选 | 设 `1` 跳过 watchtower 自检护栏安装（canary 脚本 + cron + `sbx-update`）；默认 `0` | — |
 
 > ℹ️ 脚本会自动把 `docker-compose.yml` 同步为仓库最新版（首次的原始文件保留为 `docker-compose.yml.bak`，重跑不覆盖）。旧部署的 compose 可能不含 `${CN_EXIT_MODE}` / `${tsip}` 等引用，不同步则 `.env` 里的回国项不会生效。节点专属配置都在 `.env`，compose 是模板，覆盖安全。
 >
@@ -137,3 +139,59 @@ docker exec sb-xray sh -c 'grep -E "r-tunnel|cn-exit" /var/log/xray/access.log |
 | Docker | `docker compose pull && up -d`（镜像升级到最新） |
 
 停用：删 `/etc/cron.d/cn-exit-keepalive`；`.env` 里 `CN_EXIT_MODE=off` 后 `docker compose up -d --force-recreate`；`tailscale down` 可断开 tailnet。
+
+---
+
+# `sbx-canary-check.sh` —— 自动更新后业务自检 + 中文通知
+
+同目录的另一个脚本。watchtower 在 schedule 窗口更新镜像后，本脚本由 cron（`/etc/cron.d/sbx-canary-check`）稍后跑一轮业务自检，经容器内 shoutrrr-forwarder 推中文 Telegram 通知（watchtower 自带英文通知已关闭，所有报警统一走这里）。通知格式见 [docs/06 §9.1](../../docs/06-event-bus-shoutrrr.md)。
+
+## A. 四项自检
+
+| 项 | 通过含义 |
+|----|----------|
+| 容器健康 | `docker inspect` Health = healthy |
+| 443 端口 | tcp + udp 均在 listen |
+| 回国链路 | 经容器出站探国内目标，2xx / 204 即通 |
+| 镜像 digest 读取 | 能拿到 RepoDigest |
+
+## B. 两类通知
+
+| 事件 | 触发 | 正文 |
+|------|------|------|
+| `watchtower.canary.updated` | 自检全过 **且** 镜像 digest 跳变 | `镜像构建: <版本>` +「四项自检全部通过」 |
+| `watchtower.canary.failed` | 任一自检失败（退出码 1） | 节点角色 / 失败项 / `镜像构建` / 处置 runbook |
+
+- **静默**：自检过但无 digest 跳变时不推送（避免每天噪音）；首次运行只落盘 digest、不报「已更新」。
+- **`镜像构建`**：取镜像 `org.opencontainers.image.version` label（如 `26.6.10-<sha>`）；label 缺失时回退 digest 末段。
+
+## C. 角色（`SBX_CANARY_ROLE`）
+
+只决定失败 runbook 文案，不影响自检逻辑：
+
+| 角色 | 用途 | 失败提示 |
+|------|------|----------|
+| `canary` | 指定一台错峰先行（建议较早窗口） | 叫停其余节点，确认坏镜像后再处置 |
+| `worker` | 其余各台（建议稍后窗口错峰） | 回滚本台，并核对回国链路 |
+
+其余 env（`SBX_CONTAINER` / `SBX_FORWARDER` / `SBX_PROBE_URL` / `SBX_DIGEST_STATE` / `SBX_RETRIES` / `SBX_RETRY_INTERVAL`）见脚本头注释。
+
+## D. 安装与更新（脚本怎么到节点上）
+
+脚本与 cron 都由 `vps-cn-exit-init.sh` 的 watchtower 护栏段自动装好，**无需单独操作**：
+
+- **下载**：从 `CANARY_URL`（默认 `https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/sbx-canary-check.sh`）`curl` 到 `$SBXRAY_DIR/sbx-canary-check.sh`（`chmod 755`）。下载失败但本地已有则保留旧版，不会清空。
+- **cron**：写 `/etc/cron.d/sbx-canary-check`，按角色定时（canary 较早窗口、worker 稍后窗口错峰），注入 `SBX_CANARY_ROLE` 与 `SBX_DIGEST_STATE`。
+- **顺带**装 `/usr/local/bin/sbx-update`（`watchtower --run-once sb-xray`，手动灰度更新本台镜像）。
+- 用 `SKIP_CANARY_WIRING=1` 跳过整段护栏安装。
+
+**更新到最新版**两种方式：
+
+```sh
+# 方式一：重跑 vps-cn-exit-init.sh（幂等，会重新 curl 最新脚本并重装 cron）
+
+# 方式二：只更 canary 脚本（与 init 内部同源同命令，最轻）
+curl -fsSL https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/sbx-canary-check.sh \
+  -o /root/sb-xray/sbx-canary-check.sh && chmod 755 /root/sb-xray/sbx-canary-check.sh
+# 下次 cron 触发即生效；批量可在控制端对各节点循环执行上面两行
+```

@@ -523,6 +523,17 @@ tracker.example.org:6881
 
 HTTP 头 **`X-Event`** 标示事件类型——取值为 `ban_bt` / `ban_geoip_cn` / `ban_ads` / `ban_private_ip`（见 §3.1），forwarder 把它拼进通知标题。
 
+### 9.1 watchtower 自动更新通知（host 侧 canary）
+
+📘 除 Xray webhook 外，还有一类事件来自**主机侧**:每台节点的 `sbx-canary-check.sh`（cron 周期跑，详见 [`../sources/vps/README.md`](../sources/vps/README.md)）在镜像自动更新后做业务自检，经**同一个 forwarder** 推中文卡片。它们不走 Xray PR #5722 的 payload，字段由脚本自定义。
+
+| 事件（`X-Event`） | 触发 | 卡片字段 |
+|---|---|---|
+| `watchtower.canary.updated` | 自检 4/4 通过 **且** 检测到镜像 digest 跳变 | `镜像构建`（镜像 `org.opencontainers.image.version` label，如 `26.6.10-<sha>`）+「四项自检全部通过」 |
+| `watchtower.canary.failed` | 任一自检失败（退出码 1） | 节点角色 / 失败项 / `镜像构建` / 处置 runbook |
+
+🔬 `镜像构建` 取脚本发的 `built` 字段（版本 label）；脚本未带该字段时 formatter 回退到 `new`/`image`（镜像 digest），两者皆无才显示「未知」。无 digest 跳变时静默（不每天刷屏），首次运行只落盘 digest、不报「已更新」。
+
 ---
 
 ## 10. 进阶：降噪 / 多通道 / 低内存关闭
