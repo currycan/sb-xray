@@ -5,9 +5,9 @@
 # 更新镜像后，本脚本由 cron/systemd-timer 在稍后跑一轮业务自检，经 shoutrrr-forwarder
 # 推中文通知。watchtower 自带英文通知已关闭，所有 Telegram 报警统一走这里。
 #
-# 全 16 台同构。角色（SBX_CANARY_ROLE）只决定失败 runbook 文案：
-#   canary  —— dc99-3，建议 03:05 跑；失败提示「叫停其余 15 台」（错峰拦截）
-#   worker  —— 其余 15 台，建议 04:05 跑；失败提示「本台回滚」（个体故障可见）
+# 全部节点同构。角色（SBX_CANARY_ROLE）只决定失败 runbook 文案：
+#   canary  —— 指定的金丝雀节点，建议 03:05 跑；失败提示「叫停其余节点」（错峰拦截）
+#   worker  —— 其余节点，建议 04:05 跑；失败提示「本台回滚」（个体故障可见）
 #
 # 通知策略（digest 落盘检测「是否刚更新」）：
 #   自检失败                → 推中文告警（watchtower.canary.failed）+ 退出码 1
@@ -103,7 +103,7 @@ notify() {
 # 失败 runbook 文案（按角色）
 runbook_text() {
     if [ "$ROLE" = "canary" ]; then
-        printf '立即叫停其余 15 台：本地 wrapper 遍历各节点 docker compose stop watchtower，确认坏镜像后再处置'
+        printf '立即叫停其余节点：本地 wrapper 遍历各节点 docker compose stop watchtower，确认坏镜像后再处置'
     else
         printf '回滚本台：docker compose down 后切回上一个 digest tag 重新 up，并核对回国链路'
     fi
