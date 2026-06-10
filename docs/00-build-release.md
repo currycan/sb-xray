@@ -13,6 +13,7 @@
 5. [手动精细构建](#5-手动精细构建)
 6. [常见构建问题 FAQ](#6-常见构建问题-faq)
 7. [Git Release 版本发布](#7-git-release-版本发布releasesh)
+8. [GitHub Actions CI 自动构建与发布流水线](#8-github-actions-ci-自动构建与发布流水线)
 
 ---
 
@@ -465,3 +466,98 @@ flowchart LR
 ```
 
 推荐执行顺序：`./build.sh` → `./release.sh`，在同一 commit 上运行即可让镜像 tag 与 Git Release tag 一致。
+
+---
+
+## 8. GitHub Actions CI 自动构建与发布流水线
+
+前面 §2 / §7 讲的是**本地**手动构建与发布。生产环境用的 `:latest` 镜像并不是手动推的——它由 `.github/workflows/daily-build.yml` 这条 CI 流水线**每天自动产出并发布**。本节讲清这条主干怎么跑、做了哪些架构取舍，以及它和本地 `build.sh`、`versions.json`、生产节点之间的关系。
+
+> 📘 **一句话**：CI 是生产镜像的权威生产者，`build.sh` 是同一套逻辑的**可复现离线镜像**。两者都以仓库根 `versions.json` 为单一真相源，因此本地构建与 CI 产物位级一致。
+
+### 8.1 流水线总览
+
+```mermaid
+flowchart TD
+    Trig(["触发：push main / 每日 cron / 手动 dispatch"]):::entry --> Check{{"check<br/>版本+digest 采集 · 门控"}}
+    Check -- "should_build=false<br/>(无版本变化且非 push/强制)" --> Skip(["跳过构建"]):::terminal
+    Check -- "should_build=true" --> Build
+
+    subgraph Build["build（多平台并行 · 原生 runner）"]
+        Amd["linux/amd64<br/>ubuntu-latest"]:::process
+        Arm["linux/arm64<br/>ubuntu-24.04-arm"]:::process
+    end
+
+    Build -- "push-by-digest" --> Merge["merge<br/>imagetools 合并 manifest<br/>打 :版本 + :latest"]:::process
+    Merge --> Hub["Docker Hub<br/>currycan/sb-xray"]:::external
+    Hub -- "watchtower 自动跟进 :latest" --> Prod(["生产节点"]):::terminal
+
+    Check -. "changed=true" .-> Upd["update-versions<br/>回写并提交 versions.json"]:::xray
+    Merge -.-> Upd
+
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef external fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
+    classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:2px,color:#fff
+```
+
+流水线分四个 job，依次串接：
+
+| Job | 职责 | 触发条件 | 关键产物 |
+|---|---|---|---|
+| `check` | 计算镜像版本号；调 GitHub API 拉各组件最新版本与下载 digest；校验；判定是否需要构建 | 总是运行（≤5 min） | `should_build` / `changed` / `no_cache` 等输出；`new-versions` artifact（仅 `changed` 时） |
+| `build` | 各平台**原生**编译并按 digest 推送镜像 | `should_build == true` | 每架构一个 `digests-<platform>` artifact |
+| `merge` | 把各架构 digest 合并成 manifest list，打最终 tag | `should_build == true` | 推送 `:<版本>` 与 `:latest`（同一 manifest） |
+| `update-versions` | 把刷新后的 `versions.json` 提交回仓库 | `changed == true` | `chore: bump component versions` 提交 |
+
+### 8.2 触发与版本门控
+
+🔧 流水线有三个触发源（`on:` 段）：
+
+| 触发源 | 含义 |
+|---|---|
+| `push` 到 `main` | 代码改动即构建（`should_build` 对 push 恒为真） |
+| `schedule`：`cron: "0 2 * * *"` | 每日 UTC 2:00（北京时间 10:00）跟进上游组件新版本 |
+| `workflow_dispatch`（`force_build`） | 手动触发；勾选 `force_build` 可在无版本变化时强制重建 |
+
+`check` job 的门控逻辑决定后续是否构建：
+
+| 输出 | 何时为真 | 作用 |
+|---|---|---|
+| `changed` | 拉到的组件版本与仓库 `versions.json` 有差异 | 触发 `update-versions` 回写；上传 `new-versions` |
+| `should_build` | `changed` 为真，**或** 事件是 `push`，**或** `force_build=true` | 决定是否进入 `build` / `merge` |
+| `no_cache` | `force_build=true` | 见 §8.3「绕缓存」取舍 |
+
+> 🔬 **为什么 push 也要构建**：纯代码改动（如改 `scripts/`）不会改变任何组件版本，`changed` 为假；若仅靠版本差异门控，代码改动将永远进不了镜像。因此 push 事件单独把 `should_build` 置真。
+
+### 8.3 关键架构决策
+
+📘 **原生 arm64 runner，不用 QEMU**。`build` job 用 matrix 把两个平台分发到各自的原生机器——amd64 跑 `ubuntu-latest`，arm64 跑 `ubuntu-24.04-arm`（公开仓库免费的原生 arm64 runner）。各 runner 单架构原生编译，避免 QEMU 用户态模拟带来的构建慢与偶发不兼容。
+
+📘 **push-by-digest + manifest 合并**。`build` 阶段每个平台用 `push-by-digest=true` 只按内容寻址推送镜像（不打人类可读 tag），把 digest 经 artifact 传给 `merge`；`merge` 用 `docker buildx imagetools create` 把各架构 digest 合并成一个 manifest list，一次性打上 `:<版本>` 与 `:latest`，**两个 tag 指向同一 manifest**。
+
+🔬 **GHA 缓存与 `force_build` 绕缓存**。BuildKit 层缓存用 `type=gha` 持久化，并按平台 `scope`（`linux-amd64` / `linux-arm64`）隔离，避免跨架构串味。但缓存有个陷阱：纯代码改动不改任何 build-arg 时，`COPY scripts` 等层会全缓存命中，输出的还是旧 digest，新代码进不了镜像。所以手动 `force_build=true` 时 `check` 会置 `no_cache=true`，`build` 据此 `no-cache` 强制重建。
+
+🔬 **下载完整性强校验**。`check` job 从各组件 GitHub Release API 抓取 `.assets[].digest`，任一 digest 缺失即 `exit 1` 让流水线失败；这些 digest 连同版本号一起合并进 `versions.json` 的 `digests` 字段，再经 build-arg 传入 Dockerfile，在下载阶段强制校验（与 §4 的本地校验同源）。
+
+🔬 **凭据机制**。`build` / `merge` 用仓库 secret（`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`）登录 registry 推镜像；`check` 调 GitHub API 用内置 `GITHUB_TOKEN`。文档不记录任何凭据值——这些属运维配置。
+
+### 8.4 CI 与本地构建、生产的关系
+
+把三段串起来看，闭环是这样的：
+
+1. **单一真相源**：`versions.json`（含组件版本 + `digests`）。CI 每日刷新并由 `update-versions` 提交回仓库，是它的权威生产者。
+2. **本地一致**：`./build.sh` 离线读同一份 `versions.json`，所以本地手动构建与 CI 产物位级一致；`./build.sh refresh` 则复刻 CI 的「调 API → 算 digest → 写回」逻辑。
+3. **发布到生产**：CI 的 `merge` 推出 `:latest` 后，生产节点经 watchtower 自动跟进该 tag——这一步的运维约束（watchtower 不读 `docker-compose.yml`、新增 env 必须镜像内默认兜底）见仓库根 `CLAUDE.md` 的「Watchtower 自动更新发布纪律」。因此**修复类变更必须落在镜像内默认行为里**，才能随 `:latest` 自动生效。
+
+> ⚠️ CI 自动发的 `:latest` 不会自动同步 `docker-compose.yml`。若某次发布确实必须靠新 compose env 才能正确运行，应在发布说明标记 `requires-compose-sync` 并改走全量 `git pull && docker compose up -d`，不走 watchtower 自动分发。
+
+---
+
+## 相关资源
+
+- [04. 运维管理与故障排查手册](./04-ops-and-troubleshooting.md) — 环境变量全集与线上排障
+- 仓库根 `../CLAUDE.md` — Watchtower 自动更新发布纪律（漂移缓解契约）
+- [../CHANGELOG.md](../CHANGELOG.md) — 历次构建/发布变更记录
