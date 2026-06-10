@@ -1,4 +1,4 @@
-# Tailscale 代理架构设计与配置指南
+# 07. Tailscale 代理架构设计与配置指南
 
 本文把 OpenWrt 上 Tailscale 这套「一机多用」的代理网关讲透：它**同时**承担回国出口、出国分流、内网穿透三类流量，外加把路由器自己接进 Tailscale 私有网络。文章从概念讲到底层，配图配命令，**新手能照着做、工程师能看懂为什么**。
 
@@ -89,7 +89,9 @@ flowchart TB
 
 这是 Tailscale 把「一台设备」变成「一个网关」的三个能力开关：
 
-- 📘 **subnet router（子网路由器）**：默认情况下，tailnet 里只有装了 Tailscale 的设备能互访。但你家 NAS、摄像头没装 Tailscale。把 OpenWrt 设为 subnet router（`--advertise-routes=172.18.18.0/23`），它就**代理**整个家庭网段——其他设备访问 `172.18.18.x` 时，流量先到 OpenWrt，再转给内网设备。**一台代言一片。**
+- 📘 **subnet router（子网路由器）**：默认情况下，tailnet 里只有装了 Tailscale 的设备能互访。但你家 NAS、摄像头没装 Tailscale。把 OpenWrt 设为 subnet router（`--advertise-routes=${TS_ADVERTISE_ROUTES}`），它就**代理**整个家庭网段——其他设备访问该网段内的地址时，流量先到 OpenWrt，再转给内网设备。**一台代言一片。**
+
+> 📘 **关于网段值**：本文图示与命令里出现的家庭内网网段是**示例占位**，真实值由 `config.env` 的 `TS_ADVERTISE_ROUTES` 决定（默认见 [`config.env.example`](../sources/openwrt/config.env.example)）。下文凡需精确对应配置的命令/校验，统一写成 `${TS_ADVERTISE_ROUTES}` 变量名，请按自家 LAN 网段替换。
 
 - 📘 **exit node（出口节点）**：把 OpenWrt 设为 exit node（`--advertise-exit-node`），其他设备可以选择「让我所有上网流量都从这台出去」。你在国外用手机选了家里的 OpenWrt 作 exit node，看到的就是家宽的中国 IP。**等于一个家用 VPN 出口。**
 
@@ -278,7 +280,7 @@ flowchart LR
 
 ### 3.3 角色③ · subnet router 访问内网
 
-📘 **一句话**：你在外面想访问家里的 NAS（`172.18.18.x`），但 NAS 没装 Tailscale。OpenWrt 作 subnet router「代言」整个家庭网段，你的设备访问 `172.18.18.x` 时，流量经 OpenWrt 转给内网设备。
+📘 **一句话**：你在外面想访问家里的 NAS（落在 `${TS_ADVERTISE_ROUTES}` 网段内），但 NAS 没装 Tailscale。OpenWrt 作 subnet router「代言」整个家庭网段，你的设备访问该网段地址时，流量经 OpenWrt 转给内网设备。
 
 ```mermaid
 flowchart LR
@@ -300,8 +302,8 @@ flowchart LR
 ```
 
 🔬 **逐跳走读**：
-1. 前提：管理后台已批准 OpenWrt 申报的 `172.18.18.0/23` 子网路由（§1.3）。
-2. 外部设备的 Tailscale 学到「`172.18.18.0/23` 这片网段经 OpenWrt 节点可达」，自动建立路由。
+1. 前提：管理后台已批准 OpenWrt 申报的子网路由（`${TS_ADVERTISE_ROUTES}`，§1.3）。
+2. 外部设备的 Tailscale 学到「这片网段经 OpenWrt 节点可达」，自动建立路由。
 3. 流量经隧道到 `tailscale0`，进 forward 链，`tailscale→lan` 转发放行，转给真实内网设备。
 4. 回程靠 `tailscale` zone 的 `masq=1` 做源地址转换，内网设备无需知道 Tailscale 的存在。
 
@@ -345,20 +347,29 @@ vi config.env          # CN_EXIT_MODE=socks5；填 VPS_DOMAIN / PEER_TS_IP / TS_
 sh cn-exit-setup.sh
 ```
 
-脚本各关键函数职责一览（想知道某一步在干嘛时对照看）：
+脚本各关键函数职责一览（想知道某一步在干嘛时对照看）。下表只列与本文链路相关的主流程函数，按 `main` 调用顺序排列；脚本里还有 `load_config` / `backup_file` / `download_verify` 等通用辅助函数未一一列出：
 
 | 函数 | 职责 | 对应本文 |
 |---|---|---|
+| `validate_config` | 校验 `config.env` 必填项与模式合法性，缺项即 `die` | §4.1 |
+| `detect_arch` | 探测 CPU 架构，挑对应 tailscaled 二进制 | §4.2 |
+| `generate_nodes_list` | 生成 `/etc/cn-exit/nodes.list`（所有模式都跑，供解耦遍历 + cn-bridge 拨号） | §4.4 |
 | `ensure_tun` | 确保 `/dev/net/tun` 存在（缺则装 `kmod-tun`） | §1.4 |
 | `install_tailscale` | 下载 tailscaled + 写 `init.d`（state 持久化 + 开机自启 + boot auto-up） | §4.2 |
 | `setup_tun_network` | 建 `tailscale` 接口 / zone / 转发（uci 幂等） | §4.2 |
 | `setup_udp_gro` | WAN 网卡 UDP GRO 优化（ethtool + hotplug 持久化） | §4.2 |
 | `setup_tailscale` | `tailscale up` 全 flag（无 `--accept-routes`） | §4.2 |
-| `install_keepalive_cron` | 每分钟 `ping` 对端维持隧道（角色④） | §6.7 |
+| `install_keepalive_cron` | 每分钟 4 轮 `ping` 对端维持隧道（角色④） | §6.7 |
 | `setup_tailscale_firewall_bypass` | OpenClash 钩子放行 Tailscale UDP，绕过 tproxy | §6.6 |
+| `setup_tailscale_persistent_bypass` | 写 `99-cn-exit-tailscale.nft`，OpenClash 重启窗口期端口抢占兜底（verify 硬 check） | §6.6 |
 | `setup_socks_skip_auth` | 注入 `100.64.0.0/10` 进 mihomo 免认证名单 | §6.4 |
 | `setup_openclash_decouple` | VPS 域名 DIRECT 规则 + fake-ip 过滤 | §6.5 |
-| `verify` | 13 项端到端自检 | §5 |
+| `setup_socks5_force_direct` | 注入 `IN-PORT,7891,DIRECT`，socks5 入站回国流量强制直出 | §6.8 |
+| `setup_global_reorder` | 注入 GLOBAL select 组，把 DIRECT/REJECT 排到选单最后（纯 UI 顺序，幂等） | §4.2 |
+| `install_monitor` / `setup_monitor_cron` | 安装 `cn-bridge-monitor` 探活并挂 cron（默认每 2 分钟一轮） | §4.4 |
+| `verify` | 端到端自检（socks5/balance 链路段 10 项 + 一项模式无关守卫） | §5 |
+
+> 🔬 上表只是「本文链路相关」的子集——脚本里还有 `mode_uses_tailscale` / `mode_uses_reverse` 模式判定、reverse 链路专属的 `install_xray_bridge` / `install_cn_bridge` 等函数（属 [08. Xray Reverse Bridge](./08-xray-reverse-bridge.md) 的范畴）。`generate_nodes_list` / `setup_global_reorder` / `setup_monitor_cron` 三者对 socks5 与 reverse 两套方案都跑，所以两篇都会提到。
 
 脚本完成后会提示去管理后台批准 routes 和 exit node（§1.3）。
 
@@ -386,7 +397,7 @@ procd_set_param command /usr/sbin/tailscaled \
   ```sh
   procd_close_instance
   (sleep 8; /usr/sbin/tailscale up --timeout=60s --accept-dns=false \
-      --advertise-routes=172.18.18.0/23 --advertise-exit-node \
+      --advertise-routes=${TS_ADVERTISE_ROUTES} --advertise-exit-node \
       --hostname=openwrt-cn >/dev/null 2>&1) &
   ```
   tailscaled 进程起来 ≠ 它会连接。只有 prefs 里 `WantRunning=true` 才自动连。这一位可能被历史排障操作置 `false`，导致「daemon 在跑但 VPN stopped、回国服务不恢复」。后台显式 `up` 兜底，让断电重启无条件回到声明状态。见 §6.3。
@@ -397,7 +408,7 @@ procd_set_param command /usr/sbin/tailscaled \
 
 ```sh
 tailscale up --reset --timeout=120s --accept-dns=false \
-    --advertise-routes=172.18.18.0/23 \
+    --advertise-routes=${TS_ADVERTISE_ROUTES} \
     --advertise-exit-node \
     --hostname=openwrt-cn
 ```
@@ -467,7 +478,7 @@ ethtool -K <wan-netdev> rx-udp-gro-forwarding on rx-gro-list off
 1. 打开 [https://login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines)
 2. 找到你的 OpenWrt 节点（如 `openwrt-cn`）
 3. 点 `...` → **Edit route settings**
-4. 勾选 **Subnet routes** 下的 `172.18.18.0/23`
+4. 勾选 **Subnet routes** 下你申报的网段（`${TS_ADVERTISE_ROUTES}`）
 5. 勾选 **Use as exit node**
 6. 保存
 
@@ -495,7 +506,7 @@ ethtool -K <wan-netdev> rx-udp-gro-forwarding on rx-gro-list off
 
 ## 5. 验证：每个角色怎么自测
 
-🔧 脚本 `verify()` 跑 13 项自检。手动按角色验证：
+🔧 脚本 `verify()` 对 socks5/balance 链路跑 10 项自检（`mode_uses_tailscale` 段：8 项硬 check + 2 项软 check，软项时序未就绪不算失败），外加一项模式无关的 `lan_ac_traffic` 守卫。手动按角色验证：
 
 ```sh
 # 基础：网卡 + 登录态 + 端口
@@ -527,7 +538,7 @@ tailscale ping <peer-ts-ip>             # 应返回 pong
 ### 6.1 整机死机失联：路由黑洞真凶
 
 - **现象**：跑完安装、浏览器授权成功后，整台 OpenWrt 突然 LAN/SSH/LuCI 全失联，像死机，重启才恢复。
-- **根因**：`tailscale up` 带了 **`--accept-routes`**。kernel TUN 模式下，若 tailnet 里任何其他节点（**包括早已下线的旧路由器**）持有「已批准的、与本机 LAN 重叠的 `172.18.18.0/23` 子网路由」，accept-routes 会把这条路由装进内核策略路由（`ip rule 5270 → table 52`）→ 发往 LAN 的所有回包被丢进隧道黑洞 → 整机失联。userspace 模式从不装内核路由，所以这颗雷在切 kernel TUN 后才引爆。
+- **根因**：`tailscale up` 带了 **`--accept-routes`**。kernel TUN 模式下，若 tailnet 里任何其他节点（**包括早已下线的旧路由器**）持有「已批准的、与本机 LAN 重叠的 `${TS_ADVERTISE_ROUTES}` 子网路由」，accept-routes 会把这条路由装进内核策略路由（`ip rule 5270 → table 52`）→ 发往 LAN 的所有回包被丢进隧道黑洞 → 整机失联。userspace 模式从不装内核路由，所以这颗雷在切 kernel TUN 后才引爆。
 - 🔬 **活体特征**（区分真死机）：LAN ping 不通，但 `ssh root@<本机TailscaleIP>` 能连（tailscaled 自身的包带 fwmark 走 `rule 5210` 逃逸黑洞）。
 - **解法**：`tailscale up` **永不加 `--accept-routes`**。本机自己就是 subnet router 本体，不需要接受任何对端路由。
 - 🔬 **远程急救**（无需断电）：经 LuCI（监听 Tailscale IP）的 ubus 调 `rc init tailscale stop`。
@@ -561,9 +572,19 @@ tailscale ping <peer-ts-ip>             # 应返回 pong
 
 ### 6.6 Tailscale 自身 UDP 被 tproxy 误劫持
 
-- **现象**：隧道打洞不稳 / 偶发连接异常。
+- **现象**：隧道打洞不稳 / 偶发连接异常；OpenClash 重启后短时间内 mihomo 日志刷 `listenLocalConn address already in use`、直连退化到 DERP。
 - **根因**：OpenClash 的 mangle 链可能把 tailscaled 自己的加密 UDP（disco/STUN，端口 `41641`）也打上 tproxy 标记。
-- **解法**：`setup_tailscale_firewall_bypass` 写 OpenClash 原生钩子，在 mangle 链顶部对 `udp sport/dport 41641` 做 `return`，绕过 tproxy。钩子自带去重、OpenClash 重启后自动重跑。
+- **解法（两层兜底，缺一不可）**：
+  1. `setup_tailscale_firewall_bypass` 写 OpenClash 原生钩子，在 `openclash_mangle*` 链顶部对 `udp sport/dport 41641` 做 `return`，绕过 tproxy。钩子自带去重、OpenClash 重启后自动重跑。
+  2. `setup_tailscale_persistent_bypass` 写 `/etc/nftables.d/99-cn-exit-tailscale.nft`，作为**重启窗口期**的兜底（见下）。
+
+> 🔬 **为什么只靠钩子不够——OpenClash 重启窗口期**：上面第 1 层的 `return` 规则挂在 `openclash_mangle*` 链上，OpenClash 重启会 `flush` 这些链，而原生钩子要到启动流程靠后一步才重新注入——这中间有约 20s 的窗口期。窗口内 tailscaled 的 UDP 被打标进 TUN，mihomo 的 EIN NAT 绑同源端口 `41641` 与 tailscaled 冲突（`address already in use` 刷屏 + 直连退化 DERP）。
+>
+> 第 2 层 `setup_tailscale_persistent_bypass` 用 `fw4` 持久 `include` 进 `inet fw4` 表的特性兜底——`/etc/nftables.d/*.nft` 被 include 进 fw4 主表，OpenClash 只 flush 自己的 `openclash_*` 链、不会动它。它写两条 `priority -149` 的链（挂在 OpenClash mangle `-150` 之后）：output 链用 `route` 类型，把命中流量的 fwmark 清零触发重路由回主表、不再进 utun；prerouting 链同理。
+>
+> 🔬 **关键约束**：规则**只匹配 OpenClash 的 fwmark `0x162`**（OpenClash 多年固定值 → `ip rule lookup 354`），**不能写 `mark != 0`**——那会误清 tailscaled 自身的 `0x80000` 防环路标记。窗口期之外没有 `0x162` 标记，规则不命中、零开销。
+>
+> ✅ **这是 verify 的硬 check**：`verify()` 用 `nft list chain inet fw4 cn_exit_ts_output` 验证「持久 bypass 链已加载」——链没加载即报硬失败（区别于 `防火墙 bypass 规则已注入` 那条软项）。
 
 ### 6.7 空闲一段时间后 SOCKS5 失联
 
@@ -576,7 +597,7 @@ tailscale ping <peer-ts-ip>             # 应返回 pong
 - **现象**：测回国出口时用 `myip.ipip.net`，显示的是代理节点 IP（日本/美国），以为分流坏了。
 - **根因**：`myip.ipip.net` 的域名不在 `geosite:cn` 里，被 mihomo 当国外流量又走了一次代理。
 - **解法**：测回国出口用 `cip.cc`、`ip.cn` 这类命中 `geosite:cn` 的域名。
-- **彻底对齐**：`setup_socks5_force_direct` 注入 `IN-PORT,7891,DIRECT`，让经 SOCKS5 入站（cn-exit socks5 腿）的回国流量强制纯直出、不再二次分流，这类灰色域名也直接出家宽，与 reverse bridge 的 r-tunnel 腿质量一致。详见 [docs/08 §4.5 多节点高可用](08-xray-reverse-bridge.md)。
+- **彻底对齐**：`setup_socks5_force_direct` 注入 `IN-PORT,7891,DIRECT`，让经 SOCKS5 入站（cn-exit socks5 腿）的回国流量强制纯直出、不再二次分流，这类灰色域名也直接出家宽。其与 reverse bridge 的 r-tunnel 腿的质量对齐、以及 balance 主备如何收口两条腿，属 [08. Xray Reverse Bridge](./08-xray-reverse-bridge.md) 的范畴，详见该文。
 
 ---
 
