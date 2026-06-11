@@ -10,16 +10,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [26.6.11] — 2026-06-11 · watchtower 全自动更新体系 + ISP 测速选路优化 + 风险分类媒体分流
+
+> 汇总自 v26.6.7 以来的全部变更：主线是镜像分发从「手动滚动升级」演进到 **watchtower 全自动更新 + canary 自检**（配套 `YY.M.D-<短 sha>` 镜像版本号方案，本版起 Git Release tag 与 Docker 镜像 tag 一一对应），伴随 ISP 测速/选路系统性优化、媒体分流改为账号风险分类模型与多项稳定性修复。
+
+### Added（新增）
+
+- **Watchtower 全自动镜像更新体系**：生产节点经 watchtower 自动跟进 `:latest`，人工滚动升级退役为兜底手段。
+  - `docker-compose.yml` 新增 watchtower service：schedule 定时拉取；`hostname=${domain}` 使通知标题可辨节点；`WATCHTOWER_NO_STARTUP_MESSAGE=true` 关闭容器重启时的 startup 噪音，只在真更新/失败时通知。
+  - **canary 自检**：`sources/vps/sbx-canary-check.sh` 在自动更新后做业务层自检并推送 Telegram 通知（updated/failed 两类事件，中文 formatter 入 `scripts/sb_xray/shoutrrr.py`）；`vps-cn-exit-init.sh` 按角色安装自检 cron（canary 节点错峰先行、worker 随后），并安装 `sbx-update`（run-once 手动更新）helper。
+  - **漂移缓解契约**（CLAUDE.md §2）：watchtower 从现有容器 env 重建新镜像、不读 compose——新增 env 必须镜像内默认兜底；修复必须镜像内默认生效，否则发布说明标 `requires-compose-sync`、不走自动分发。
+- **风险分类媒体分流（risk-class media routing）**：以「账号风险 A/B 二分类」取代原先三组互相矛盾的媒体探测组：账号敏感类（ChatGPT / Gemini / Claude / social / TikTok）不做探测——家宽直连、否则恒走 `isp-auto`（封号风险探测不出来，保持最大保守）；流媒体解锁类（Netflix / Disney / YouTube）改为读正文 GET + 内容签名，仅 REAL 解锁判定才直连（HEAD 200 可能掩盖验证码/地区墙页面）。`is_restricted_region()` 提升为住宅短路之上的顶层安全网（受限地区家宽节点也走 fallback 不直出）；旧 IP 信誉 / `ipapi.json` 层裁撤（新模型下无消费者）。
+- **OpenWrt `cn-exit-setup` 初始化自动注入 GLOBAL 组**：OpenClash global 模式下把内置 DIRECT/REJECT 置底（纯 UI 顺序，不影响路由），照 skip-auth 同款幂等手法注入官方覆写钩子；成员动态取现有 proxy-groups 组名、不硬编码节点名。同时删除天生覆盖不到 proxy-providers 的失效脚本 `sources/hack/anytls_overwrite.sh`。
+
 ### Changed（变更）
 
+- **镜像版本号方案 `YY.M.D-<7 位短 sha>`**：daily-build 增加 push 触发（合入 main 即构建、覆盖 `:latest`），镜像同时打 `:<version>` + `:latest` 双 tag，并以 OCI label（version/revision/source）写入镜像便于节点反查来源；`build.sh` / `release.sh` 对齐同格式——Git Release tag 与 Docker 镜像 tag 一一对应。组件版本仍以 `versions.json` 为单一事实源，不再与 Xray 上游版本号绑定。
 - **Sub-Store 后端订阅同步默认时间 23:55 → 04:00**（`SUB_STORE_BACKEND_SYNC_CRON` 镜像内默认值，Dockerfile）：原 `55 23 * * *` 晚于次日 04:30 的 `substore-check` 拉取自检 4.5 小时，自检验证的是隔夜旧数据、因果顺序颠倒。改为 `0 4 * * *` 使同步先行 30 分钟，自检验证当天刚同步的结果。镜像内默认生效（watchtower 自动分发，无需 compose 同步）；在 compose 显式设过该 env 的部署不受影响。
-- **ISP 测速与选路优化（消除全队"不流畅"误报 + 杜绝无谓重启）**：电报里 16 台节点集体报「8K ⚠️ 不流畅」（proxy-us-isp ~5 Mbps）经实测是**测量假象**——同一上游代理裸 curl 单连接达 95–146 Mbps，生产函数与 curl 同时刻吻合。根因是全队 `0 */6` cron 在整点同一秒压同两个共享上游代理，自造惊群。本次系统性优化：
-  - **错峰重测**：retest cron 分钟位按 `sha1(hostname) % 60` 打散（如 `52 */6` 而非 `0 */6`），16 台散布全小时、互不踩踏。`ISP_RETEST_JITTER=false` 可关。
+- **ISP 测速与选路优化（消除全队"不流畅"误报 + 杜绝无谓重启）**：电报里全队节点集体报「8K ⚠️ 不流畅」（proxy-us-isp ~5 Mbps）经实测是**测量假象**——同一上游代理裸 curl 单连接达 95–146 Mbps，生产函数与 curl 同时刻吻合。根因是全队 `0 */6` cron 在整点同一秒压同两个共享上游代理，自造惊群。本次系统性优化：
+  - **错峰重测**：retest cron 分钟位按 `sha1(hostname) % 60` 打散（如 `52 */6` 而非 `0 */6`），全队散布全小时、互不踩踏。`ISP_RETEST_JITTER=false` 可关。
   - **测量更稳健**：默认采样 3 次（`ISP_SPEED_SAMPLES` 此前被代码忽略，现已生效）、瞬时 `connect_fail`/`timeout` 单样本重试一次（`ISP_SPEED_SAMPLE_RETRIES`）、`n≥3` 取中位数抗离群。
   - **选路解耦排序与重启**：xray `leastPing` 本就按实时 RTT 选线、无视 selector 顺序，故纯带宽排名波动不再触发重启——仅「已配置节点增删」或「路由类别 direct↔proxy 切换」才 rebuild+重启。flaky 线 `0↔alive` 横跳**不触发重启**：死/慢线保留在 selector（含全部已配置节点），交给运行期 `leastPing` + `fallbackTag/direct` 尾部成员实时绕开、全死时优雅退 direct——比剔除它们更稳（剔除会让横跳 churn 重启、且全死时 `isp-auto` 消失致引用悬空）。主选加跨轮滞回（`ISP_LEADER_HYSTERESIS`，默认 1.15）。
   - **告警边沿触发**：仅在首次/评级翻转/可用成员变化/选线变化时推 Telegram，纯抖动静默，终结每 6h 刷屏。
   - **8K 评级校准**：判定阈值 100→60 Mbps 对齐内部评级梯子（`ISP_8K_SMOOTH_MBPS` 可覆盖）；Telegram 不再显示二元「⚠️ 不流畅」，改显评级梯子标签（如「评级: 流畅 4K，8K 可能卡顿」）。
   - 废弃：`ISP_RETEST_DELTA_PCT` 不再被读取，设置无任何效果（重启触发改为成员/路由类别变化）。带宽变化幅度仍写入 `ISP_LAST_RETEST_DELTA_PCT` + 事件 payload 作遥测，不触发重启。
+- **ISP 重测通知合并为单条**：原先一个重测周期发两条（测速结果卡 + 切换决策，且 noop 走 key:value 兜底格式），现测速摘要折入决策卡——「🔄 ISP 重测 · 线路已切换」/「🔁 ISP 重测 · 线路不变」合并卡，单条读完即闭环；重测路径抑制独立测速推送（仍记日志）。
+- **sing-box rule_set 数据源 SagerNet → MetaCubeX**：`sb.json` 全部 14 个远程 rule_set（13 geosite + geoip-cn）切到 MetaCubeX/meta-rules-dat（sing 分支），与 xray 引擎 geo 源对齐、根除两引擎数据源分裂；仅换 URL，tag / download_detour / 更新间隔不变。
+- **`TS_ADVERTISE_ROUTES` 去默认改必填**（OpenWrt / VPS 脚本侧）：删除内置默认网段（合规脱敏 §4），`cn-exit-setup.sh` 在 socks5/balance 模式未设置时启动即报错退出、不再静默使用默认网段；`config.env.example` 改为留空必填注释。
+- **CI 工程加固**：traffic-stats 增加数据新鲜度可观测性（clones.csv 行数/最新日期入 step summary，一眼区分「GitHub Traffic API 固有 2-3 天上报延迟」与「抓取异常」）+ 被弃用 action 升级 Node24 版本；`force_build=true` 时禁用 buildx 缓存，强制构建真正从头构建。
 
 ### Fixed（修复）
 
@@ -27,11 +45,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - **正确性**：`isp_retest.run()` 在重渲染前补跑 media 探针恢复 `*_OUT`，并按 boot 同样的 `HAS_ISP_NODES` 推导补回 `ISP_OUT`（电商 amazon/paypal/ebay 及 social/tiktok 规则用）——它不是 media 探针项，不补则两核都退成 direct、电商走数据中心 IP 触发风控（`scripts/sb_xray/stages/isp_retest.py:_restore_media_routing`）。
   - **纵深防御**：sb.json 渲染后对任何残留 `${*_OUT}` 一律兜底为 `direct` 并告警（`config_builder.py:_patch_unresolved_service_outs`），杜绝任何未来重渲染路径再退化成字面量——与 xray 服务路由 `outbounds.get(name) or "direct"` 的优雅回退对齐。
 - **`isp-retest` 每 6 小时无条件重启 xray/sing-box**：`_ISP_SPEEDS_JSON` 从不持久化到 STATUS_FILE，cron retest（全新进程）只能与**启动期冻结的环境快照**比对 → 永远 `delta=100%` → 每次重测都重启守护进程、掐断全部连接。修复：测速结果持久化进 STATUS_FILE，重载判据改为「已配置成员/路由类别变化」（见上「选路解耦」）。
-- **mihomo amd64 改用 `-compatible` 构建（兼容 ≤x86-64-v2 老 CPU）**：通用 amd64 mihomo 二进制按 x86-64-v3 微架构优化，在 SSE4.2 等老 CPU 的 VPS（如 dc99-3）上触发非法指令崩溃，容器内 `http-meta` 进程起不来、Sub-Store 机场订阅拉取失效。统一改用 `mihomo-linux-amd64-compatible-v${VER}.gz`：
+- **ISP 住宅代理冷启动竞态根治**：async 测速刷新路径污染 `HAS_ISP_NODES` 进程环境，导致冷启动期选路推导错乱。修复：`is_restricted_region` 改显式传参、不再变更 env；STATUS_FILE 写入原子化 + flock 串行；async 刷新只持久化、从不回写 env；新增回归测试钉死冷启动 `ISP_OUT` 竞态。
+- **TikTok 分流规则被遮蔽（双引擎死规则）**：`geosite:tiktok` 原排在 `geosite:category-social-media-!cn` 之后、永远不命中。两引擎统一前置：xray `_SERVICE_SPEC` 与 sing-box `sb.json` 调整规则顺序，并按服务拼接 `${TIKTOK_OUT}` / `${SOCIAL_MEDIA_OUT}`。
+- **watchtower canary 通知「镜像构建: 未知」**：formatter 读 `payload.built` 但 canary 脚本未发该字段、两端错位，digest 被忽略。镜像侧 formatter 补字段回退（updated→new / failed→image）默认止血；canary 脚本改读 OCI `image.version` label，通知显示友好版本号（label 缺失回退 digest 末段）。
+- **mihomo amd64 改用 `-compatible` 构建（兼容 ≤x86-64-v2 老 CPU）**：通用 amd64 mihomo 二进制按 x86-64-v3 微架构优化，在 SSE4.2 等老 CPU 的 VPS 上触发非法指令崩溃，容器内 `http-meta` 进程起不来、Sub-Store 机场订阅拉取失效。统一改用 `mihomo-linux-amd64-compatible-v${VER}.gz`：
   - `Dockerfile` / `build.sh`（refresh 模式 `get_asset_digest`）/ `versions.json` 切到 compatible 资源与对应 SHA256（PR #21）。
   - **CI digest 漏改修复**：`.github/workflows/daily-build.yml` 的 check job 仍以通用 `mihomo-linux-amd64-v${VER}.gz` 计算 digest 并覆盖 `versions.json`，与 Dockerfile 实下的 compatible 文件 SHA 不符，导致 amd64 构建在 `sha256sum -c` 阶段失败（run 27128783528）。check job 的 amd64 digest 资源名同步为 compatible（PR #24）。arm64 无 compatible 变体，三处统一保留通用 `mihomo-linux-arm64-v${VER}.gz`。
   - 构建坑固化进 `docs/00 §6 Q8`（Dockerfile / build.sh / daily-build.yml 三处资源名一致表 + `grep` 自检 + `http-meta -v` 目标 CPU 验证，PR #25）。
-  - 验证：强制重建成功（linux/amd64 + linux/arm64 双架构）；16 台生产节点滚动升级后全部 healthy，`docker exec sb-xray /sub-store/http-meta/http-meta -v` 全队退出码 0。
+  - 验证：强制重建成功（linux/amd64 + linux/arm64 双架构）；全量生产节点滚动升级后全部 healthy，`docker exec sb-xray /sub-store/http-meta/http-meta -v` 全队退出码 0。
+
+### Docs（文档）
+
+- **全量文档重构（#48）**：01–09 + readme 审计裁决落地——架构坐标系重建、S-UI 死引用清理、跨文档锚点与编号收口、机制描述向单一真相源转引；readme 精炼为导航门面。配套合规脱敏：`sources/nikki` 凭据占位化、脚本注释去环境特定信息；删除无引用死变量 `ISP_RETEST_DELTA_PCT`（Dockerfile）。
+- **docs/00 新增 §8「GitHub Actions CI 自动构建与发布流水线」（#47）**：四 job 职责表、push / 每日 cron / 手动三触发与门控真值表、原生 arm64 runner / push-by-digest + manifest 合并 / 缓存策略等架构决策，以及 CI 与本地构建、生产 watchtower 闭环的关系（接漂移契约与 `requires-compose-sync` 例外）。
+- **dufs 配置优先级机制实测修正**（docs/04 §2.2）：双向实测判决 env 严格优先于 conf（CLI > env > config > default），撤回早先「取并集/无单向覆盖」的不准确表述；补 `DUFS_BIND` env 压过 conf bind 的安全提示（host 网络下 `0.0.0.0` 监听全网卡）。
+- **媒体分流文档同步至账号风险分类模型**（#41，docs/01 §5.3 / docs/03 §1.2）；**watchtower canary 通知卡片与 `built` 字段语义**（#43，docs/06 §9.1 + `sources/vps/README`）；**PR 提交前文档记录纪律**入 CLAUDE.md §5。
 
 ## [26.6.7] — 2026-06-07 · 回国出口多公网高可用（CN_EXIT_MODE balance + Tailscale + reverse bridge）
 
