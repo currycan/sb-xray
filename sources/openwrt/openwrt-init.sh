@@ -11,7 +11,7 @@
 # ② OpenClash 配置纳管（OPENCLASH_MANAGE=1 默认开）：按架构选 op-amd/op-arm 模板，
 #    注入私有值（dashboard 密码、订阅地址）后幂等应用到 /etc/config/openclash。
 # ③ CDN IP 优选（CDN_DOMAIN 非空启用）：内嵌 cdn-speedtest 写出 /usr/bin/cdn-speedtest
-#    + /etc/subdomains.txt + 每日 cron，Cloudflare 优选 IP 进 /etc/hosts。
+#    + /etc/subdomains.txt + 安装时前台同步首跑一次，此后每日 cron，Cloudflare 优选 IP 进 /etc/hosts。
 #
 # 前置：fw4/nftables；能访问公网；socks5/balance 模式还需 OpenClash 已安装运行
 # （本脚本不安装 OpenClash 本体，只管配置）。
@@ -27,7 +27,7 @@ die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-用法: sh openwrt-init.sh [-h|--help]
+用法: sh openwrt-init.sh [cdn [run|status|clean]] [-h|--help]
 
 sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenClash 配置纳管 + CDN 优选。
 
@@ -48,6 +48,10 @@ sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenCla
   OpenClash   OPENCLASH_MANAGE(默认 1) OPENCLASH_DASHBOARD_PASSWORD OPENCLASH_SUBS("名=URL ...")
   CDN 优选    CDN_DOMAIN(非空启用) CDN_SUBDOMAINS(逗号分隔前缀) CDN_CRON_SCHEDULE(默认 0 4 * * *)
   其他        RELOAD_OPENCLASH=1（完成后自动重启 OpenClash）ARCH_OVERRIDE=arm64|amd64
+
+CDN 子命令:
+  sh openwrt-init.sh cdn              安装 cdn-speedtest + 同步首跑 + CDN 自检
+  sh openwrt-init.sh cdn run|status|clean  透传内嵌 cdn-speedtest 工具
 
 前置: fw4/nftables 的 OpenWrt；socks5/balance 模式需已装 OpenClash（本脚本不装本体）。
 完成后自动自检（verify）：硬失败非 0 退出，时序软项只 warn 可稍后重跑复查。
@@ -1119,11 +1123,11 @@ CDNDOMAIN="${CDNDOMAIN:-}"
 CDN_SUBDOMAINS_FILE="${CDN_SUBDOMAINS_FILE:-/etc/subdomains.txt}"
 
 # CloudflareST 参数
-SPEED_TEST_THREADS=500        # 延迟测速线程数
-SPEED_TEST_TIME=4             # 下载测速时间(秒)
-SPEED_TEST_COUNT=5            # 下载测速数量
-SPEED_TEST_LATENCY_MAX=200   # 延迟上限(ms)
-SPEED_TEST_MIN_SPEED=5        # 最低下载速度(MB/s)，低于此值视为失败
+SPEED_TEST_THREADS="${SPEED_TEST_THREADS:-500}"        # 延迟测速线程数
+SPEED_TEST_TIME="${SPEED_TEST_TIME:-4}"             # 下载测速时间(秒)
+SPEED_TEST_COUNT="${SPEED_TEST_COUNT:-5}"             # 下载测速数量
+SPEED_TEST_LATENCY_MAX="${SPEED_TEST_LATENCY_MAX:-200}"   # 延迟上限(ms)
+SPEED_TEST_MIN_SPEED="${SPEED_TEST_MIN_SPEED:-5}"        # 最低下载速度(MB/s)，低于此值视为失败
 
 # 安装目录
 INSTALL_DIR="/etc/CloudflareST"
@@ -1189,6 +1193,33 @@ detect_arch() {
     esac
 }
 
+# busybox tar 兼容回退：上游 cfst tar.gz 是无 ustar 魔数的老式 tar（bsdtar/GNU tar
+# 可读；busybox tar 硬性要求魔数，-z 与流式管道均报 invalid tar magic，且历代资产
+# 均如此）。按 512 字节块手工走档头，仅抽出 cfst 二进制——零依赖，与上游版本无关。
+extract_cfst_fallback() {
+    local tarball="$1" dest="$2" raw name size_oct size blocks off total
+    raw="${dest}/.cfst_raw.$$"
+    gunzip -c "$tarball" > "$raw" || { rm -f "$raw"; return 1; }
+    total=$(wc -c < "$raw")
+    off=0
+    while [ $((off + 512)) -le "$total" ]; do
+        name=$(dd if="$raw" bs=1 skip="$off" count=100 2>/dev/null | tr -d '\0')
+        [ -n "$name" ] || break
+        size_oct=$(dd if="$raw" bs=1 skip=$((off + 124)) count=12 2>/dev/null | tr -d '\0 ')
+        case "$size_oct" in ''|*[!0-7]*) size=0 ;; *) size=$((0$size_oct)) ;; esac
+        blocks=$(( (size + 511) / 512 ))
+        if [ "$name" = "cfst" ]; then
+            dd if="$raw" bs=512 skip=$((off / 512 + 1)) count="$blocks" 2>/dev/null | head -c "$size" > "${dest}/cfst"
+            rm -f "$raw"
+            [ -s "${dest}/cfst" ] && return 0
+            return 1
+        fi
+        off=$((off + 512 + blocks * 512))
+    done
+    rm -f "$raw"
+    return 1
+}
+
 install_cloudflarest() {
     local arch="$1"
     local tarball="cfst_linux_${arch}.tar.gz"
@@ -1221,7 +1252,13 @@ install_cloudflarest() {
         fi
     fi
 
-    tar -xzf "${INSTALL_DIR}/${tarball}" -C "$INSTALL_DIR"
+    if ! tar -xzf "${INSTALL_DIR}/${tarball}" -C "$INSTALL_DIR" 2>/dev/null; then
+        log "busybox tar 解包失败（归档无 ustar 魔数），使用内置回退解析..."
+        if ! extract_cfst_fallback "${INSTALL_DIR}/${tarball}" "$INSTALL_DIR"; then
+            log "ERROR: 解包失败，请手动解出 cfst 到 ${INSTALL_DIR}/"
+            exit 1
+        fi
+    fi
     chmod +x "${INSTALL_DIR}/cfst"
     rm -f "${INSTALL_DIR}/${tarball}"
     log "CloudflareST 安装完成: ${INSTALL_DIR}/cfst"
@@ -1516,6 +1553,14 @@ main "$@"
 CDNEOF
 }
 
+build_cdn_env() {
+    _cdn_env="CDNDOMAIN=$CDN_DOMAIN"
+    for _v in SPEED_TEST_THREADS SPEED_TEST_TIME SPEED_TEST_COUNT SPEED_TEST_LATENCY_MAX SPEED_TEST_MIN_SPEED; do
+        eval "_val=\$$_v"
+        [ -n "$_val" ] && _cdn_env="$_cdn_env $_v=$_val"
+    done
+}
+
 install_cdn_speedtest() {
     # CDN IP 优选：CDN_DOMAIN 非空才启用。内嵌脚本写出 /usr/bin/cdn-speedtest +
     # /etc/subdomains.txt + 每日 cron + 预装 CloudflareST，全部幂等。
@@ -1567,7 +1612,8 @@ install_cdn_speedtest() {
         sed -i '/cdn-speedtest\.sh/d' "$_crontab"
         log "已清理旧版 cdn-speedtest.sh cron 行"
     fi
-    _line="${CDN_CRON_SCHEDULE:-0 4 * * *} CDNDOMAIN=$CDN_DOMAIN /usr/bin/cdn-speedtest run  # optimize CDN IP"
+    build_cdn_env
+    _line="${CDN_CRON_SCHEDULE:-0 4 * * *} $_cdn_env /usr/bin/cdn-speedtest run  # optimize CDN IP"
     if grep -qxF "$_line" "$_crontab"; then
         log "CDN 优选 cron 已存在，跳过"
     else
@@ -1580,9 +1626,29 @@ install_cdn_speedtest() {
 
     # 预装 CloudflareST（幂等：已装直接返回；失败不阻断，首次 run 会重试）
     "$_bin" install || warn "CloudflareST 预装失败（首次 cdn-speedtest run 时会重试）"
+
+    # 首跑只处理“从无到有”；新鲜度交给每日 cron；last_best.txt 门禁保 init 重跑幂等。
+    if [ -f /etc/CloudflareST/last_best.txt ]; then
+        log "已有优选结果（last_best.txt），跳过首跑——由每日 cron 维持"
+    else
+        log "首次启用：同步执行 CDN 优选首跑（约需几分钟，期间 OpenClash 暂停、测完自动恢复）"
+        env $_cdn_env /usr/bin/cdn-speedtest run || \
+            warn "CDN 优选首跑失败（不阻断；每日 cron 会重试，或手动: sh openwrt-init.sh cdn run）"
+    fi
 }
 
 # ── 端到端自检 ────────────────────────────────────────────────────
+
+verify_cdn() {
+    # CDN 优选自检
+    if [ -n "$CDN_DOMAIN" ]; then
+        check "cdn-speedtest 已安装" test -x /usr/bin/cdn-speedtest
+        check "CDN 优选 cron 已配置" sh -c "grep -qF '/usr/bin/cdn-speedtest run' /etc/crontabs/root"
+        check "/etc/subdomains.txt 非空" test -s /etc/subdomains.txt
+        check "CloudflareST 已安装" test -x /etc/CloudflareST/cfst
+        check_soft "CDN 优选已生效（last_best.txt）" test -f /etc/CloudflareST/last_best.txt
+    fi
+}
 
 verify() {
     log "── 自检 (mode=$CN_EXIT_MODE) ──"
@@ -1644,13 +1710,7 @@ verify() {
         check "OpenClash dashboard 密码已注入（非占位符）" \
             sh -c "! grep -q '<OPENCLASH_DASHBOARD_PASSWORD>' /etc/config/openclash"
     fi
-    # CDN 优选自检
-    if [ -n "$CDN_DOMAIN" ]; then
-        check "cdn-speedtest 已安装" test -x /usr/bin/cdn-speedtest
-        check "CDN 优选 cron 已配置" sh -c "grep -qF '/usr/bin/cdn-speedtest run' /etc/crontabs/root"
-        check "/etc/subdomains.txt 非空" test -s /etc/subdomains.txt
-        check "CloudflareST 已安装" test -x /etc/CloudflareST/cfst
-    fi
+    verify_cdn
 
     printf '\n[cn-exit] 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
     if [ "$bad" -gt 0 ]; then
@@ -1661,6 +1721,24 @@ verify() {
 }
 
 # ── 主流程 ────────────────────────────────────────────────────────
+
+main_cdn() {
+    _sub="${1:-}"
+    load_config
+    [ -n "$CDN_DOMAIN" ] || die "cdn 子命令需要 CDN_DOMAIN（config.env 或内联环境变量提供）"
+    case "$_sub" in
+        '')
+            install_cdn_speedtest
+            verify_cdn
+            printf '\n[cn-exit] CDN 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
+            [ "$bad" -eq 0 ] || exit 1 ;;
+        run|status|clean|help)
+            [ -x /usr/bin/cdn-speedtest ] || die "cdn-speedtest 未安装，先跑: sh $0 cdn"
+            build_cdn_env
+            exec env $_cdn_env /usr/bin/cdn-speedtest "$_sub" ;;
+        *) die "未知 cdn 子命令: $_sub（支持 run|status|clean|help）" ;;
+    esac
+}
 
 main() {
     trap 'warn "已中断"; exit 130' INT TERM
@@ -1704,6 +1782,7 @@ main() {
 
 case "${1:-}" in
     -h|--help) usage; exit 0 ;;
+    cdn) shift; main_cdn "$@" ;;
     '') main ;;
     *) die "未知参数: $1（-h|--help 查看用法）" ;;
 esac

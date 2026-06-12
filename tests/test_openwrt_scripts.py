@@ -371,6 +371,7 @@ def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None
     script = _extract_embedded_cdn(tmp_path)
     src = script.read_text(encoding="utf-8")
     for fn in (
+        "extract_cfst_fallback",
         "build_cdn_domains",
         "install_cloudflarest",
         "run_speedtest",
@@ -384,7 +385,7 @@ def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None
     assert proc.returncode == 0, proc.stderr
 
 
-def test_cdn_install_step_guards_and_cron() -> None:
+def test_cdn_install_step_guards_and_cron(tmp_path: Path) -> None:
     """install_cdn_speedtest 契约：CDN_DOMAIN 空则跳过；清理旧版 cdn-speedtest.sh
     cron 行；cron 注入带 grep 守卫。"""
     src = _SETUP.read_text(encoding="utf-8")
@@ -393,3 +394,27 @@ def test_cdn_install_step_guards_and_cron() -> None:
     assert '"$CDN_DOMAIN"' in body
     assert "/usr/bin/cdn-speedtest run" in body
     assert "cdn-speedtest\\.sh" in body  # 旧路径 cron 清理
+    assert "last_best.txt" in body, "install_cdn_speedtest 缺少首跑结果门禁"
+    assert "env $_cdn_env /usr/bin/cdn-speedtest run" in body, "install_cdn_speedtest 缺少前台首跑"
+    assert "nohup" not in body
+    embedded = _extract_embedded_cdn(tmp_path).read_text(encoding="utf-8")
+    assert "${SPEED_TEST_THREADS:-500}" in embedded
+    assert "${SPEED_TEST_TIME:-4}" in embedded
+    assert "${SPEED_TEST_COUNT:-5}" in embedded
+    assert "${SPEED_TEST_LATENCY_MAX:-200}" in embedded
+    assert "${SPEED_TEST_MIN_SPEED:-5}" in embedded
+    assert "verify_cdn()" in src
+    assert "main_cdn()" in src
+    assert "cdn) shift; main_cdn" in src
+    main_cdn_start = src.index("main_cdn()")
+    main_cdn = src[main_cdn_start:src.index("\nmain()", main_cdn_start)]
+    assert main_cdn.index("install_cdn_speedtest") < main_cdn.index("verify_cdn")
+    assert "CDN 优选已生效（last_best.txt）" in src, "verify_cdn 缺少 CDN 首跑软自检"
+
+
+def test_embedded_cfst_extract_fallback_wired() -> None:
+    """busybox tar 不识别上游无 ustar 魔数归档：内嵌脚本必须带回退解包器并接线。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "extract_cfst_fallback()" in src, "缺少回退解包器定义"
+    assert "if ! tar -xzf" in src, "tar 失败路径未接回退"
+    assert 'extract_cfst_fallback "${INSTALL_DIR}/${tarball}"' in src, "回退未被调用"
