@@ -1407,6 +1407,18 @@ verify() {
         check "tailscale 防火墙 zone 已配置" sh -c "uci show firewall 2>/dev/null | grep -q \"name='tailscale'\""
         check "WAN UDP GRO 已优化" sh -c "ethtool -k \$(ip -o route get 8.8.8.8 2>/dev/null | grep -oE 'dev [a-z0-9]+' | awk '{print \$2}') 2>/dev/null | grep -q 'rx-udp-gro-forwarding: on'"
         check "已通告 routes ${TS_ADVERTISE_ROUTES}" sh -c "tailscale debug prefs 2>/dev/null | grep -q '${TS_ADVERTISE_ROUTES}'"
+        # LAN 网段迁移护栏：通告列表必须包含本机实际 LAN 网段——改了路由器网段
+        # 却忘改 config.env 时，脚本会继续通告旧网段（tailnet 访问家内网静默失效），
+        # 在此抓住。内核路由表直接给出网段基址（如 192.168.168.0/23），无需位运算；
+        # 取不到（异形拓扑）则跳过不检查。
+        _lan_ip=$(uci -q get network.lan.ipaddr)
+        _lan_cidr=""
+        [ -n "$_lan_ip" ] && _lan_cidr=$(ip -4 route show proto kernel 2>/dev/null | \
+            awk -v ip="$_lan_ip" '{ for (i = 1; i < NF; i++) if ($i == "src" && $(i+1) == ip) { print $1; exit } }')
+        if [ -n "$_lan_cidr" ]; then
+            check "通告网段含本机 LAN 实际网段 ${_lan_cidr}（变更网段后须同步 config.env 重跑）" \
+                sh -c "printf '%s' ',${TS_ADVERTISE_ROUTES},' | grep -qF ',${_lan_cidr},'"
+        fi
         check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
         check_soft "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"
         check_soft "防火墙 bypass 规则已注入" sh -c "test \$(nft list ruleset 2>/dev/null | grep -c tailscale-bypass) -ge 1"

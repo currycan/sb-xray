@@ -127,6 +127,15 @@ def test_setup_verify_covers_persistent_bypass() -> None:
     assert "nft list chain inet fw4 cn_exit_ts_output" in src
 
 
+def test_setup_verify_guards_lan_subnet_drift() -> None:
+    """verify() 必须含 LAN 网段迁移护栏：从内核路由表取本机实际网段，
+    比对 TS_ADVERTISE_ROUTES——改了路由器网段忘改 config.env 不能静默漏过。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "network.lan.ipaddr" in src
+    assert "ip -4 route show proto kernel" in src
+    assert "通告网段含本机 LAN 实际网段" in src
+
+
 def test_setup_verify_guards_openclash_fakeip_only_bypass() -> None:
     """verify() 必须自检 OpenClash 的 lan_ac_traffic 绕过开关未被打开。
 

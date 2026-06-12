@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - **OpenClash 配置纳管**（`OPENCLASH_MANAGE=1` 默认开）：按架构选 `sources/openclash/op-amd|op-arm` 模板（脚本同目录优先，缺失自动下载），注入 dashboard 密码与订阅地址（`OPENCLASH_SUBS`，`"名=URL"` 空格分隔按 `option name` 匹配、address 注入块尾对齐 LuCI 保存顺序），未提供地址的订阅块（AllOne / 示例）整块裁剪；规范化 diff 无漂移即跳过，有差异先 `.bak.<时间戳>` 再整文件覆写，restart 统一由解耦步骤末尾的 `RELOAD_OPENCLASH` 逻辑触发（避免双重重启）。自检新增「配置无漂移」「密码非占位符」两项。
   - **CDN IP 优选集成**（`CDN_DOMAIN` 非空启用）：原 `sources/hack/cdn-speedtest.sh` 整体并入主脚本（heredoc 内嵌），安装时写出 `/usr/bin/cdn-speedtest`（保留 run/install/status/clean 子命令）+ 按 `CDN_SUBDOMAINS` 生成 `/etc/subdomains.txt` + 每日 cron（`CDN_CRON_SCHEDULE`，默认 04:00）+ 预装 CloudflareST；自动清理旧版 `cdn-speedtest.sh` 手装产物与 cron 行。独立文件已从仓库删除。
 
+  - **LAN 网段迁移护栏**：自检新增「通告网段含本机 LAN 实际网段」检查（内核路由表取网段基址，比对 `TS_ADVERTISE_ROUTES`），改了路由器网段忘改 config.env 时直接 FAIL 而非静默通告旧网段；README §5.5 新增迁移 runbook（链路仅此一处依赖 LAN 网段——VPS 侧只认 Tailscale IP 与域名，OpenClash 模板无 LAN 硬编码，订阅模板内网直连用泛 RFC1918 段）。
+
 ### Changed（变更）
 
 - **`cn-exit-setup.sh` → `openwrt-init.sh` 更名**：与 `vps-cn-exit-init.sh` 命名对称。路由器上的运行时产物名（`cn-bridge`、`cn-bridge-monitor`、`/etc/cn-exit/`、`xray-bridge-<名>`）全部不变，已部署路由器无需迁移；仓库内全部文档/注释/测试引用同步更名（CHANGELOG 历史条目保留旧名）。迁移：下次重跑时按 README 下载新名脚本即可，旧脚本副本可删。
