@@ -1264,17 +1264,52 @@ install_cloudflarest() {
     log "CloudflareST 安装完成: ${INSTALL_DIR}/cfst"
 }
 
+# 恢复代理环境（trap 兜底与正常路径共用，幂等：备份在才恢复 DNS，停过才启 OpenClash）
+restore_proxy_env() {
+    if [ -f /etc/resolv.conf.bak.cdn-speedtest ]; then
+        log "恢复 /etc/resolv.conf"
+        cp /etc/resolv.conf.bak.cdn-speedtest /etc/resolv.conf
+        rm -f /etc/resolv.conf.bak.cdn-speedtest
+    fi
+    # run_speedtest 经 $() 在子 shell 执行，shell 变量 flag 父进程不可见——父子两道
+    # trap 都要能独立完成恢复。进程探测方案不可行（真机实测两类假象：rc stop 返回
+    # 后 core 拖尾退出，pgrep 命中将死进程导致跳过后无人再拉起；旁观进程 argv 含
+    # 关键字会假性命中）。改为原子 mkdir 抢锁串行化 + 无条件 restart：restart 对
+    # 在跑/已停/停止中三态均收敛，锁防并发双 start/restart 的 rc 竞态（真机实测
+    # 并发会把服务打成 inactive）。
+    [ -f /etc/init.d/openclash ] || return 0
+    if mkdir /tmp/.cdn-speedtest-oc-restore.lock 2>/dev/null; then
+        log "恢复 OpenClash（restart）..."
+        /etc/init.d/openclash restart > /dev/null 2>&1
+        log "OpenClash 已恢复"
+        rmdir /tmp/.cdn-speedtest-oc-restore.lock 2>/dev/null
+    else
+        log "另一恢复进程持锁，跳过 OpenClash 重启"
+    fi
+}
+
 run_speedtest() {
     log "开始 Cloudflare IP 优选测速..."
     log "参数: 线程=${SPEED_TEST_THREADS} 测速时间=${SPEED_TEST_TIME}s 数量=${SPEED_TEST_COUNT} 延迟上限=${SPEED_TEST_LATENCY_MAX}ms 最低速度=${SPEED_TEST_MIN_SPEED}MB/s"
 
     if [ -f /etc/init.d/openclash ]; then
         log "检测到 OpenClash，停止服务以确保测速直连..."
+        # 中断兜底先于 stop 安装：SSH 断线(HUP)/Ctrl-C(INT)/kill(TERM) 连停机过程中
+        # 被打断也恢复 DNS 与 OpenClash（kill -9 与断电无法 trap，属物理极限）。
+        # EXIT 覆盖意外退出路径。注意本函数经 $() 在子 shell 运行，此处 trap 只护
+        # 子 shell；父进程的同款 trap 在 main() 的 run 分支安装。
+        trap 'log "测速被中断，恢复代理环境..."; restore_proxy_env; trap - HUP INT TERM EXIT; exit 130' HUP INT TERM
+        trap 'restore_proxy_env' EXIT
         /etc/init.d/openclash stop > /dev/null 2>&1
         log "OpenClash 已停止"
         # OpenClash 停止后 DNS 失效，临时使用公共 DNS
-        log "备份 /etc/resolv.conf"
-        cp /etc/resolv.conf /etc/resolv.conf.bak.cdn-speedtest
+        # 已有备份不覆盖：kill -9 残局后重跑时，避免把上次未还原的公共 DNS 写进备份
+        if [ -f /etc/resolv.conf.bak.cdn-speedtest ]; then
+            log "检测到上次未还原的 resolv.conf 备份，保留原始备份不覆盖"
+        else
+            log "备份 /etc/resolv.conf"
+            cp /etc/resolv.conf /etc/resolv.conf.bak.cdn-speedtest
+        fi
         printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
         log "已临时切换至公共 DNS (1.1.1.1, 8.8.8.8)"
         # 验证 DNS 是否可用
@@ -1297,16 +1332,8 @@ run_speedtest() {
         -sl "$SPEED_TEST_MIN_SPEED" \
         -o result.csv
 
-    if [ -f /etc/init.d/openclash ]; then
-        if [ -f /etc/resolv.conf.bak.cdn-speedtest ]; then
-            log "恢复 /etc/resolv.conf"
-            cp /etc/resolv.conf.bak.cdn-speedtest /etc/resolv.conf
-            rm -f /etc/resolv.conf.bak.cdn-speedtest
-        fi
-        log "启动 OpenClash..."
-        /etc/init.d/openclash start > /dev/null 2>&1
-        log "OpenClash 已启动"
-    fi
+    restore_proxy_env
+    trap - HUP INT TERM EXIT
 
     log "测速完成"
 
@@ -1512,7 +1539,12 @@ main() {
             arch=$(detect_arch)
             install_cloudflarest "$arch"
             local best_ip
+            # 父进程 trap：run_speedtest 经 $() 在子 shell 跑，单独 TERM 父进程时子
+            # shell 的 trap 收不到信号（且子 shell 事后向已死父进程管道写日志会
+            # SIGPIPE 猝死）——父进程必须自带恢复：杀残留 cfst，再按磁盘状态恢复。
+            trap 'log "测速父进程被中断，恢复代理环境..."; pkill -x cfst 2>/dev/null; sleep 1; restore_proxy_env; trap - HUP INT TERM; exit 130' HUP INT TERM
             best_ip=$(run_speedtest) || exit 1
+            trap - HUP INT TERM
             best_ip=$(echo "$best_ip" | tail -1)
             local best_speed best_latency
             best_speed=$(sed -n '2p' "${INSTALL_DIR}/result.csv" | cut -d',' -f6)

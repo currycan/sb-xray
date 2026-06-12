@@ -372,6 +372,7 @@ def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None
     src = script.read_text(encoding="utf-8")
     for fn in (
         "extract_cfst_fallback",
+        "restore_proxy_env",
         "build_cdn_domains",
         "install_cloudflarest",
         "run_speedtest",
@@ -418,3 +419,21 @@ def test_embedded_cfst_extract_fallback_wired() -> None:
     assert "extract_cfst_fallback()" in src, "缺少回退解包器定义"
     assert "if ! tar -xzf" in src, "tar 失败路径未接回退"
     assert 'extract_cfst_fallback "${INSTALL_DIR}/${tarball}"' in src, "回退未被调用"
+
+
+def test_embedded_speedtest_trap_recovery(tmp_path: Path) -> None:
+    """测速窗口必须有 trap 兜底：HUP/INT/TERM/EXIT 都恢复 DNS 与 OpenClash。"""
+    embedded = _extract_embedded_cdn(tmp_path).read_text(encoding="utf-8")
+    assert "restore_proxy_env()" in embedded, "缺少恢复函数"
+    assert "trap " in embedded and "HUP INT TERM" in embedded, "缺少信号 trap"
+    assert "trap 'restore_proxy_env' EXIT" in embedded, "缺少 EXIT 兜底"
+    assert "trap - HUP INT TERM EXIT" in embedded, "正常路径未清 trap"
+    # 子 shell 陷阱：run_speedtest 经 $() 执行，父进程必须有独立 trap（含杀残留 cfst）
+    assert "测速父进程被中断" in embedded, "main() run 分支缺父进程 trap"
+    assert "pkill -x cfst" in embedded, "父进程 trap 应清理残留 cfst"
+    assert embedded.index("测速父进程被中断") < embedded.index("best_ip=$(run_speedtest)"), "父 trap 须先于命令替换安装"
+    # 恢复函数不得依赖子 shell 局部变量；OpenClash 恢复须锁串行 + 无条件 restart
+    assert "OPENCLASH_STOPPED" not in embedded, "恢复判定不得用 shell 变量"
+    assert "mkdir /tmp/.cdn-speedtest-oc-restore.lock" in embedded, "恢复缺原子锁"
+    assert "/etc/init.d/openclash restart" in embedded, "恢复须用 restart（三态收敛）"
+    assert "pgrep -f" not in embedded.split("restore_proxy_env()")[1].split("\n}")[0], "恢复不得用进程探测（拖尾/旁观假象）"

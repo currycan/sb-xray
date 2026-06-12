@@ -418,7 +418,7 @@ CDNDOMAIN=<根域名> cdn-speedtest status   # 查看当前优选状态
 CDNDOMAIN=<根域名> cdn-speedtest clean    # 清除优选记录，恢复 DNS 正常解析
 ```
 
-- 测速期间会临时停 OpenClash（测速直连）、切公共 DNS，完成后自动恢复。
+- 测速期间会临时停 OpenClash（测速直连）、切公共 DNS，完成后自动恢复；带双层 trap 兜底（父进程+子 shell 各一道，OpenClash 恢复经原子锁串行化 + 无条件 restart 收敛，幂等可交错）——SSH 断线/Ctrl-C 即时恢复 OpenClash 与 DNS，单杀父进程会在测速自然结束后恢复（kill -9/断电除外，需手动 `/etc/init.d/openclash start`）。
 - 新旧 IP 智能比对：IP 未变 / 新 IP 提升不足 10% 时不动 hosts，避免无谓抖动。
 - 日志：`/var/log/cdn-speedtest.log`（首跑为前台执行，输出同时直接可见）。
 - 测速参数 `SPEED_TEST_THREADS/TIME/COUNT/LATENCY_MAX/MIN_SPEED` 可在 `config.env` 设置，对首跑与每日 cron 同时生效（见 `config.env.example` CDN 段）。
