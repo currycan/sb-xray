@@ -363,7 +363,7 @@ systemctl enable --now xray-reverse-bridge
 journalctl -u xray-reverse-bridge -f
 ```
 
-> 📘 **OpenWrt 用户**：本项目仓库 `sources/openwrt/cn-exit-setup.sh` 已把「装 xray + 拉配置 + 写 `/etc/init.d/xray-bridge` 开机自启」固化成幂等脚本（详见 [sources/openwrt/README.md](../sources/openwrt/README.md)）。
+> 📘 **OpenWrt 用户**：本项目仓库 `sources/openwrt/openwrt-init.sh` 已把「装 xray + 拉配置 + 写 `/etc/init.d/xray-bridge` 开机自启」固化成幂等脚本（详见 [sources/openwrt/README.md](../sources/openwrt/README.md)）。
 
 看到 `[Info] app/reverse: got connection` 类日志即建立成功。
 

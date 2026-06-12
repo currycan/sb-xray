@@ -276,22 +276,22 @@ docker exec sb-xray show
 
 ### 4.4 bridge 侧（大陆 OpenWrt）
 
-🔧 **推荐：一键脚本**。仓库 `sources/openwrt/cn-exit-setup.sh` 已把「装 xray + 带 token 拉取已渲染 `client.json` + 写 `/etc/init.d/xray-bridge` 开机自启 + 自检」固化成幂等脚本，`CN_EXIT_MODE=reverse` 时只跑 bridge 相关步骤、不碰 Tailscale。
+🔧 **推荐：一键脚本**。仓库 `sources/openwrt/openwrt-init.sh` 已把「装 xray + 带 token 拉取已渲染 `client.json` + 写 `/etc/init.d/xray-bridge` 开机自启 + 自检」固化成幂等脚本，`CN_EXIT_MODE=reverse` 时只跑 bridge 相关步骤、不碰 Tailscale。
 
 ```sh
 # 路由器上直接下载（持久，可反复重跑）：
 mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
-for f in cn-exit-setup.sh config.env.example; do
+for f in openwrt-init.sh config.env.example; do
   wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
 done
 cp config.env.example config.env
 vi config.env          # CN_EXIT_MODE=reverse；填 VPS_DOMAIN / SUBSCRIBE_TOKEN / XRAY_VERSION
-sh cn-exit-setup.sh
+sh openwrt-init.sh
 
 # 或内联一行（免建文件）：
 CN_EXIT_MODE=reverse VPS_DOMAIN=<你的域名> \
   SUBSCRIBE_TOKEN=<token> XRAY_VERSION=26.3.27 \
-  sh cn-exit-setup.sh
+  sh openwrt-init.sh
 ```
 
 > `balance` 模式把 `CN_EXIT_MODE` 改成 `balance` 并补齐 Tailscale 相关变量即可（脚本会同时装 Tailscale 与 bridge）。详见 [sources/openwrt/README.md](../sources/openwrt/README.md)。
@@ -343,7 +343,7 @@ BRIDGE_NODES="dc99:dc99.example.com:tokA jp:jp.example.com:tokB cn2:cn2.example.
 BRIDGE_HOT=dc99,jp     # 常驻拨通的热备；其余为冷备
 ```
 
-`sh cn-exit-setup.sh` 会生成节点清单 `/etc/cn-exit/nodes.list`、安装 `cn-bridge` 工具，并对热备各拨一条独立 `xray-bridge-<名>` 进程（api 端口自动错开，避免多进程都监听 7979 冲突）。
+`sh openwrt-init.sh` 会生成节点清单 `/etc/cn-exit/nodes.list`、安装 `cn-bridge` 工具，并对热备各拨一条独立 `xray-bridge-<名>` 进程（api 端口自动错开，避免多进程都监听 7979 冲突）。
 
 🔧 **`cn-bridge` 拨号工具**（运行时随时切换，不改任何 VPS 配置）：
 

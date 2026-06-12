@@ -1,7 +1,7 @@
 # sb-xray 回国 reverse bridge 节点清单（多公网高可用）
 #
 # 用法：cp nodes.list.example nodes.list && vi nodes.list
-#   cn-exit-setup.sh 会优先读取脚本同目录的 nodes.list（或 NODES_FILE 指定路径），
+#   openwrt-init.sh 会优先读取脚本同目录的 nodes.list（或 NODES_FILE 指定路径），
 #   装入 /etc/cn-exit/nodes.list 供 cn-bridge 拨号与 OpenClash 解耦遍历。
 #
 # 每行一台 VPS：<名> <FQDN> <token>，空格分隔；# 注释与空行忽略。

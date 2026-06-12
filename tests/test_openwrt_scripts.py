@@ -1,9 +1,11 @@
 """sources/openwrt 下 shell 脚本的行为测试。
 
-覆盖三块：
+覆盖五块：
 1. POSIX 语法检查（sh -n）——三个脚本都必须能被 BusyBox ash 兼容解析；
 2. -h/--help 用法说明——必须在做任何环境检查/副作用之前短路退出；
-3. cn-exit-setup.sh 持久 tailscale bypass 的静态契约（nftables.d include）。
+3. openwrt-init.sh 持久 tailscale bypass 的静态契约（nftables.d include）；
+4. OpenClash 配置纳管：模板占位符契约 + 渲染函数行为（注入/裁剪）；
+5. 内嵌 cdn-speedtest：heredoc 完整性与可解析性。
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ from pathlib import Path
 import pytest
 
 _OPENWRT = Path(__file__).resolve().parent.parent / "sources" / "openwrt"
-_SETUP = _OPENWRT / "cn-exit-setup.sh"
+_OPENCLASH = Path(__file__).resolve().parent.parent / "sources" / "openclash"
+_SETUP = _OPENWRT / "openwrt-init.sh"
 _BRIDGE = _OPENWRT / "cn-bridge"
 _MONITOR = _OPENWRT / "cn-bridge-monitor"
 _ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR]
@@ -95,7 +98,7 @@ def test_bridge_unknown_command_fails_fast() -> None:
 
 
 def test_setup_writes_persistent_nft_bypass() -> None:
-    """cn-exit-setup.sh 必须固化 fw4 持久 include，消除 OpenClash 重启窗口期。
+    """openwrt-init.sh 必须固化 fw4 持久 include，消除 OpenClash 重启窗口期。
 
     契约要点（任一缺失都意味着窗口期兜底失效）：
     - include 文件路径在 /etc/nftables.d/ 下（fw4 reload 自动并入 inet fw4 表）；
@@ -124,6 +127,15 @@ def test_setup_verify_covers_persistent_bypass() -> None:
     assert "nft list chain inet fw4 cn_exit_ts_output" in src
 
 
+def test_setup_verify_guards_lan_subnet_drift() -> None:
+    """verify() 必须含 LAN 网段迁移护栏：从内核路由表取本机实际网段，
+    比对 TS_ADVERTISE_ROUTES——改了路由器网段忘改 config.env 不能静默漏过。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "network.lan.ipaddr" in src
+    assert "ip -4 route show proto kernel" in src
+    assert "通告网段含本机 LAN 实际网段" in src
+
+
 def test_setup_verify_guards_openclash_fakeip_only_bypass() -> None:
     """verify() 必须自检 OpenClash 的 lan_ac_traffic 绕过开关未被打开。
 
@@ -134,3 +146,250 @@ def test_setup_verify_guards_openclash_fakeip_only_bypass() -> None:
     src = _SETUP.read_text(encoding="utf-8")
     assert "openclash.@lan_ac_traffic[0].enabled" in src
     assert "lan_ac_traffic" in src
+
+
+# ---- OpenClash 配置纳管 -------------------------------------------------------
+
+
+def test_setup_main_wires_new_steps_in_order() -> None:
+    """main() 必须接入新步骤：配置纳管在解耦之前（共用解耦末尾的 restart），
+    CDN 优选在监控之后、自检之前。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    # rindex：内嵌 cdn-speedtest heredoc 里也有自己的 main()，外层 main() 是最后一个
+    main_body = src[src.rindex("main() {"):]
+    for fn in ("setup_openclash_config", "install_cdn_speedtest"):
+        assert fn in main_body, f"main() 未调用 {fn}"
+    assert main_body.index("setup_openclash_config") < main_body.index("setup_openclash_decouple")
+    assert main_body.index("setup_monitor_cron") < main_body.index("install_cdn_speedtest")
+    assert main_body.index("install_cdn_speedtest") < main_body.index("if verify")
+
+
+@pytest.mark.parametrize("template", ["op-amd", "op-arm"])
+def test_openclash_templates_have_no_real_secrets(template: str) -> None:
+    """模板是公共仓库文件，dashboard 密码行的值必须恰为占位符（任何其他值都视为
+    真实密码泄露）。不在断言里写真实值本身，避免测试文件二次泄密。"""
+    src = (_OPENCLASH / template).read_text(encoding="utf-8")
+    pw_lines = [ln.strip() for ln in src.splitlines() if "dashboard_password" in ln]
+    assert pw_lines, "模板缺少 dashboard_password 行"
+    for ln in pw_lines:
+        assert ln == "option dashboard_password '<OPENCLASH_DASHBOARD_PASSWORD>'", (
+            f"dashboard_password 必须是占位符，实际: {ln}"
+        )
+
+
+def test_config_env_example_documents_new_vars() -> None:
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in (
+        "OPENCLASH_MANAGE",
+        "OPENCLASH_DASHBOARD_PASSWORD",
+        "OPENCLASH_SUBS",
+        "CDN_DOMAIN",
+        "CDN_SUBDOMAINS",
+        "CDN_CRON_SCHEDULE",
+    ):
+        assert var in src, f"config.env.example 缺少新变量说明: {var}"
+
+
+def _extract_render_funcs(tmp_path: Path) -> Path:
+    """从主脚本抽出渲染相关函数（列 0 的 `}` 为函数终止符）。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    chunks = []
+    for fn in ("openclash_cfg_same()", "render_openclash_config()"):
+        start = src.index(f"\n{fn}") + 1
+        end = src.index("\n}", start) + 2
+        chunks.append(src[start:end])
+    out = tmp_path / "render-funcs.sh"
+    out.write_text("\n".join(chunks), encoding="utf-8")
+    return out
+
+
+_MINI_TEMPLATE = """
+config config_subscribe
+\toption name 'KeepMe'
+\toption sub_ua 'clash.meta'
+\toption enabled '1'
+
+config config_subscribe
+\toption enabled '1'
+\toption name 'DropMe'
+\toption address '<YOUR_SUBSCRIBE_LINK-1>'
+
+config dashboard
+\toption dashboard_password '<OPENCLASH_DASHBOARD_PASSWORD>'
+"""
+
+
+def test_render_injects_address_and_prunes_unconfigured_blocks(tmp_path: Path) -> None:
+    """渲染契约：① 密码占位符替换；② OPENCLASH_SUBS 命中的订阅块在块尾注入
+    address；③ 未命中的订阅块（占位示例）整块裁剪；④ 其余 stanza 原样保留。"""
+    funcs = _extract_render_funcs(tmp_path)
+    tpl = tmp_path / "mini-template"
+    tpl.write_text(_MINI_TEMPLATE, encoding="utf-8")
+    rendered = tmp_path / "rendered"
+    driver = (
+        f". '{funcs}'\n"
+        "OPENCLASH_DASHBOARD_PASSWORD='s3cret'\n"
+        "OPENCLASH_SUBS='KeepMe=https://example.com/sub?token=abc'\n"
+        f"render_openclash_config '{tpl}' '{rendered}'\n"
+    )
+    proc = subprocess.run(["sh", "-c", driver], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    out = rendered.read_text(encoding="utf-8")
+    assert "dashboard_password 's3cret'" in out
+    assert "<OPENCLASH_DASHBOARD_PASSWORD>" not in out
+    assert "DropMe" not in out and "<YOUR_SUBSCRIBE_LINK" not in out
+    assert "config dashboard" in out
+    # address 注入在 KeepMe 块尾（enabled 行之后）
+    keep_block = out[out.index("KeepMe"):out.index("config dashboard")]
+    assert "option address 'https://example.com/sub?token=abc'" in keep_block
+    assert keep_block.index("enabled") < keep_block.index("option address")
+
+
+def test_render_idempotent_normalized_compare(tmp_path: Path) -> None:
+    """openclash_cfg_same 必须忽略行尾空白与末尾空行——幂等跳过的判据。"""
+    funcs = _extract_render_funcs(tmp_path)
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.write_text("config x\n\toption y '1'\n", encoding="utf-8")
+    b.write_text("config x\n\toption y '1' \n\n\n", encoding="utf-8")
+    driver = f". '{funcs}'\nopenclash_cfg_same '{a}' '{b}'\n"
+    proc = subprocess.run(["sh", "-c", driver], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, "规范化比对应忽略行尾空白/末尾空行"
+
+
+# ---- Tailscale 身份自恢复 -----------------------------------------------------
+
+
+def test_ts_identity_functions_exist_and_wired() -> None:
+    """身份自恢复函数群存在，且 setup_tailscale 接入登录分支与恢复调用。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    for fn in (
+        "ts_has_oauth()",
+        "ts_api()",
+        "ts_mint_authkey()",
+        "ts_find_device_by_ip()",
+        "restore_ts_identity()",
+        "approve_ts_routes()",
+        "ts_routes_approved()",
+    ):
+        assert fn in src, f"缺少函数: {fn}"
+    setup_body = src[src.index("setup_tailscale()"):src.index("# ── Tailscale 身份自恢复")]
+    assert "--auth-key=" in setup_body, "setup_tailscale 缺少 auth key 登录分支"
+    assert "restore_ts_identity" in setup_body
+    assert "approve_ts_routes" in setup_body
+
+
+def test_ts_identity_failure_paths_degrade_not_die() -> None:
+    """restore/approve 的 API 失败路径必须降级（warn + 手动指引），不得 die——
+    身份恢复失败不应阻塞其余安装步骤。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    for fn in ("restore_ts_identity()", "approve_ts_routes()"):
+        start = src.index(fn)
+        body = src[start:src.index("\n}", start)]
+        assert "die " not in body and "die\t" not in body, f"{fn} 内不得调用 die"
+        assert "warn " in body, f"{fn} 失败路径应有 warn"
+
+
+def test_setup_verify_guards_expected_ts_ip() -> None:
+    """verify() 必须含固定 IP 硬校验——TS_EXPECTED_IP 是 VPS 侧 socks5 腿契约。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "Tailscale IP 为预期固定值" in src
+    assert 'TS_EXPECTED_IP' in src
+
+
+def test_config_env_example_documents_ts_identity_vars() -> None:
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in (
+        "TS_OAUTH_CLIENT_ID",
+        "TS_OAUTH_CLIENT_SECRET",
+        "TS_OAUTH_TAGS",
+        "TS_EXPECTED_IP",
+        "TS_AUTH_KEY",
+    ):
+        assert var in src, f"config.env.example 缺少变量说明: {var}"
+
+
+_DEVICES_FIXTURE = """{
+  "devices": [
+    {"addresses": ["100.64.0.1", "fd7a:115c::1"], "id": "111",
+     "nodeId": "nAAAA1", "hostname": "vps-a", "os": "linux"},
+    {"addresses": ["100.91.115.115", "fd7a:115c::2"], "id": "222",
+     "nodeId": "nBBBB2", "hostname": "openwrt-cn-old", "os": "linux"},
+    {"addresses": ["100.99.88.77"], "id": "333",
+     "nodeId": "nCCCC3", "hostname": "openwrt-cn", "os": "linux"}
+  ]
+}"""
+
+
+def _run_find_device(tmp_path: Path, ip: str, fixture: str) -> str:
+    """提取 ts_find_device_by_ip 函数，用 fixture JSON 离线驱动。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    start = src.index("\nts_find_device_by_ip()") + 1
+    func = src[start:src.index("\n}", start) + 2]
+    funcs = tmp_path / "find-device.sh"
+    funcs.write_text(func, encoding="utf-8")
+    fx = tmp_path / "devices.json"
+    fx.write_text(fixture, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f". '{funcs}'\nts_find_device_by_ip '{fx}' '{ip}'"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def test_find_device_by_ip_hits_middle_device(tmp_path: Path) -> None:
+    assert _run_find_device(tmp_path, "100.91.115.115", _DEVICES_FIXTURE) == "nBBBB2"
+
+
+def test_find_device_by_ip_exact_quoted_match_no_prefix_collision(tmp_path: Path) -> None:
+    """100.91.115.11 不得误命中 100.91.115.115（带引号精确匹配契约）。"""
+    assert _run_find_device(tmp_path, "100.91.115.11", _DEVICES_FIXTURE) == ""
+
+
+def test_find_device_by_ip_miss_and_empty(tmp_path: Path) -> None:
+    assert _run_find_device(tmp_path, "100.1.2.3", _DEVICES_FIXTURE) == ""
+    assert _run_find_device(tmp_path, "100.91.115.115", '{"devices": []}') == ""
+
+
+# ---- 内嵌 cdn-speedtest -------------------------------------------------------
+
+
+def _extract_embedded_cdn(tmp_path: Path) -> Path:
+    src = _SETUP.read_text(encoding="utf-8")
+    start = src.index("<<'CDNEOF'") + len("<<'CDNEOF'") + 1
+    end = src.index("\nCDNEOF\n", start) + 1
+    out = tmp_path / "cdn-speedtest"
+    out.write_text(src[start:end], encoding="utf-8")
+    return out
+
+
+def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None:
+    """heredoc 内嵌的 cdn-speedtest 必须是完整、可解析的 POSIX 脚本。"""
+    script = _extract_embedded_cdn(tmp_path)
+    src = script.read_text(encoding="utf-8")
+    for fn in (
+        "build_cdn_domains",
+        "install_cloudflarest",
+        "run_speedtest",
+        "should_update",
+        "update_hosts",
+        "clean_hosts",
+    ):
+        assert f"{fn}()" in src, f"内嵌 cdn-speedtest 缺少函数: {fn}"
+    assert 'main "$@"' in src
+    proc = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_cdn_install_step_guards_and_cron() -> None:
+    """install_cdn_speedtest 契约：CDN_DOMAIN 空则跳过；清理旧版 cdn-speedtest.sh
+    cron 行；cron 注入带 grep 守卫。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "install_cdn_speedtest()" in src
+    body = src[src.index("install_cdn_speedtest()"):src.index("# ── 端到端自检")]
+    assert '"$CDN_DOMAIN"' in body
+    assert "/usr/bin/cdn-speedtest run" in body
+    assert "cdn-speedtest\\.sh" in body  # 旧路径 cron 清理
