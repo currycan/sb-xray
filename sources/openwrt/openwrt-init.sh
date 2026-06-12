@@ -1635,9 +1635,12 @@ verify() {
     # LuCI 上易被误开，且症状隐蔽（域名通、裸 IP 不通），此处兜底拦截。
     check "OpenClash 未开启「仅代理 FakeIP」绕过 (lan_ac_traffic)" \
         sh -c "[ \"\$(uci -q get 'openclash.@lan_ac_traffic[0].enabled' 2>/dev/null)\" != '1' ]"
-    # OpenClash 配置纳管自检（渲染产物由 setup_openclash_config 留在 /tmp 供比对）
+    # OpenClash 配置纳管自检（渲染产物由 setup_openclash_config 留在 /tmp 供比对）。
+    # 漂移比对必须用软检查：OpenClash 启动头 ~10s 会把 redirect_dns/cachesize_dns
+    # 临时翻 0、移除 dnsmasq_cachesize（DNS 接管交接期状态暂存），随后自行恢复——
+    # restart 后立即硬比对必然误报（真机实测）。真漂移在 apply 步骤已被捕获重写。
     if [ "$OPENCLASH_MANAGE" = "1" ] && [ -x /etc/init.d/openclash ] && [ -f /tmp/openclash.rendered ]; then
-        check "OpenClash 配置与渲染产物无漂移" openclash_cfg_same /tmp/openclash.rendered /etc/config/openclash
+        check_soft "OpenClash 配置与渲染产物无漂移" openclash_cfg_same /tmp/openclash.rendered /etc/config/openclash
         check "OpenClash dashboard 密码已注入（非占位符）" \
             sh -c "! grep -q '<OPENCLASH_DASHBOARD_PASSWORD>' /etc/config/openclash"
     fi
