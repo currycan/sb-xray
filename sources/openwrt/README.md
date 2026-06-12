@@ -156,11 +156,12 @@ sequenceDiagram
 
 ### 2.3 Tailscale OAuth client（一次性，强烈建议——设备重置零断点的关键）
 
-普通 auth key 最长 90 天过期，真到设备重置那天大概率已失效。OAuth client **永不过期**，脚本用它现场铸短时效 auth key（免交互登录）、恢复固定 IP、批准 routes——重置恢复收敛为「上传文件 + 跑脚本」。三步：
+普通 auth key 最长 90 天过期，真到设备重置那天大概率已失效。OAuth client **永不过期**，脚本用它现场铸短时效 auth key（免交互登录）、恢复固定 IP、批准 routes——重置恢复收敛为「上传文件 + 跑脚本」。四步：
 
 1. **tailnet policy 定义 tag**（[Access controls](https://login.tailscale.com/admin/acls)）：`"tagOwners": { "tag:openwrt": ["autogroup:admin"] }`。OAuth 铸的 key 必须带 tag，登录后本机变为 tagged 设备（个人 tailnet 默认 allow-all ACL 下行为无变化；自定义 ACL 需给 `tag:openwrt` 相应授权）。
 2. **创建 OAuth client**（[Settings → OAuth clients](https://login.tailscale.com/admin/settings/oauth)）：Scopes 选 **Select scopes**（勿用 All），只勾三项写权限——`Devices → Core`（删旧设备/设 IP）、`Devices → Routes`（批准路由，独立于 Core）、`Keys → Auth Keys`（铸登录 key，tag 选 `tag:openwrt`）。client secret 只显示一次，立即保存。
-3. **填入 config.env**：`TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` / `TS_EXPECTED_IP`（本机固定 Tailscale IP，即 VPS 侧指向的值）。脚本检测到 secret 会自动把 config.env 收紧为 600。
+3. **给现有设备打 tag**（[Machines](https://login.tailscale.com/admin/machines) → 本机 → Edit ACL tags → `tag:openwrt`）：OAuth client 的设备写权限只对带此 tag 的设备生效——不打 tag，未来重置时旧设备条目删不动，自动恢复会降级为手动。附带收益：tagged 设备节点密钥**永不过期**，根治 user-owned 设备 180 天 key expiry 强制重授权的隐藏断点。
+4. **填入 config.env**：`TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` / `TS_EXPECTED_IP`（本机固定 Tailscale IP，即 VPS 侧指向的值）。脚本检测到 secret 会自动把 config.env 收紧为 600。
 
 ---
 
