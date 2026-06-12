@@ -1324,6 +1324,10 @@ run_speedtest() {
 
     cd "$INSTALL_DIR"
 
+    # 先清旧结果：cfst 在严苛参数下可能产不出任何合格 IP（不写 csv），残留旧榜会被
+    # 静默当作本轮结果（真机实测：延迟上限收紧后整轮白测、对比的还是上轮数据）
+    rm -f result.csv
+
     ./cfst \
         -n "$SPEED_TEST_THREADS" \
         -t "$SPEED_TEST_TIME" \

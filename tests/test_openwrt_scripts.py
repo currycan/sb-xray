@@ -437,3 +437,6 @@ def test_embedded_speedtest_trap_recovery(tmp_path: Path) -> None:
     assert "mkdir /tmp/.cdn-speedtest-oc-restore.lock" in embedded, "恢复缺原子锁"
     assert "/etc/init.d/openclash restart" in embedded, "恢复须用 restart（三态收敛）"
     assert "pgrep -f" not in embedded.split("restore_proxy_env()")[1].split("\n}")[0], "恢复不得用进程探测（拖尾/旁观假象）"
+    # 防陈旧结果:测速前必须清掉上一轮 result.csv
+    assert "rm -f result.csv" in embedded, "缺少测速前旧结果清理"
+    assert embedded.index("rm -f result.csv") < embedded.index("./cfst"), "清理须在 cfst 之前"
