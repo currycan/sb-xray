@@ -145,6 +145,13 @@ load_config() {
     DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
     # OpenClash 配置纳管默认开（检测到 OpenClash 才实际执行）；CDN 优选默认关（CDN_DOMAIN 非空启用）
     OPENCLASH_MANAGE="${OPENCLASH_MANAGE:-1}"
+    # Tailscale 身份自恢复（OAuth admin API）：全部可选，不设维持交互式登录与后台手动操作
+    TS_OAUTH_TAGS="${TS_OAUTH_TAGS:-tag:openwrt}"
+    _TS_TOKEN=""
+    # config.env 含 OAuth secret 时收紧权限（幂等）
+    if [ -f "$CONFIG" ] && grep -q "^TS_OAUTH_CLIENT_SECRET=." "$CONFIG" 2>/dev/null; then
+        chmod 600 "$CONFIG" 2>/dev/null && log "config.env 含 OAuth secret，权限已收紧为 600"
+    fi
     case "$CN_EXIT_MODE" in
         socks5|reverse|balance) : ;;
         *) die "CN_EXIT_MODE 非法: ${CN_EXIT_MODE}（应为 socks5|reverse|balance）" ;;
@@ -414,15 +421,34 @@ setup_tailscale() {
     # 被批准的本 LAN 网段路由装进内核 → 发往 LAN 的回包全进隧道黑洞 → 整机失联，
     # 表现与死机无异（2026-06-05 实测三次"死机"均由此引起）。本机是 subnet
     # router 本体，不需要接受任何对端路由。
+    # 登录态分支（设备重置后 state 丢失场景）：TS_AUTH_KEY > OAuth 现场铸 key > 交互式 URL
+    _akflag=""
+    if tailscale status 2>&1 | grep -qiE "logged out|needslogin|login required"; then
+        if [ -n "$TS_AUTH_KEY" ]; then
+            log "未登录：使用 TS_AUTH_KEY 免交互登录"
+            _akflag="--auth-key=$TS_AUTH_KEY"
+        elif ts_has_oauth; then
+            log "未登录：用 OAuth client 铸造一次性 auth key 免交互登录..."
+            _ak=$(ts_mint_authkey)
+            if [ -n "$_ak" ]; then
+                _akflag="--auth-key=$_ak"
+            else
+                warn "铸造 auth key 失败，回退交互式登录"
+            fi
+        else
+            warn "未登录且未配 TS_AUTH_KEY / TS_OAUTH_*：将打印登录 URL 等待手动授权（配 OAuth 可无人值守，见 config.env.example）"
+        fi
+    fi
     log "运行 tailscale up —— 若打印登录 URL，请在浏览器打开授权（仅首次需要）"
-    tailscale up --reset \
+    # $_akflag 不加引号：为空时须整体消失（auth key 无空格，ash 分词安全）
+    tailscale up --reset $_akflag \
         --timeout=120s \
         --accept-dns=false \
         --advertise-routes="$TS_ADVERTISE_ROUTES" \
         --advertise-exit-node \
         --hostname="$TS_HOSTNAME" || \
         warn "tailscale up 返回非零（可能已在线 / 需手动授权后重跑本脚本）"
-    log "提示：subnet routes(${TS_ADVERTISE_ROUTES}) 与 exit node 需到 Tailscale 管理后台批准"
+    log "提示：subnet routes(${TS_ADVERTISE_ROUTES}) 与 exit node 需 Tailscale 后台批准（配了 OAuth 则下面自动批准）"
     log "      https://login.tailscale.com/admin/machines -> ${TS_HOSTNAME} -> Edit route settings"
     sleep 2
     if netstat -lnup 2>/dev/null | grep -q ":${TS_PORT} "; then
@@ -430,6 +456,165 @@ setup_tailscale() {
     else
         warn "tailscaled 未监听 ${TS_PORT}，请检查 logread | grep tailscaled"
     fi
+    # 身份自恢复（固定 IP）+ 路由批准——均按配置自裁剪、失败降级为手动指引
+    restore_ts_identity
+    approve_ts_routes
+}
+
+# ── Tailscale 身份自恢复（OAuth admin API）──────────────────────────
+# 设备重置后 state 丢失 → 新身份新 IP，而 VPS 侧 CN_EXIT_SOCKS5_HOST 写死本机
+# 固定 IP——三件套（免交互登录 / 恢复固定 IP / 批准 routes）用 admin API 闭环，
+# 使恢复语义收敛为「上传文件 + 跑脚本」。全部可选：未配 OAuth 时维持旧行为。
+# 所有 API 失败路径只 warn + 打印手动后台步骤，不 die、不阻塞其余安装。
+
+ts_has_oauth() { [ -n "$TS_OAUTH_CLIENT_ID" ] && [ -n "$TS_OAUTH_CLIENT_SECRET" ]; }
+
+ts_api() {
+    # ts_api <METHOD> <path> [json-body]，path 形如 /tailnet/-/devices。
+    # 输出响应体；非 2xx / 网络失败 / 未配 OAuth 返回非 0（调用方降级）。
+    ts_has_oauth || return 1
+    command -v curl >/dev/null 2>&1 || { opkg update >/dev/null 2>&1; opkg install curl >/dev/null 2>&1; }
+    command -v curl >/dev/null 2>&1 || { warn "未找到 curl，无法调用 Tailscale API"; return 1; }
+    if [ -z "$_TS_TOKEN" ]; then
+        _TS_TOKEN=$(curl -s --max-time 15 \
+            -d "client_id=$TS_OAUTH_CLIENT_ID" -d "client_secret=$TS_OAUTH_CLIENT_SECRET" \
+            https://api.tailscale.com/api/v2/oauth/token 2>/dev/null | \
+            sed -n 's/.*"access_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        [ -n "$_TS_TOKEN" ] || { warn "Tailscale OAuth 换取 access token 失败"; return 1; }
+    fi
+    _m=$1; _p=$2; _b=${3:-}
+    _n=0
+    while [ "$_n" -lt "$DOWNLOAD_RETRIES" ]; do
+        _n=$((_n + 1))
+        if [ -n "$_b" ]; then
+            _resp=$(curl -s --max-time 20 -X "$_m" -H "Authorization: Bearer $_TS_TOKEN" \
+                -H "Content-Type: application/json" -d "$_b" \
+                -w '\n%{http_code}' "https://api.tailscale.com/api/v2$_p" 2>/dev/null)
+        else
+            _resp=$(curl -s --max-time 20 -X "$_m" -H "Authorization: Bearer $_TS_TOKEN" \
+                -w '\n%{http_code}' "https://api.tailscale.com/api/v2$_p" 2>/dev/null)
+        fi
+        _code=$(printf '%s' "$_resp" | tail -1)
+        case "$_code" in
+            2*) printf '%s' "$_resp" | sed '$d'; return 0 ;;
+        esac
+        sleep 2
+    done
+    warn "Tailscale API $_m $_p 失败 (HTTP ${_code:-无响应})"
+    return 1
+}
+
+ts_mint_authkey() {
+    # 铸一把短时效（10 分钟）、preauthorized、一次性 auth key——只为本次登录用，
+    # 凭据的「不腐烂性」由 OAuth client 承担。OAuth 铸 key 平台要求必须带 tag。
+    _tags=$(printf '"%s"' "$TS_OAUTH_TAGS" | sed 's/,/","/g')
+    _body="{\"capabilities\":{\"devices\":{\"create\":{\"reusable\":false,\"ephemeral\":false,\"preauthorized\":true,\"tags\":[${_tags}]}}},\"expirySeconds\":600,\"description\":\"openwrt-init recovery\"}"
+    ts_api POST /tailnet/-/keys "$_body" | \
+        sed -n 's/.*"key"[[:space:]]*:[[:space:]]*"\(tskey-[^"]*\)".*/\1/p'
+}
+
+ts_find_device_by_ip() {
+    # ts_find_device_by_ip <devices.json> <ip> —— 打印 addresses 含 <ip> 的设备 nodeId。
+    # 纯文本解析（BusyBox 无 jq）：设备对象无嵌套 object，按 "{" 分块后每块即一台
+    # 设备的全部字段；带引号精确匹配 IP 防前缀误命中（.11 vs .115）。
+    awk -v ip="$2" -v q='"' '
+        BEGIN { RS = "{" }
+        index($0, q ip q) && index($0, "nodeId") {
+            s = $0
+            sub(/.*"nodeId"[[:space:]]*:[[:space:]]*"/, "", s)
+            sub(/".*/, "", s)
+            if (s != "") { print s; exit }
+        }
+    ' "$1"
+}
+
+restore_ts_identity() {
+    # 把本机 Tailscale IP 恢复为 TS_EXPECTED_IP（VPS 侧 socks5 腿指向的固定值）。
+    [ -n "$TS_EXPECTED_IP" ] || { log "未设 TS_EXPECTED_IP，跳过固定 IP 自恢复"; return 0; }
+    _cur=$(tailscale ip -4 2>/dev/null)
+    if [ "$_cur" = "$TS_EXPECTED_IP" ]; then
+        log "Tailscale IP 已是预期固定值 $TS_EXPECTED_IP"
+        return 0
+    fi
+    warn "Tailscale IP 漂移: 当前 ${_cur:-未知} ≠ 预期 $TS_EXPECTED_IP（设备重置后的新身份），尝试 API 自动恢复..."
+    [ -n "$_cur" ] || { warn "本机尚无 Tailscale IP（未登录成功？），跳过"; return 0; }
+    if ! ts_has_oauth; then
+        warn "未配 TS_OAUTH_CLIENT_ID/SECRET，请手动恢复：后台删除旧设备条目，再把本机 IP 改回 $TS_EXPECTED_IP"
+        warn "  https://login.tailscale.com/admin/machines -> 本机 -> ⋯ -> Edit machine IP"
+        return 0
+    fi
+    _devjson=/tmp/ts-devices.json
+    ts_api GET /tailnet/-/devices > "$_devjson" || { warn "拉取设备列表失败，请按上述后台步骤手动恢复"; rm -f "$_devjson"; return 0; }
+    _selfid=$(ts_find_device_by_ip "$_devjson" "$_cur")
+    _oldid=$(ts_find_device_by_ip "$_devjson" "$TS_EXPECTED_IP")
+    rm -f "$_devjson"
+    [ -n "$_selfid" ] || { warn "设备列表中找不到本机（$_cur），请手动恢复"; return 0; }
+    if [ -n "$_oldid" ] && [ "$_oldid" != "$_selfid" ]; then
+        log "删除占用 $TS_EXPECTED_IP 的旧设备条目（$_oldid）..."
+        ts_api DELETE "/device/$_oldid" >/dev/null || { warn "删除旧设备失败，请后台手动删除后重跑本脚本"; return 0; }
+    fi
+    log "把本机（$_selfid）IP 设为 $TS_EXPECTED_IP..."
+    ts_api POST "/device/$_selfid/ip" "{\"ipv4\":\"$TS_EXPECTED_IP\"}" >/dev/null || {
+        warn "API 设置 IP 失败，请后台手动改：machines -> 本机 -> Edit machine IP"
+        return 0
+    }
+    # IP 变更经控制面下发，本地稍候生效；过半仍未生效则重启 tailscaled 强制拉取
+    _n=0
+    while [ "$_n" -lt 12 ]; do
+        [ "$(tailscale ip -4 2>/dev/null)" = "$TS_EXPECTED_IP" ] && { log "Tailscale IP 已恢复为 $TS_EXPECTED_IP ✅"; return 0; }
+        _n=$((_n + 1))
+        sleep 5
+        [ "$_n" -eq 6 ] && /etc/init.d/tailscale restart 2>/dev/null
+    done
+    warn "IP 设置已提交但 60s 内本地未生效——稍后 tailscale ip -4 复查（verify 也会复核）"
+}
+
+approve_ts_routes() {
+    # API 批准本机 advertised routes（subnet + exit node 双栈默认路由），消除后台手动点击。
+    ts_has_oauth || return 0
+    _cur=$(tailscale ip -4 2>/dev/null)
+    [ -n "$_cur" ] || { warn "tailscale 未就绪，跳过路由批准"; return 0; }
+    _devjson=/tmp/ts-devices.json
+    ts_api GET /tailnet/-/devices > "$_devjson" || { warn "拉取设备列表失败，跳过路由批准（可重跑补）"; rm -f "$_devjson"; return 0; }
+    _selfid=$(ts_find_device_by_ip "$_devjson" "$_cur")
+    rm -f "$_devjson"
+    [ -n "$_selfid" ] || { warn "设备列表中找不到本机，跳过路由批准"; return 0; }
+    # 期望批准集 = 通告网段各项 + exit node（0.0.0.0/0 与 ::/0）
+    _want=""
+    for _r in $(printf '%s' "$TS_ADVERTISE_ROUTES" | tr ',' ' ') 0.0.0.0/0 ::/0; do
+        _want="$_want,\"$_r\""
+    done
+    _want="[${_want#,}]"
+    # 幂等：enabledRoutes 已含全部期望项则跳过
+    _en=$(ts_api GET "/device/$_selfid/routes" | sed -n 's/.*"enabledRoutes"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p')
+    _missing=0
+    for _r in $(printf '%s' "$TS_ADVERTISE_ROUTES" | tr ',' ' ') 0.0.0.0/0 ::/0; do
+        printf '%s' "$_en" | grep -qF "\"$_r\"" || _missing=1
+    done
+    if [ "$_missing" = "0" ] && [ -n "$_en" ]; then
+        log "subnet routes / exit node 已全部批准，跳过"
+        return 0
+    fi
+    if ts_api POST "/device/$_selfid/routes" "{\"routes\":${_want}}" >/dev/null; then
+        log "已 API 批准 routes: ${TS_ADVERTISE_ROUTES} + exit node"
+    else
+        warn "API 批准 routes 失败，请后台手动批准：machines -> 本机 -> Edit route settings"
+    fi
+}
+
+ts_routes_approved() {
+    # verify 辅助：本机 enabledRoutes 是否已含首个通告网段
+    ts_has_oauth || return 1
+    _ip=$(tailscale ip -4 2>/dev/null)
+    [ -n "$_ip" ] || return 1
+    _j=/tmp/ts-devices.verify.json
+    ts_api GET /tailnet/-/devices > "$_j" 2>/dev/null || { rm -f "$_j"; return 1; }
+    _id=$(ts_find_device_by_ip "$_j" "$_ip")
+    rm -f "$_j"
+    [ -n "$_id" ] || return 1
+    ts_api GET "/device/$_id/routes" | \
+        sed -n 's/.*"enabledRoutes"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' | \
+        grep -qF "\"${TS_ADVERTISE_ROUTES%%,*}\""
 }
 
 install_keepalive_cron() {
@@ -1418,6 +1603,15 @@ verify() {
         if [ -n "$_lan_cidr" ]; then
             check "通告网段含本机 LAN 实际网段 ${_lan_cidr}（变更网段后须同步 config.env 重跑）" \
                 sh -c "printf '%s' ',${TS_ADVERTISE_ROUTES},' | grep -qF ',${_lan_cidr},'"
+        fi
+        # 固定 IP 契约：VPS 侧 CN_EXIT_SOCKS5_HOST 指向 TS_EXPECTED_IP，漂移 = 全部
+        # VPS 的 socks5 腿断（设备重置后新身份的典型症状），硬失败
+        if [ -n "$TS_EXPECTED_IP" ]; then
+            check "Tailscale IP 为预期固定值 ${TS_EXPECTED_IP}（VPS 侧 socks5 腿契约）" \
+                sh -c "[ \"\$(tailscale ip -4 2>/dev/null)\" = '$TS_EXPECTED_IP' ]"
+        fi
+        if ts_has_oauth; then
+            check_soft "subnet routes 已批准 (API enabledRoutes)" ts_routes_approved
         fi
         check "tailscale 已登录" sh -c "tailscale status 2>/dev/null | grep -qv 'Logged out'"
         check_soft "tailscale ping 对端 ${PEER_TS_IP}" sh -c "tailscale ping -c 1 --timeout 5s ${PEER_TS_IP} 2>/dev/null | grep -q pong"

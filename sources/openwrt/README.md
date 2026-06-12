@@ -154,6 +154,14 @@ sequenceDiagram
 | `TS_VERSION` | Tailscale | [pkgs.tailscale.com/stable](https://pkgs.tailscale.com/stable/) 当前版本号 |
 | 多节点：每台的 名/FQDN/token | 各台 VPS 上 | 各跑一次 `docker exec sb-xray show` 抄下来 |
 
+### 2.3 Tailscale OAuth client（一次性，强烈建议——设备重置零断点的关键）
+
+普通 auth key 最长 90 天过期，真到设备重置那天大概率已失效。OAuth client **永不过期**，脚本用它现场铸短时效 auth key（免交互登录）、恢复固定 IP、批准 routes——重置恢复收敛为「上传文件 + 跑脚本」。三步：
+
+1. **tailnet policy 定义 tag**（[Access controls](https://login.tailscale.com/admin/acls)）：`"tagOwners": { "tag:openwrt": ["autogroup:admin"] }`。OAuth 铸的 key 必须带 tag，登录后本机变为 tagged 设备（个人 tailnet 默认 allow-all ACL 下行为无变化；自定义 ACL 需给 `tag:openwrt` 相应授权）。
+2. **创建 OAuth client**（[Settings → OAuth clients](https://login.tailscale.com/admin/settings/oauth)）：scopes 勾 `devices` 写 + `auth_keys` 写，tag 选 `tag:openwrt`。
+3. **填入 config.env**：`TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` / `TS_EXPECTED_IP`（本机固定 Tailscale IP，即 VPS 侧指向的值）。脚本检测到 secret 会自动把 config.env 收紧为 600。
+
 ---
 
 ## 3. 快速开始
@@ -312,6 +320,10 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | `CDN_DOMAIN` | 可选 | CDN 根域名；**非空即启用 CDN IP 优选** |
 | `CDN_SUBDOMAINS` | 可选 | 子域名前缀（逗号分隔），写入 `/etc/subdomains.txt`；留空沿用路由器已有文件 |
 | `CDN_CRON_SCHEDULE` | 可选 | CDN 测速 cron 时间表，默认 `0 4 * * *`（每天 04:00） |
+| `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` | 可选（灾备建议） | Tailscale OAuth client（永不过期），启用免交互登录 + 固定 IP 自恢复 + routes 自动批准，见 §2.3 |
+| `TS_OAUTH_TAGS` | 可选 | OAuth 铸 key 所带 tag，默认 `tag:openwrt`，须与 tailnet policy 一致 |
+| `TS_EXPECTED_IP` | 可选（灾备建议） | 本机固定 Tailscale IP（VPS 侧 socks5 腿指向值）；自检校验 + 漂移自动恢复 |
+| `TS_AUTH_KEY` | 可选 | 显式 auth key（优先于 OAuth 铸造）；90 天过期，仅短期场景 |
 
 脚本按模式执行的步骤一览：
 
@@ -411,6 +423,22 @@ sh openwrt-init.sh
 ```
 
 **忘改 ② 的护栏**：自检会从内核路由表取本机 LAN 实际网段，与通告列表比对，不一致直接 `[FAIL]`——改了网段忘改 config.env 不会静默漏过。另记得同步运维记录里的路由器 SSH/面板地址。
+
+### 5.6 设备重置恢复（脚本管辖功能零断点）
+
+设备重置（恢复出厂 / 重刷固件）后，**本脚本管辖的全部功能**恢复只需两步——前提是按 §2.3 配好了 OAuth client 三件套（一次性准备）：
+
+```sh
+# ① 上传三个文件（母本保管在部署机，不入库）
+scp openwrt-init.sh config.env nodes.list root@<路由器IP>:/root/sb-xray-openwrt/
+
+# ② 跑一条命令，其余全自动
+sh openwrt-init.sh
+```
+
+脚本自动完成：OAuth 铸 key 免交互登录 → **API 删除旧设备条目、把本机 IP 恢复为 `TS_EXPECTED_IP`**（所有 VPS 的 socks5 腿指向零改动）→ API 批准 subnet routes + exit node → Tailscale/xray/bridge/钩子/cron/监控/OpenClash 配置/CDN 优选全量重建。自检对固定 IP 做硬校验。
+
+**范围边界**（重置后仍需手动、不属本脚本管辖）：OpenWrt 基础系统配置（LAN 网段、wifi、DHCP——建议平时 `sysupgrade -b` 留备份）、OpenClash 本体安装（ipk + smart 内核）。未配 OAuth 时退化为旧流程：登录 URL 手动授权 + 后台手动改 IP / 批准 routes（脚本会打印精确的后台操作路径）。
 
 ---
 

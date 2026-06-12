@@ -257,6 +257,103 @@ def test_render_idempotent_normalized_compare(tmp_path: Path) -> None:
     assert proc.returncode == 0, "规范化比对应忽略行尾空白/末尾空行"
 
 
+# ---- Tailscale 身份自恢复 -----------------------------------------------------
+
+
+def test_ts_identity_functions_exist_and_wired() -> None:
+    """身份自恢复函数群存在，且 setup_tailscale 接入登录分支与恢复调用。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    for fn in (
+        "ts_has_oauth()",
+        "ts_api()",
+        "ts_mint_authkey()",
+        "ts_find_device_by_ip()",
+        "restore_ts_identity()",
+        "approve_ts_routes()",
+        "ts_routes_approved()",
+    ):
+        assert fn in src, f"缺少函数: {fn}"
+    setup_body = src[src.index("setup_tailscale()"):src.index("# ── Tailscale 身份自恢复")]
+    assert "--auth-key=" in setup_body, "setup_tailscale 缺少 auth key 登录分支"
+    assert "restore_ts_identity" in setup_body
+    assert "approve_ts_routes" in setup_body
+
+
+def test_ts_identity_failure_paths_degrade_not_die() -> None:
+    """restore/approve 的 API 失败路径必须降级（warn + 手动指引），不得 die——
+    身份恢复失败不应阻塞其余安装步骤。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    for fn in ("restore_ts_identity()", "approve_ts_routes()"):
+        start = src.index(fn)
+        body = src[start:src.index("\n}", start)]
+        assert "die " not in body and "die\t" not in body, f"{fn} 内不得调用 die"
+        assert "warn " in body, f"{fn} 失败路径应有 warn"
+
+
+def test_setup_verify_guards_expected_ts_ip() -> None:
+    """verify() 必须含固定 IP 硬校验——TS_EXPECTED_IP 是 VPS 侧 socks5 腿契约。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "Tailscale IP 为预期固定值" in src
+    assert 'TS_EXPECTED_IP' in src
+
+
+def test_config_env_example_documents_ts_identity_vars() -> None:
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in (
+        "TS_OAUTH_CLIENT_ID",
+        "TS_OAUTH_CLIENT_SECRET",
+        "TS_OAUTH_TAGS",
+        "TS_EXPECTED_IP",
+        "TS_AUTH_KEY",
+    ):
+        assert var in src, f"config.env.example 缺少变量说明: {var}"
+
+
+_DEVICES_FIXTURE = """{
+  "devices": [
+    {"addresses": ["100.64.0.1", "fd7a:115c::1"], "id": "111",
+     "nodeId": "nAAAA1", "hostname": "vps-a", "os": "linux"},
+    {"addresses": ["100.91.115.115", "fd7a:115c::2"], "id": "222",
+     "nodeId": "nBBBB2", "hostname": "openwrt-cn-old", "os": "linux"},
+    {"addresses": ["100.99.88.77"], "id": "333",
+     "nodeId": "nCCCC3", "hostname": "openwrt-cn", "os": "linux"}
+  ]
+}"""
+
+
+def _run_find_device(tmp_path: Path, ip: str, fixture: str) -> str:
+    """提取 ts_find_device_by_ip 函数，用 fixture JSON 离线驱动。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    start = src.index("\nts_find_device_by_ip()") + 1
+    func = src[start:src.index("\n}", start) + 2]
+    funcs = tmp_path / "find-device.sh"
+    funcs.write_text(func, encoding="utf-8")
+    fx = tmp_path / "devices.json"
+    fx.write_text(fixture, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f". '{funcs}'\nts_find_device_by_ip '{fx}' '{ip}'"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def test_find_device_by_ip_hits_middle_device(tmp_path: Path) -> None:
+    assert _run_find_device(tmp_path, "100.91.115.115", _DEVICES_FIXTURE) == "nBBBB2"
+
+
+def test_find_device_by_ip_exact_quoted_match_no_prefix_collision(tmp_path: Path) -> None:
+    """100.91.115.11 不得误命中 100.91.115.115（带引号精确匹配契约）。"""
+    assert _run_find_device(tmp_path, "100.91.115.11", _DEVICES_FIXTURE) == ""
+
+
+def test_find_device_by_ip_miss_and_empty(tmp_path: Path) -> None:
+    assert _run_find_device(tmp_path, "100.1.2.3", _DEVICES_FIXTURE) == ""
+    assert _run_find_device(tmp_path, "100.91.115.115", '{"devices": []}') == ""
+
+
 # ---- 内嵌 cdn-speedtest -------------------------------------------------------
 
 

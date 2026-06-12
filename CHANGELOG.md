@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - **CDN IP 优选集成**（`CDN_DOMAIN` 非空启用）：原 `sources/hack/cdn-speedtest.sh` 整体并入主脚本（heredoc 内嵌），安装时写出 `/usr/bin/cdn-speedtest`（保留 run/install/status/clean 子命令）+ 按 `CDN_SUBDOMAINS` 生成 `/etc/subdomains.txt` + 每日 cron（`CDN_CRON_SCHEDULE`，默认 04:00）+ 预装 CloudflareST；自动清理旧版 `cdn-speedtest.sh` 手装产物与 cron 行。独立文件已从仓库删除。
 
   - **LAN 网段迁移护栏**：自检新增「通告网段含本机 LAN 实际网段」检查（内核路由表取网段基址，比对 `TS_ADVERTISE_ROUTES`），改了路由器网段忘改 config.env 时直接 FAIL 而非静默通告旧网段；README §5.5 新增迁移 runbook（链路仅此一处依赖 LAN 网段——VPS 侧只认 Tailscale IP 与域名，OpenClash 模板无 LAN 硬编码，订阅模板内网直连用泛 RFC1918 段）。
+  - **Tailscale 身份自恢复（设备重置零断点）**：设备重置后 Tailscale state 丢失会产生新身份新 IP，而全部 VPS 的 `CN_EXIT_SOCKS5_HOST` 写死本机固定 IP。新增 OAuth admin API 闭环（全部可选，未配维持旧行为）：未登录时用 OAuth client 现场铸短时效 preauthorized auth key 免交互登录（根治普通 auth key 90 天过期的灾备腐烂问题）→ 检测 `tailscale ip -4` ≠ `TS_EXPECTED_IP` 时 API 删除占用该 IP 的旧设备条目、把本机 IP 恢复为固定值（VPS 侧零改动）→ API 批准 subnet routes + exit node（消除后台手动点击）。所有 API 失败路径降级为 warn + 打印后台手动步骤，不阻塞其余安装；自检新增固定 IP 硬校验与 routes 批准软检查；config.env 含 OAuth secret 时自动收紧 600。新变量：`TS_OAUTH_CLIENT_ID/SECRET`、`TS_OAUTH_TAGS`（默认 `tag:openwrt`，OAuth 铸 key 平台要求带 tag，设备变 tagged——README §2.3 说明 policy 一次性准备与 ACL 影响）、`TS_EXPECTED_IP`、`TS_AUTH_KEY`。README 新增 §2.3（OAuth 一次性准备）与 §5.6（设备重置恢复 runbook：scp 三文件 + 跑一条命令）。
 
 ### Changed（变更）
 
