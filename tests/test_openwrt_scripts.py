@@ -1,9 +1,11 @@
 """sources/openwrt 下 shell 脚本的行为测试。
 
-覆盖三块：
+覆盖五块：
 1. POSIX 语法检查（sh -n）——三个脚本都必须能被 BusyBox ash 兼容解析；
 2. -h/--help 用法说明——必须在做任何环境检查/副作用之前短路退出；
-3. cn-exit-setup.sh 持久 tailscale bypass 的静态契约（nftables.d include）。
+3. openwrt-init.sh 持久 tailscale bypass 的静态契约（nftables.d include）；
+4. OpenClash 配置纳管：模板占位符契约 + 渲染函数行为（注入/裁剪）；
+5. 内嵌 cdn-speedtest：heredoc 完整性与可解析性。
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ from pathlib import Path
 import pytest
 
 _OPENWRT = Path(__file__).resolve().parent.parent / "sources" / "openwrt"
-_SETUP = _OPENWRT / "cn-exit-setup.sh"
+_OPENCLASH = Path(__file__).resolve().parent.parent / "sources" / "openclash"
+_SETUP = _OPENWRT / "openwrt-init.sh"
 _BRIDGE = _OPENWRT / "cn-bridge"
 _MONITOR = _OPENWRT / "cn-bridge-monitor"
 _ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR]
@@ -95,7 +98,7 @@ def test_bridge_unknown_command_fails_fast() -> None:
 
 
 def test_setup_writes_persistent_nft_bypass() -> None:
-    """cn-exit-setup.sh 必须固化 fw4 持久 include，消除 OpenClash 重启窗口期。
+    """openwrt-init.sh 必须固化 fw4 持久 include，消除 OpenClash 重启窗口期。
 
     契约要点（任一缺失都意味着窗口期兜底失效）：
     - include 文件路径在 /etc/nftables.d/ 下（fw4 reload 自动并入 inet fw4 表）；
@@ -134,3 +137,153 @@ def test_setup_verify_guards_openclash_fakeip_only_bypass() -> None:
     src = _SETUP.read_text(encoding="utf-8")
     assert "openclash.@lan_ac_traffic[0].enabled" in src
     assert "lan_ac_traffic" in src
+
+
+# ---- OpenClash 配置纳管 -------------------------------------------------------
+
+
+def test_setup_main_wires_new_steps_in_order() -> None:
+    """main() 必须接入新步骤：配置纳管在解耦之前（共用解耦末尾的 restart），
+    CDN 优选在监控之后、自检之前。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    # rindex：内嵌 cdn-speedtest heredoc 里也有自己的 main()，外层 main() 是最后一个
+    main_body = src[src.rindex("main() {"):]
+    for fn in ("setup_openclash_config", "install_cdn_speedtest"):
+        assert fn in main_body, f"main() 未调用 {fn}"
+    assert main_body.index("setup_openclash_config") < main_body.index("setup_openclash_decouple")
+    assert main_body.index("setup_monitor_cron") < main_body.index("install_cdn_speedtest")
+    assert main_body.index("install_cdn_speedtest") < main_body.index("if verify")
+
+
+@pytest.mark.parametrize("template", ["op-amd", "op-arm"])
+def test_openclash_templates_have_no_real_secrets(template: str) -> None:
+    """模板是公共仓库文件，dashboard 密码行的值必须恰为占位符（任何其他值都视为
+    真实密码泄露）。不在断言里写真实值本身，避免测试文件二次泄密。"""
+    src = (_OPENCLASH / template).read_text(encoding="utf-8")
+    pw_lines = [ln.strip() for ln in src.splitlines() if "dashboard_password" in ln]
+    assert pw_lines, "模板缺少 dashboard_password 行"
+    for ln in pw_lines:
+        assert ln == "option dashboard_password '<OPENCLASH_DASHBOARD_PASSWORD>'", (
+            f"dashboard_password 必须是占位符，实际: {ln}"
+        )
+
+
+def test_config_env_example_documents_new_vars() -> None:
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in (
+        "OPENCLASH_MANAGE",
+        "OPENCLASH_DASHBOARD_PASSWORD",
+        "OPENCLASH_SUBS",
+        "CDN_DOMAIN",
+        "CDN_SUBDOMAINS",
+        "CDN_CRON_SCHEDULE",
+    ):
+        assert var in src, f"config.env.example 缺少新变量说明: {var}"
+
+
+def _extract_render_funcs(tmp_path: Path) -> Path:
+    """从主脚本抽出渲染相关函数（列 0 的 `}` 为函数终止符）。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    chunks = []
+    for fn in ("openclash_cfg_same()", "render_openclash_config()"):
+        start = src.index(f"\n{fn}") + 1
+        end = src.index("\n}", start) + 2
+        chunks.append(src[start:end])
+    out = tmp_path / "render-funcs.sh"
+    out.write_text("\n".join(chunks), encoding="utf-8")
+    return out
+
+
+_MINI_TEMPLATE = """
+config config_subscribe
+\toption name 'KeepMe'
+\toption sub_ua 'clash.meta'
+\toption enabled '1'
+
+config config_subscribe
+\toption enabled '1'
+\toption name 'DropMe'
+\toption address '<YOUR_SUBSCRIBE_LINK-1>'
+
+config dashboard
+\toption dashboard_password '<OPENCLASH_DASHBOARD_PASSWORD>'
+"""
+
+
+def test_render_injects_address_and_prunes_unconfigured_blocks(tmp_path: Path) -> None:
+    """渲染契约：① 密码占位符替换；② OPENCLASH_SUBS 命中的订阅块在块尾注入
+    address；③ 未命中的订阅块（占位示例）整块裁剪；④ 其余 stanza 原样保留。"""
+    funcs = _extract_render_funcs(tmp_path)
+    tpl = tmp_path / "mini-template"
+    tpl.write_text(_MINI_TEMPLATE, encoding="utf-8")
+    rendered = tmp_path / "rendered"
+    driver = (
+        f". '{funcs}'\n"
+        "OPENCLASH_DASHBOARD_PASSWORD='s3cret'\n"
+        "OPENCLASH_SUBS='KeepMe=https://example.com/sub?token=abc'\n"
+        f"render_openclash_config '{tpl}' '{rendered}'\n"
+    )
+    proc = subprocess.run(["sh", "-c", driver], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    out = rendered.read_text(encoding="utf-8")
+    assert "dashboard_password 's3cret'" in out
+    assert "<OPENCLASH_DASHBOARD_PASSWORD>" not in out
+    assert "DropMe" not in out and "<YOUR_SUBSCRIBE_LINK" not in out
+    assert "config dashboard" in out
+    # address 注入在 KeepMe 块尾（enabled 行之后）
+    keep_block = out[out.index("KeepMe"):out.index("config dashboard")]
+    assert "option address 'https://example.com/sub?token=abc'" in keep_block
+    assert keep_block.index("enabled") < keep_block.index("option address")
+
+
+def test_render_idempotent_normalized_compare(tmp_path: Path) -> None:
+    """openclash_cfg_same 必须忽略行尾空白与末尾空行——幂等跳过的判据。"""
+    funcs = _extract_render_funcs(tmp_path)
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.write_text("config x\n\toption y '1'\n", encoding="utf-8")
+    b.write_text("config x\n\toption y '1' \n\n\n", encoding="utf-8")
+    driver = f". '{funcs}'\nopenclash_cfg_same '{a}' '{b}'\n"
+    proc = subprocess.run(["sh", "-c", driver], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, "规范化比对应忽略行尾空白/末尾空行"
+
+
+# ---- 内嵌 cdn-speedtest -------------------------------------------------------
+
+
+def _extract_embedded_cdn(tmp_path: Path) -> Path:
+    src = _SETUP.read_text(encoding="utf-8")
+    start = src.index("<<'CDNEOF'") + len("<<'CDNEOF'") + 1
+    end = src.index("\nCDNEOF\n", start) + 1
+    out = tmp_path / "cdn-speedtest"
+    out.write_text(src[start:end], encoding="utf-8")
+    return out
+
+
+def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None:
+    """heredoc 内嵌的 cdn-speedtest 必须是完整、可解析的 POSIX 脚本。"""
+    script = _extract_embedded_cdn(tmp_path)
+    src = script.read_text(encoding="utf-8")
+    for fn in (
+        "build_cdn_domains",
+        "install_cloudflarest",
+        "run_speedtest",
+        "should_update",
+        "update_hosts",
+        "clean_hosts",
+    ):
+        assert f"{fn}()" in src, f"内嵌 cdn-speedtest 缺少函数: {fn}"
+    assert 'main "$@"' in src
+    proc = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_cdn_install_step_guards_and_cron() -> None:
+    """install_cdn_speedtest 契约：CDN_DOMAIN 空则跳过；清理旧版 cdn-speedtest.sh
+    cron 行；cron 注入带 grep 守卫。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "install_cdn_speedtest()" in src
+    body = src[src.index("install_cdn_speedtest()"):src.index("# ── 端到端自检")]
+    assert '"$CDN_DOMAIN"' in body
+    assert "/usr/bin/cdn-speedtest run" in body
+    assert "cdn-speedtest\\.sh" in body  # 旧路径 cron 清理

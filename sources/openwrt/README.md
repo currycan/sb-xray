@@ -1,6 +1,10 @@
-# sb-xray OpenWrt 回国出口（CN exit）一键配置
+# sb-xray OpenWrt 一键初始化
 
-把「海外 VPS 流量回到中国大陆家宽出口」所需的 OpenWrt 侧全部配置，固化成一个**可反复重跑的幂等脚本**。你只需要填一份 `config.env`，跑一条命令，脚本自动完成安装、配置、自检。
+把 OpenWrt 侧的全部手动操作固化成一个**可反复重跑的幂等脚本**（原 `cn-exit-setup.sh`）。你只需要填一份 `config.env`，跑一条命令，脚本自动完成安装、配置、自检。覆盖三块：
+
+1. **回国出口（CN exit）**：「海外 VPS 流量回到中国大陆家宽出口」所需的 Tailscale / xray bridge 全部配置；
+2. **OpenClash 配置纳管**：按架构选 [`../openclash/op-amd|op-arm`](../openclash/) 模板，注入私有值后幂等应用到 `/etc/config/openclash`（不安装 OpenClash 本体）；
+3. **CDN IP 优选**：内嵌 `cdn-speedtest` 工具，Cloudflare 测速优选 IP 写入 `/etc/hosts` + 每日 cron。
 
 服务端（VPS）由 `docker-compose` 单独部署（多台 VPS 可用 [`../vps/vps-cn-exit-init.sh`](../vps/vps-cn-exit-init.sh) 一键初始化，用法见 [../vps/README.md](../vps/README.md)），不在本目录范围内。
 
@@ -8,11 +12,13 @@
 
 | 文件 | 作用 | 装到路由器哪里 |
 |------|------|----------------|
-| `cn-exit-setup.sh` | 主脚本：装 Tailscale / xray bridge + 全部配置 + 自检 | 手动上传，跑完即可删 |
+| `openwrt-init.sh` | 主脚本：装 Tailscale / xray bridge + OpenClash 配置 + CDN 优选 + 自检 | 手动上传，跑完即可删 |
 | `config.env.example` | 配置模板，复制为 `config.env` 后填值 | 与主脚本同目录 |
 | `nodes.list.example` | 多 VPS 节点清单模板（多节点高可用用） | 与主脚本同目录，装入 `/etc/cn-exit/nodes.list` |
 | `cn-bridge` | 拨号工具：随时拨通 / 断开任意 VPS 的回国隧道 | 脚本自动装到 `/usr/bin/cn-bridge` |
 | `cn-bridge-monitor` | 双腿探活 + telegram 告警 | 脚本自动装到 `/usr/bin/cn-bridge-monitor` |
+
+另有两类产物不在本目录，由主脚本自动取用/生成：OpenClash 配置模板在 [`../openclash/`](../openclash/)（同目录文件优先，否则按架构自动下载）；`cdn-speedtest` 工具内嵌在主脚本里（启用 CDN 优选时写出到 `/usr/bin/cdn-speedtest`）。
 
 ---
 
@@ -156,7 +162,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    S1["① 下载文件<br/>路由器上 wget"] --> S2["② 填配置<br/>config.env<br/>(+ nodes.list)"] --> S3["③ 运行<br/>sh cn-exit-setup.sh"] --> S4["④ Tailscale 授权<br/>浏览器点一次<br/>(仅首次)"] --> S5["⑤ 看自检结果<br/>+ 手动复测"]
+    S1["① 下载文件<br/>路由器上 wget"] --> S2["② 填配置<br/>config.env<br/>(+ nodes.list)"] --> S3["③ 运行<br/>sh openwrt-init.sh"] --> S4["④ Tailscale 授权<br/>浏览器点一次<br/>(仅首次)"] --> S5["⑤ 看自检结果<br/>+ 手动复测"]
 ```
 
 ### 步骤 1：下载文件到路由器
@@ -166,7 +172,7 @@ flowchart LR
 ```sh
 ssh root@<路由器IP>
 mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
-for f in cn-exit-setup.sh config.env.example cn-bridge cn-bridge-monitor nodes.list.example; do
+for f in openwrt-init.sh config.env.example cn-bridge cn-bridge-monitor nodes.list.example; do
   wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
 done
 ```
@@ -235,7 +241,7 @@ TS_VERSION=1.98.4
 ### 步骤 3：运行
 
 ```sh
-sh cn-exit-setup.sh
+sh openwrt-init.sh
 ```
 
 不想建文件也可以全内联（注意 token 会进 shell history）：
@@ -243,7 +249,7 @@ sh cn-exit-setup.sh
 ```sh
 CN_EXIT_MODE=reverse VPS_DOMAIN=vpn.example.com \
   SUBSCRIBE_TOKEN=<token> XRAY_VERSION=26.3.27 \
-  sh cn-exit-setup.sh
+  sh openwrt-init.sh
 ```
 
 ### 步骤 4：Tailscale 授权（仅首次）
@@ -300,6 +306,12 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | `DOWNLOAD_RETRIES` | 可选 | 下载失败重试次数，默认 3 |
 | `ALERT_TG_TOKEN` / `ALERT_TG_CHAT` | 可选 | telegram bot token / chat id，填了才告警 |
 | `MON_INTERVAL` / `MON_THRESHOLD` | 可选 | 探活周期（分钟，默认 2）/ 连续失败几次才告警（默认 3） |
+| `OPENCLASH_MANAGE` | 可选 | OpenClash 配置纳管开关，默认 `1`；`0` = 不碰 `/etc/config/openclash` 本体 |
+| `OPENCLASH_DASHBOARD_PASSWORD` | 纳管开启时 | dashboard 登录密码，注入模板占位符 `<OPENCLASH_DASHBOARD_PASSWORD>` |
+| `OPENCLASH_SUBS` | 纳管开启时 | 订阅地址注入：`"名=URL 名=URL"` 空格分隔，按模板订阅块 `option name` 匹配；未命中的订阅块整块裁剪 |
+| `CDN_DOMAIN` | 可选 | CDN 根域名；**非空即启用 CDN IP 优选** |
+| `CDN_SUBDOMAINS` | 可选 | 子域名前缀（逗号分隔），写入 `/etc/subdomains.txt`；留空沿用路由器已有文件 |
+| `CDN_CRON_SCHEDULE` | 可选 | CDN 测速 cron 时间表，默认 `0 4 * * *`（每天 04:00） |
 
 脚本按模式执行的步骤一览：
 
@@ -309,12 +321,14 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | 防火墙放行 | socks5 / balance | OpenClash 钩子把 Tailscale UDP 在 nftables mangle 链顶 `return` 绕过 tproxy，OpenClash 每次重启自动重跑 |
 | skip-auth | socks5 / balance | 把 `100.64.0.0/10` 注入 mihomo `skip-auth-prefixes`，VPS 经 Tailscale 访问本机 SOCKS5(7891) 免认证 |
 | keepalive / UDP GRO | socks5 / balance | ~15s 一轮 ping 热备保住 41641 映射；WAN 网卡开 `rx-udp-gro-forwarding` 提升转发吞吐 |
+| OpenClash 配置 | 有 OpenClash 且 `OPENCLASH_MANAGE=1` | op-amd/op-arm 模板按架构渲染（密码/订阅注入 + 未配订阅块裁剪），有漂移才覆写 `/etc/config/openclash`（先 `.bak`） |
 | 解耦 | 所有（有 OpenClash 时） | 给清单内每个 VPS 域名加 `DOMAIN,<vps>,DIRECT` + fake-ip 过滤，bridge 直连真实 IP |
 | GLOBAL 重排 | 所有（有 OpenClash 时） | 注入自定义 `GLOBAL` select 组，把内置 `DIRECT`/`REJECT` 排到选单最后；纯 UI 顺序，不影响路由 |
 | xray bridge | reverse / balance | 装 xray + `cn-bridge` + 生成节点清单；对热备各拨一条独立隧道 |
 | socks5 对齐 | socks5 / balance | OpenClash 加 `IN-PORT,7891,DIRECT`，socks5 腿强制纯直出 |
 | 监控 | 配了 TG 告警时 | 装 `cn-bridge-monitor` + cron 周期探活 |
-| 自检 | 所有 | 按模式裁剪的端到端验证 |
+| CDN 优选 | `CDN_DOMAIN` 非空 | 内嵌脚本写出 `/usr/bin/cdn-speedtest` + `/etc/subdomains.txt` + 每日 cron + 预装 CloudflareST |
+| 自检 | 所有 | 按模式裁剪的端到端验证（含 OpenClash 配置无漂移、CDN 优选落位） |
 
 ---
 
@@ -360,7 +374,21 @@ flowchart TD
 
 ### 5.3 升级 / 重跑
 
-改 `config.env` 里的 `XRAY_VERSION` / `TS_VERSION` 后重跑 `sh cn-exit-setup.sh` 即可——幂等设计，只更新有变化的部分。
+改 `config.env` 里的 `XRAY_VERSION` / `TS_VERSION` 后重跑 `sh openwrt-init.sh` 即可——幂等设计，只更新有变化的部分。
+
+### 5.4 cdn-speedtest CDN IP 优选（原 `hack/cdn-speedtest.sh`，已内嵌进主脚本）
+
+所有 CDN 域名都经 Cloudflare，Cloudflare 按 TLS SNI / Host 头路由到正确源站，因此**一个优选 IP 即可覆盖全部域名**。主脚本（`CDN_DOMAIN` 非空时）写出 `/usr/bin/cdn-speedtest`、生成 `/etc/subdomains.txt`、配好每日 cron，日常无需手动干预。手动操作：
+
+```sh
+CDNDOMAIN=<根域名> cdn-speedtest run      # 立即测速并更新 /etc/hosts
+CDNDOMAIN=<根域名> cdn-speedtest status   # 查看当前优选状态
+CDNDOMAIN=<根域名> cdn-speedtest clean    # 清除优选记录，恢复 DNS 正常解析
+```
+
+- 测速期间会临时停 OpenClash（测速直连）、切公共 DNS，完成后自动恢复。
+- 新旧 IP 智能比对：IP 未变 / 新 IP 提升不足 10% 时不动 hosts，避免无谓抖动。
+- 日志：`/var/log/cdn-speedtest.log`；测速参数可用环境变量覆盖（`SPEED_TEST_THREADS` 等，见 `cdn-speedtest help`）。
 
 ---
 
@@ -395,7 +423,7 @@ flowchart TD
     L2 --> F2["tailscale ping 是否 DERP<br/>OpenClash 是否在跑<br/>skip-auth 是否含 100.64/10"]
 ```
 
-**自检有失败项，但刚做完 Tailscale 授权** —— 打洞需要 1-2 分钟，稍等后重跑一次 `sh cn-exit-setup.sh`（或只看 `tailscale ping`）即可。
+**自检有失败项，但刚做完 Tailscale 授权** —— 打洞需要 1-2 分钟，稍等后重跑一次 `sh openwrt-init.sh`（或只看 `tailscale ping`）即可。
 
 **`tailscale ping` 显示 `via DERP`（走中继，慢）**
 

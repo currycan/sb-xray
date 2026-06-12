@@ -3,7 +3,7 @@
 #
 # 读 /etc/cn-exit/nodes.list（每行：<名> <FQDN> <token>，# 注释与空行忽略），
 # 把每个被拨通的节点跑成独立的 xray-bridge-<名> procd 进程 + /etc/xray/client-<名>.json。
-# 热备常驻拨通由 cn-exit-setup.sh 初始化；冷备平时不拨，故障时一条命令顶上。
+# 热备常驻拨通由 openwrt-init.sh 初始化；冷备平时不拨，故障时一条命令顶上。
 #
 # 用法：
 #   cn-bridge list            列出所有节点 + 拨号/进程状态
@@ -39,14 +39,14 @@ xray-bridge-<名> procd 服务 + /etc/xray/client-<名>.json。
   status      到 VPS:443 的 ESTABLISHED 概览 + 节点列表
   menu        交互菜单（无参数时默认进入）
 
-说明: 热备常驻拨通由 cn-exit-setup.sh 初始化；冷备平时不拨，故障时 up 一条顶上。
-多进程 api 端口自动错开（17900+节点序号）。节点清单由 cn-exit-setup.sh 生成。
+说明: 热备常驻拨通由 openwrt-init.sh 初始化；冷备平时不拨，故障时 up 一条顶上。
+多进程 api 端口自动错开（17900+节点序号）。节点清单由 openwrt-init.sh 生成。
 USAGE
 }
 
 case "${1:-}" in -h|--help|help) usage; exit 0 ;; esac
 
-[ -f "$NODES" ] || die "节点清单不存在: ${NODES}（先运行 cn-exit-setup.sh 生成）"
+[ -f "$NODES" ] || die "节点清单不存在: ${NODES}（先运行 openwrt-init.sh 生成）"
 
 svc() { printf '/etc/init.d/xray-bridge-%s' "$1"; }
 cfg() { printf '%s/client-%s.json' "$XDIR" "$1"; }
@@ -115,7 +115,7 @@ EOF
 
 cmd_up() {
     node_lookup "$1" || die "未知节点: $1（cn-bridge list 查看）"
-    command -v xray >/dev/null 2>&1 || die "未安装 xray（先运行 cn-exit-setup.sh）"
+    command -v xray >/dev/null 2>&1 || die "未安装 xray（先运行 openwrt-init.sh）"
     is_up "$N_NAME" && log "$N_NAME 已拨通，刷新 client 并重启"
     _api=$((API_BASE + N_IDX))
     download_client "$N_NAME" "$N_DOMAIN" "$N_TOKEN" "$_api"

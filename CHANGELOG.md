@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added（新增）
+
+- **OpenWrt 一键初始化整合**（`sources/openwrt/openwrt-init.sh`，原 `cn-exit-setup.sh` 更名扩展）：脚本职责从「回国出口配置」扩展为「OpenWrt 侧完整初始化」，所有手动操作归零为「填一份 config.env，跑一条命令」。本批变更仅涉及 OpenWrt 侧脚本与模板，不改 docker-compose env，无 watchtower 漂移契约（CLAUDE.md §2）影响。
+  - **OpenClash 配置纳管**（`OPENCLASH_MANAGE=1` 默认开）：按架构选 `sources/openclash/op-amd|op-arm` 模板（脚本同目录优先，缺失自动下载），注入 dashboard 密码与订阅地址（`OPENCLASH_SUBS`，`"名=URL"` 空格分隔按 `option name` 匹配、address 注入块尾对齐 LuCI 保存顺序），未提供地址的订阅块（AllOne / 示例）整块裁剪；规范化 diff 无漂移即跳过，有差异先 `.bak.<时间戳>` 再整文件覆写，restart 统一由解耦步骤末尾的 `RELOAD_OPENCLASH` 逻辑触发（避免双重重启）。自检新增「配置无漂移」「密码非占位符」两项。
+  - **CDN IP 优选集成**（`CDN_DOMAIN` 非空启用）：原 `sources/hack/cdn-speedtest.sh` 整体并入主脚本（heredoc 内嵌），安装时写出 `/usr/bin/cdn-speedtest`（保留 run/install/status/clean 子命令）+ 按 `CDN_SUBDOMAINS` 生成 `/etc/subdomains.txt` + 每日 cron（`CDN_CRON_SCHEDULE`，默认 04:00）+ 预装 CloudflareST；自动清理旧版 `cdn-speedtest.sh` 手装产物与 cron 行。独立文件已从仓库删除。
+
+### Changed（变更）
+
+- **`cn-exit-setup.sh` → `openwrt-init.sh` 更名**：与 `vps-cn-exit-init.sh` 命名对称。路由器上的运行时产物名（`cn-bridge`、`cn-bridge-monitor`、`/etc/cn-exit/`、`xray-bridge-<名>`）全部不变，已部署路由器无需迁移；仓库内全部文档/注释/测试引用同步更名（CHANGELOG 历史条目保留旧名）。迁移：下次重跑时按 README 下载新名脚本即可，旧脚本副本可删。
+
+### Security（安全）
+
+- **op-amd / op-arm 模板 dashboard 密码脱敏**：真实生产密码以明文存在于公共仓库模板（`option dashboard_password`），改为 `<OPENCLASH_DASHBOARD_PASSWORD>` 占位符，由 `openwrt-init.sh` 从 config.env（`OPENCLASH_DASHBOARD_PASSWORD`，gitignored）注入。注意：git 历史中仍有旧值，建议轮换该密码。
+
 ## [26.6.11] — 2026-06-11 · watchtower 全自动更新体系 + ISP 测速选路优化 + 风险分类媒体分流
 
 > 汇总自 v26.6.7 以来的全部变更：主线是镜像分发从「手动滚动升级」演进到 **watchtower 全自动更新 + canary 自检**（配套 `YY.M.D-<短 sha>` 镜像版本号方案，本版起 Git Release tag 与 Docker 镜像 tag 一一对应），伴随 ISP 测速/选路系统性优化、媒体分流改为账号风险分类模型与多项稳定性修复。

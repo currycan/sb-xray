@@ -126,7 +126,7 @@ docker exec sb-xray sh -c 'grep -E "r-tunnel|cn-exit" /var/log/xray/access.log |
 | `Tailscale 安装失败` | VPS 到 `tailscale.com` 网络不通，换网络源或手动装后重跑 |
 | `tailscale up 未成功` | authkey 过期/用尽——管理后台生成新的 reusable key 重跑 |
 | 持续 ping 不通 OpenWrt | ① OpenWrt 侧 Tailscale 是否在线（`tailscale status`）；② 管理后台两台设备是否都未过期；③ OpenWrt 侧 keepalive 是否在跑（它才是打洞主力） |
-| 回国流量黑洞 / 走偏 | OpenWrt 侧 OpenClash 的 skip-auth（`100.64.0.0/10`）与 `IN-PORT,7891,DIRECT` 规则是否在——重跑一次 `cn-exit-setup.sh` 即补全 |
+| 回国流量黑洞 / 走偏 | OpenWrt 侧 OpenClash 的 skip-auth（`100.64.0.0/10`）与 `IN-PORT,7891,DIRECT` 规则是否在——重跑一次 `openwrt-init.sh` 即补全 |
 | 容器内 env 是旧值 | `.env` 改了但容器没重建：`docker compose up -d --force-recreate` |
 
 ## 7. 改了什么（便于审计/回滚）

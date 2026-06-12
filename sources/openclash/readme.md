@@ -1,5 +1,18 @@
 # 说明
 
+## op-amd / op-arm —— OpenClash 配置模板（由 openwrt-init.sh 渲染应用）
+
+`op-amd`（x86_64）/ `op-arm`（aarch64）是路由器 `/etc/config/openclash` 的完整模板，由 [`../openwrt/openwrt-init.sh`](../openwrt/openwrt-init.sh) 按架构自动选择、注入私有值后幂等应用到路由器，无需手动拷贝。
+
+模板中的占位符与对应 config.env 变量：
+
+| 占位符 / 注入点 | config.env 变量 | 说明 |
+|----------------|-----------------|------|
+| `<OPENCLASH_DASHBOARD_PASSWORD>` | `OPENCLASH_DASHBOARD_PASSWORD` | dashboard 登录密码（必填） |
+| `config_subscribe` 块的 `option address` | `OPENCLASH_SUBS`（`名=URL` 空格分隔） | 按 `option name` 匹配注入订阅地址 |
+
+渲染规则：注入后仍含占位地址（如 `<YOUR_SUBSCRIBE_LINK`、`【订阅地址`）或未提供地址的 `config_subscribe` 块会被**整块裁剪**——模板里的 AllOne / 示例块仅作填写示范，不会落到路由器上。应用前自动备份 `.bak.<时间戳>`，无差异时跳过。
+
 [vernesong/OpenClash: A Clash Client For OpenWrt](https://github.com/vernesong/OpenClash)
 
 [OpenClash/master/smart at core · vernesong/OpenClash](https://github.com/vernesong/OpenClash/tree/core/master/smart)

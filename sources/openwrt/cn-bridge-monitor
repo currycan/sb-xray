@@ -1,7 +1,7 @@
 #!/bin/sh
 # cn-bridge-monitor —— sb-xray 回国双腿探活告警（OpenWrt / BusyBox ash）
 #
-# 由 cn-exit-setup.sh 安装，cron 周期调用。读 /etc/cn-exit/monitor.env：
+# 由 openwrt-init.sh 安装，cron 周期调用。读 /etc/cn-exit/monitor.env：
 #   TG_TOKEN       telegram bot token（空 = 只记录、不告警）
 #   TG_CHAT        telegram chat id
 #   HOT            热备节点名（空格分隔），检查其 r-tunnel 隧道进程
@@ -16,7 +16,7 @@ usage() {
     cat <<'USAGE'
 用法: cn-bridge-monitor [-h|--help]
 
-sb-xray 回国双腿探活告警。由 cn-exit-setup.sh 安装并加入 cron 周期调用
+sb-xray 回国双腿探活告警。由 openwrt-init.sh 安装并加入 cron 周期调用
 （无参数运行 = 执行一轮检查）。配置读 /etc/cn-exit/monitor.env:
   TG_TOKEN       telegram bot token（空 = 只记录、不告警）
   TG_CHAT        telegram chat id
