@@ -195,3 +195,28 @@ curl -fsSL https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/s
   -o /root/sb-xray/sbx-canary-check.sh && chmod 755 /root/sb-xray/sbx-canary-check.sh
 # 下次 cron 触发即生效；批量可在控制端对各节点循环执行上面两行
 ```
+
+---
+
+# `cn-exit-watchdog.sh` —— CN 出口整机宕机反向探活
+
+同目录的第三个脚本，补一个监控盲区：设备侧监控（`cn-bridge-monitor`）跑在 CN 出口设备自身上——**设备整机宕机时监控随之失联**，而 VPS 侧 balance 探活只做静默 failover 不发告警。本脚本部署在任意 1-2 台 VPS 上由 cron 每分钟执行，从外部反向探活 CN 出口。
+
+## 机制
+
+- 经 socks5 腿（`WD_SOCKS5_HOST:WD_SOCKS5_PORT`，host 默认读本机 `.env` 的 `tsip`，端口默认 7891）`curl` 探活 URL（默认 generate_204），2xx/204 视为通。
+- 连续 `WD_THRESHOLD`（默认 3）次失败 → 发 Telegram 告警（bot 直连 `api.telegram.org`，需 `WD_TG_TOKEN`/`WD_TG_CHAT`）；**告警期内去重不刷屏**；恢复后发解除消息。状态落 `WD_STATE`（默认 `/var/tmp/cn-exit-watchdog.state`）。
+- `--test` 旗标发一条测试消息验证告警通道；`WD_TAG` 可给消息加前缀（演练时设 `[演练]`）。
+
+## 安装（幂等）
+
+```sh
+# 控制端 scp 脚本到节点 /root/sb-xray/ 并 chmod +x，然后在节点上：
+printf 'WD_TG_TOKEN=<bot-token>\nWD_TG_CHAT=<chat-id>\n' > /etc/cn-exit-watchdog.conf
+chmod 600 /etc/cn-exit-watchdog.conf
+( crontab -l 2>/dev/null | grep -v cn-exit-watchdog ; \
+  echo '* * * * * /root/sb-xray/cn-exit-watchdog.sh >/dev/null 2>&1' ) | crontab -
+/root/sb-xray/cn-exit-watchdog.sh --test   # 验证告警通道
+```
+
+建议部署 2 台互为冗余（监控节点自身也可能宕机）；多台同时告警属预期，消息含节点 hostname 可区分。停用：crontab 删该行 + 删 `/etc/cn-exit-watchdog.conf`。与镜像/compose 无关，不涉及 watchtower 发布纪律。
