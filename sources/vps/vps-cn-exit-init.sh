@@ -21,6 +21,10 @@
 #   SBX_CANARY_ROLE 本节点 watchtower 角色 canary|worker（默认 worker；指定一台金丝雀节点设 canary）
 #   CANARY_URL      sbx-canary-check.sh 下载源（默认仓库 main 的 raw）
 #   SKIP_CANARY_WIRING  设 1 跳过 watchtower 自检护栏安装（默认 0）
+#   WD_TG_TOKEN     CN 出口反向探活 Telegram bot token（可选；与 WD_TG_CHAT 同时有值才装 watchdog）
+#   WD_TG_CHAT      CN 出口反向探活 Telegram chat id（可选）
+#   WATCHDOG_URL    cn-exit-watchdog.sh 下载源（默认仓库 main 的 raw）
+#   SKIP_WATCHDOG_WIRING 设 1 跳过反向探活安装（默认 0）
 #
 # 退出码：自检全部通过 0；有硬失败（容器未起 / env 未生效 / Tailscale 未在网）非 0，
 # 便于批量编排检测坏节点。ping / socks5 探测为软告警，不影响退出码。
@@ -156,6 +160,43 @@ EOF
         chmod 644 /etc/cron.d/sbx-canary-check
         log "  自检 cron 已装：/etc/cron.d/sbx-canary-check（$_check_min 时段）"
     fi
+fi
+
+# ── 3.6 CN 出口整机宕机反向探活（可选；WD_TG_TOKEN+WD_TG_CHAT 同时有值才装）──
+# 设备侧监控（cn-bridge-monitor）跑在 CN 出口设备自身上，整机宕机时随之失联，
+# 而 balance 探活只做静默 failover。本段在 VPS 侧装 cn-exit-watchdog.sh + cron
+# 每分钟经 socks5 腿反向探活，连续失败发 TG 告警（机制见同目录 README）。
+# 建议只在 1-2 台节点传 WD_* 启用；多台同时告警属预期（消息含 hostname）。
+if [ "${SKIP_WATCHDOG_WIRING:-0}" = "1" ]; then
+    log "跳过 CN 出口反向探活安装（SKIP_WATCHDOG_WIRING=1）"
+elif [ -n "${WD_TG_TOKEN:-}" ] && [ -n "${WD_TG_CHAT:-}" ]; then
+    WATCHDOG_URL="${WATCHDOG_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/cn-exit-watchdog.sh}"
+    _wd="$SBXRAY_DIR/cn-exit-watchdog.sh"
+    if curl -fsSL "$WATCHDOG_URL" -o "$_wd.new" && [ -s "$_wd.new" ] && head -1 "$_wd.new" | grep -q '#!/bin/sh'; then
+        mv "$_wd.new" "$_wd"; chmod 755 "$_wd"
+        log "cn-exit-watchdog.sh 已更新 ← $WATCHDOG_URL"
+    elif [ -f "$_wd" ]; then
+        rm -f "$_wd.new"; warn "watchdog 下载失败，保留现有 $_wd"
+    else
+        rm -f "$_wd.new"; warn "watchdog 下载失败且本地缺失，反向探活未装（手动放置后重跑本脚本）"
+    fi
+    if [ -f "$_wd" ]; then
+        printf 'WD_TG_TOKEN=%s\nWD_TG_CHAT=%s\n' "$WD_TG_TOKEN" "$WD_TG_CHAT" > /etc/cn-exit-watchdog.conf
+        chmod 600 /etc/cn-exit-watchdog.conf
+        cat > /etc/cron.d/cn-exit-watchdog <<EOF
+# sb-xray CN 出口整机宕机反向探活（vps-cn-exit-init.sh 生成）
+* * * * * root $_wd >/dev/null 2>&1
+EOF
+        chmod 644 /etc/cron.d/cn-exit-watchdog
+        # 清理早期手装的 user-crontab 条目（统一走 cron.d，避免双跑）
+        if crontab -l 2>/dev/null | grep -q cn-exit-watchdog; then
+            crontab -l 2>/dev/null | grep -v cn-exit-watchdog | crontab -
+            log "已迁移旧 user-crontab 条目 → /etc/cron.d/cn-exit-watchdog"
+        fi
+        log "反向探活已装：/etc/cron.d/cn-exit-watchdog（通道验证可手跑 $_wd --test）"
+    fi
+else
+    log "未传 WD_TG_TOKEN/WD_TG_CHAT，跳过 CN 出口反向探活（可选护栏）"
 fi
 
 # ── 4. 同步 docker-compose.yml（确保含最新回国 env 引用）────────────

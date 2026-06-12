@@ -50,6 +50,10 @@ flowchart LR
 | `SKIP_PULL` | 可选 | 设 `1` 只 `up -d` 不 `pull`（不升级镜像）；默认 `0` | — |
 | `CANARY_URL` | 可选 | `sbx-canary-check.sh` 下载源，默认仓库 `main` 的 raw（见 §D） | — |
 | `SKIP_CANARY_WIRING` | 可选 | 设 `1` 跳过 watchtower 自检护栏安装（canary 脚本 + cron + `sbx-update`）；默认 `0` | — |
+| `WD_TG_TOKEN` | 可选 | CN 出口反向探活的 Telegram bot token；**与 `WD_TG_CHAT` 同时有值才安装**（见 §watchdog） | 复用告警 bot |
+| `WD_TG_CHAT` | 可选 | 反向探活告警的 Telegram chat id | 同上 |
+| `WATCHDOG_URL` | 可选 | `cn-exit-watchdog.sh` 下载源，默认仓库 `main` 的 raw | — |
+| `SKIP_WATCHDOG_WIRING` | 可选 | 设 `1` 跳过反向探活安装；默认 `0`（不传 `WD_*` 本就不装） | — |
 
 > ℹ️ 脚本会自动把 `docker-compose.yml` 同步为仓库最新版（首次的原始文件保留为 `docker-compose.yml.bak`，重跑不覆盖）。旧部署的 compose 可能不含 `${CN_EXIT_MODE}` / `${tsip}` 等引用，不同步则 `.env` 里的回国项不会生效。节点专属配置都在 `.env`，compose 是模板，覆盖安全。
 >
@@ -208,15 +212,16 @@ curl -fsSL https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/s
 - 连续 `WD_THRESHOLD`（默认 3）次失败 → 发 Telegram 告警（bot 直连 `api.telegram.org`，需 `WD_TG_TOKEN`/`WD_TG_CHAT`）；**告警期内去重不刷屏**；恢复后发解除消息。状态落 `WD_STATE`（默认 `/var/tmp/cn-exit-watchdog.state`）。
 - `--test` 旗标发一条测试消息验证告警通道；`WD_TAG` 可给消息加前缀（演练时设 `[演练]`）。
 
-## 安装（幂等）
+## 安装
+
+**推荐：随 init 自动装**——重跑 `vps-cn-exit-init.sh` 时多传两个变量即可（下载脚本 + 写 conf 600 + 装 `/etc/cron.d/cn-exit-watchdog`，幂等，并自动迁移清理早期手装的 user-crontab 条目）：
 
 ```sh
-# 控制端 scp 脚本到节点 /root/sb-xray/ 并 chmod +x，然后在节点上：
-printf 'WD_TG_TOKEN=<bot-token>\nWD_TG_CHAT=<chat-id>\n' > /etc/cn-exit-watchdog.conf
-chmod 600 /etc/cn-exit-watchdog.conf
-( crontab -l 2>/dev/null | grep -v cn-exit-watchdog ; \
-  echo '* * * * * /root/sb-xray/cn-exit-watchdog.sh >/dev/null 2>&1' ) | crontab -
+OPENWRT_TS_IP=100.x.y.z WD_TG_TOKEN=<bot-token> WD_TG_CHAT=<chat-id> \
+  sh ~/sb-xray/vps-cn-exit-init.sh
 /root/sb-xray/cn-exit-watchdog.sh --test   # 验证告警通道
 ```
 
-建议部署 2 台互为冗余（监控节点自身也可能宕机）；多台同时告警属预期，消息含节点 hostname 可区分。停用：crontab 删该行 + 删 `/etc/cn-exit-watchdog.conf`。与镜像/compose 无关，不涉及 watchtower 发布纪律。
+不传 `WD_*` 的节点不装（可选护栏，自门控）。手动方式（不跑 init 时）：scp 脚本到 `/root/sb-xray/` 并 `chmod +x`，按脚本头注释写 conf 与 cron。
+
+建议部署 2 台互为冗余（监控节点自身也可能宕机）；多台同时告警属预期，消息含节点 hostname 可区分。停用：删 `/etc/cron.d/cn-exit-watchdog` + `/etc/cn-exit-watchdog.conf`。与镜像/compose 无关，不涉及 watchtower 发布纪律。
