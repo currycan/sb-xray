@@ -6,6 +6,8 @@
 
 - **机型差异**：arch.conf 源、iStore 安装法、一键流程 quickstart 走法、WAN 防火墙、distfeeds 恢复、自动风扇、overlay 换分区（仅 MT-3000）——均按机型自动切换；BE6500 一键流程沿用其 mdadm 跳过保护。
 - **三款通用能力**：argon 主题、iStore、AdGuardHome、wireguard、文件管理器、自定义软件源、quickstart、高级卸载、`g` 快捷命令、脚本自更新。
+- **不含 Docker**：Docker 安装功能已移除——低端机型（如 MT-3000 256MB RAM）的源/内存支持不确定，BE 系列又无法 extroot 扩容、内部 flash 仅 ~285MB 装不下；需要时用 GL 原生面板或自行 `opkg install dockerd`。
+- **取代**：旧四脚本暂时保留，待 gl-inet.sh 在三款设备上稳定后移除。
 
 > ⚠️ **overlay 换分区仅 MT-3000 可用**：BE 系列（BE3600/BE6500）的 GL SDK4 固件 preinit(`80_mount_root`) 写死 `mount_ext4 "systemrw" /overlay`、不读 fstab 的 `config mount 'overlay'`，U 盘 extroot 扩容在 BE 上不生效（机械步骤会跑但重启后 /overlay 仍在内部 flash）。故该菜单项按 profile 仅对 MT-3000 显示。U 盘在 BE 上仍可作数据盘/NAS（GL 原生 `gl_nas_diskmanager`）。
 
@@ -16,17 +18,42 @@
 **MT-3000 两阶段**：先扩容 overlay 到 U 盘（默认 5GB）→ 自动重启 → 重启后**再点一次菜单 0** 进入阶段 2 安装其余（先扩容腾空间、再把包装进大分区）。靠 `/etc/.glinet_init_overlay_tried` 标记防止重复抹盘。
 
 > ⚠️ **未验证**：overlay 在 MT-3000 固件上是否真正生效**尚未实测**——本两阶段是按「生效」假设写的。若 MT-3000 与 BE 同为 GL SDK4（preinit 写死 `systemrw`），扩容不生效，阶段 1 重启后 `df /overlay` 仍是内部 flash；此时标记会让第二次跑直接进阶段 2（并提示固件可能不支持），不会反复抹 U 盘。需在 MT-3000 真机确认后去除此 caveat。
-- **取代**：旧四脚本暂时保留，待 gl-inet.sh 在三款设备上稳定后移除。
 
 ### 上传到设备（GL.iNet 固件用 dropbear，无 SFTP）
 
-GL.iNet 固件的 SSH 服务是 **dropbear**，默认**不含 `sftp-server` 子系统**，因此 `scp` / SFTP 客户端直传会失败（TCP 能连上，但 SFTP 子系统协商失败）。三种处理：
+GL.iNet 固件的 SSH 服务是 **dropbear**，默认**不含 `sftp-server` 子系统**，因此 `scp` / SFTP 客户端直传会失败（TCP 能连上，但 SFTP 子系统协商失败），手动安装：
 
-- **SSH 管道直传（推荐，免装包）**：`ssh root@<设备> 'cat > /root/gl-inet.sh' < gl-inet.sh`。
-- **旧版 SCP 协议**：`scp -O gl-inet.sh root@<设备>:/root/`（`-O` 让 scp 走传统 SCP 协议而非 SFTP）。
 - **启用 SFTP**：`opkg update && opkg install openssh-sftp-server`，装完 scp/SFTP 恢复可用。
 
-> 用 `sshpass` 连 dropbear 时建议显式加 `-o PreferredAuthentications=password -o PubkeyAuthentication=no`，否则公钥协商可能干扰密码认证、误报 `Permission denied`。
+
+### 菜单一览
+
+| # | 功能 | 备注 |
+|---|------|------|
+| 0 | 一键初始化（全自动） | 跑除 6/9/13/14 外全部，交互项用默认值；MT-3000 两阶段 |
+| 1 | 一键 iStoreOS 风格化 | profile 决定 iStore 法 / quickstart 走法 |
+| 2 | 安装 Argon 紫色主题 | |
+| 3 | 单独安装 iStore 商店 | |
+| 4 | 隐藏首页非必要 UI 元素 | |
+| 5 | 设置风扇工作温度 | 交互，回车默认 **48℃** |
+| 6 | 启用/关闭 AdGuardHome | |
+| 7 | 安装个性化 UI 辅助插件 | 交互，回车继续 |
+| 8 | 安装高级卸载插件 | |
+| 9 | 安装 luci-app-wireguard | |
+| 10 | 安装文件管理器 | |
+| 11 | 设置/删除自定义软件源 | 交互，回车默认 **TUNA 镜像** |
+| 12 | 手动安装/更新 quickstart 首页 | |
+| 13 | Overlay 换分区助手 | **仅 MT-3000 显示**；子项自定义大小回车默认 **5GB** |
+| 14 | 更新本脚本 | 从 sb-xray 仓库 raw 自更新 |
+| 15 | 恢复原厂 OPKG 配置 | **仅 MT-3000 显示** |
+| R | 恢复出厂设置 | 需手输 `yes` |
+| Q | 退出 | |
+
+### 默认值与幂等
+
+- **交互默认值**：风扇温度（48℃）、自定义软件源（TUNA 镜像）、overlay 自定义包大小（5GB）均可直接回车采用，也可手输覆盖。
+- **幂等**：所有功能可重复执行而不累积垃圾 / 损坏配置（`uci set`、清空再写、`grep -q` 去重、`sed` 替换均幂等；`uci add` / CSS 追加有存在性防护）。唯一破坏性操作 overlay 换分区有「已扩容则确认」防护，一键初始化用 `/etc/.glinet_init_overlay_tried` 标记防止重复抹盘。
+- **真实 IP**：安装提示里的 luci / AdGuard 地址动态取 `uci get network.lan.ipaddr`（设备真实 LAN IP），不再写死 `192.168.8.1`。
 
 ### 真机验证 checklist（每款设备）
 
