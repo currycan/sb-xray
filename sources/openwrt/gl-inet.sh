@@ -20,7 +20,7 @@ HTTP_HOST="https://cafe.cpolar.cn/wkdaily/gl/raw/branch/main"
 FIRMWARE_MIN_VERSION="4.7.2"
 # 本脚本自更新源：指向 sb-xray 仓库（与 openwrt-init.sh / vps 脚本同一 raw 约定），
 # 不用 HTTP_HOST（那是上游 ipk/主题素材源，仍需保留）。
-SELF_UPDATE_URL="https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openclash/gl-inet.sh"
+SELF_UPDATE_URL="https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/gl-inet.sh"
 # 自定义软件源默认值（菜单12 直接回车时用）：中国大陆可达的清华 TUNA OpenWrt 镜像。
 # 注：标准 OpenWrt 包，userspace 工具配合菜单①的 arch.conf 兼容可装；kmod 与 GL QSDK 内核 ABI 不同，勿装内核模块。
 DEFAULT_CUSTOM_FEED="https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/23.05.5/packages/aarch64_cortex-a53/packages"

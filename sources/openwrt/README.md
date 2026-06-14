@@ -17,6 +17,7 @@
 | `nodes.list.example` | 多 VPS 节点清单模板（多节点高可用用） | 与主脚本同目录，装入 `/etc/cn-exit/nodes.list` |
 | `cn-bridge` | 拨号工具：随时拨通 / 断开任意 VPS 的回国隧道 | 脚本自动装到 `/usr/bin/cn-bridge` |
 | `cn-bridge-monitor` | 双腿探活 + telegram 告警 | 脚本自动装到 `/usr/bin/cn-bridge-monitor` |
+| `gl-inet.sh` | GL.iNet 设备一键工具箱（BE3600/BE6500/MT-3000），独立于 cn-exit，用法见 [gl-inet.md](gl-inet.md) | 设备 SSH 里 wget 自取，跑完即可删 |
 
 另有两类产物不在本目录，由主脚本自动取用/生成：OpenClash 配置模板在 [`../openclash/`](../openclash/)（同目录文件优先，否则按架构自动下载）；`cdn-speedtest` 工具内嵌在主脚本里（启用 CDN 优选时写出到 `/usr/bin/cdn-speedtest`）。
 
