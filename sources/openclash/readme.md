@@ -8,6 +8,14 @@
 - **三款通用能力**：argon 主题、iStore、AdGuardHome、wireguard、文件管理器、Docker（dockerman + compose 单一入口）、自定义软件源、quickstart、高级卸载、`g` 快捷命令、脚本自更新。
 
 > ⚠️ **overlay 换分区仅 MT-3000 可用**：BE 系列（BE3600/BE6500）的 GL SDK4 固件 preinit(`80_mount_root`) 写死 `mount_ext4 "systemrw" /overlay`、不读 fstab 的 `config mount 'overlay'`，U 盘 extroot 扩容在 BE 上不生效（机械步骤会跑但重启后 /overlay 仍在内部 flash）。故该菜单项按 profile 仅对 MT-3000 显示。U 盘在 BE 上仍可作数据盘/NAS（GL 原生 `gl_nas_diskmanager`）。
+
+### 菜单 0「一键初始化」
+
+全自动跑除 **6 AdGuard / 9 wireguard / 14 overlay / 15 更新脚本** 外的全部功能项，交互项一律用默认值（12 软件源最先执行，取默认 TUNA 镜像；5 风扇 48℃；7 自动继续；11 空间不足也装）。
+
+**MT-3000 两阶段**：先扩容 overlay 到 U 盘（默认 5GB）→ 自动重启 → 重启后**再点一次菜单 0** 进入阶段 2 安装其余（先扩容腾空间、再把包装进大分区）。靠 `/etc/.glinet_init_overlay_tried` 标记防止重复抹盘。
+
+> ⚠️ **未验证**：overlay 在 MT-3000 固件上是否真正生效**尚未实测**——本两阶段是按「生效」假设写的。若 MT-3000 与 BE 同为 GL SDK4（preinit 写死 `systemrw`），扩容不生效，阶段 1 重启后 `df /overlay` 仍是内部 flash；此时标记会让第二次跑直接进阶段 2（并提示固件可能不支持），不会反复抹 U 盘。需在 MT-3000 真机确认后去除此 caveat。
 - **取代**：旧四脚本暂时保留，待 gl-inet.sh 在三款设备上稳定后移除。
 
 ### 上传到设备（GL.iNet 固件用 dropbear，无 SFTP）

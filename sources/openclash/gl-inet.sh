@@ -998,11 +998,40 @@ do_one_key_setup() {
     esac
 }
 
-# 一键初始化：自动顺序执行除 6(AdGuard)/9(wireguard)/14(overlay,会重启抹U盘)/15(更新本脚本) 外的全部功能项。
-# 交互项一律取默认值：12→TUNA源(最先执行)、5→48℃、7→自动继续、11→空间不足也装。
+# overlay 是否已扩到 U 盘（/overlay > 1GB 视为已扩）
+overlay_is_expanded() {
+    local kb
+    kb=$(df /overlay 2>/dev/null | awk '/\/overlay/{print $2}')
+    [ -n "$kb" ] && [ "$kb" -gt 1048576 ]
+}
+# 是否检测到可移除 U 盘
+init_has_usb() {
+    [ -n "$(lsblk -dn -o NAME,RM,TYPE 2>/dev/null | awk '$2=="1" && $3=="disk"{print $1; exit}')" ]
+}
+
+# 一键初始化：跑除 6(AdGuard)/9(wireguard)/14(overlay→见两阶段)/15(更新本脚本) 外的全部，交互项用默认值。
+# MT-3000 两阶段：阶段1 先扩容 overlay 到 U 盘并重启；重启后再点一次进阶段2 装其余（先扩容腾空间再装）。
+# ⚠️ 未验证：overlay 是否在 MT-3000 固件真正生效尚未实测；若与 BE 同为 GL SDK4(preinit 写死 systemrw)则不生效。
+#    用 /etc/.glinet_init_overlay_tried 标记：阶段1 重启后即便扩容没生效，也不会反复抹 U 盘，直接进阶段2。
 do_init_all() {
     INIT_AUTO=1
-    yellow "===== 一键初始化开始：交互项一律用默认值，跳过 AdGuard/wireguard/overlay/更新脚本 ====="
+    # —— 阶段1：仅 MT-3000、未扩容、未尝试过 → 先扩容 overlay 并自动重启 ——
+    if [ "$HAS_OVERLAY" = 1 ] && ! overlay_is_expanded && [ ! -f /etc/.glinet_init_overlay_tried ]; then
+        if init_has_usb; then
+            yellow "===== [阶段1/2] MT-3000 先扩容 overlay 到 U 盘（默认5GB），完成后自动重启 ====="
+            yellow "      ⚠️ 重启后请再点一次「0 一键初始化」完成其余安装。"
+            yellow "      ⚠️ overlay 是否在本固件生效尚未验证；重启后用 df /overlay 确认是否 >1GB。"
+            touch /etc/.glinet_init_overlay_tried 2>/dev/null
+            CUSTOM_OPKG_SIZE=5
+            change_overlay_usb </dev/null   # 内部自动重启，正常到不了下一行
+            INIT_AUTO=0; return 0
+        fi
+        red "未检测到 U 盘，跳过 overlay 扩容，直接安装其余（如需扩容请插 U 盘后跑菜单14）。"
+    fi
+    if [ "$HAS_OVERLAY" = 1 ] && [ -f /etc/.glinet_init_overlay_tried ] && ! overlay_is_expanded; then
+        yellow "⚠️ 已尝试 overlay 扩容但 /overlay 仍在内部 flash——该固件可能不支持(GL SDK4 写死 systemrw)；继续装其余。"
+    fi
+    yellow "===== [阶段2] 一键初始化：装除 AdGuard/wireguard/overlay/更新脚本外的全部（交互项用默认值）====="
     green ">> 自定义软件源（菜单12·默认TUNA·最先执行）"; add_custom_feed </dev/null
     green ">> 一键 iStoreOS 风格化（菜单1）";            do_one_key_setup
     green ">> Argon 主题（菜单2）";                      do_install_argon_skin
