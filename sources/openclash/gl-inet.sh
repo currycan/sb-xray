@@ -947,14 +947,23 @@ overlay_is_expanded() {
     kb=$(df /overlay 2>/dev/null | awk '/\/overlay/{print $2}')
     [ -n "$kb" ] && [ "$kb" -gt 1048576 ]
 }
-# 是否检测到可移除 U 盘
+# 是否检测到可移除 U 盘（不依赖 lsblk）
+# 全新 GL.iNet 固件默认不带 lsblk（它在 change_overlay_usb→install_depends_apps 才安装），
+# 而 do_init_all 阶段1 在任何安装前就调用本函数；若沿用 lsblk，缺失时输出恒为空，
+# 会把"已插 U 盘"误判为"无 U 盘"，导致 overlay 扩容阶段1 永远被跳过、选 0 与其他机型无异。
+# 故改用内核自带的 sysfs removable 标志（loop/mtd/ubi 均为 0，U 盘 sda 为 1），零依赖。
 init_has_usb() {
-    [ -n "$(lsblk -dn -o NAME,RM,TYPE 2>/dev/null | awk '$2=="1" && $3=="disk"{print $1; exit}')" ]
+    for r in /sys/block/*/removable; do
+        [ -e "$r" ] || continue
+        [ "$(cat "$r" 2>/dev/null)" = 1 ] && return 0
+    done
+    return 1
 }
 
 # 一键初始化：跑除 6(AdGuard)/9(wireguard)/14(overlay→见两阶段)/15(更新本脚本) 外的全部，交互项用默认值。
 # MT-3000 两阶段：阶段1 先扩容 overlay 到 U 盘并重启；重启后再点一次进阶段2 装其余（先扩容腾空间再装）。
-# ⚠️ 未验证：overlay 是否在 MT-3000 固件真正生效尚未实测；若与 BE 同为 GL SDK4(preinit 写死 systemrw)则不生效。
+# ✅ 已实测(MT-3000, GL 固件 OpenWrt 21.02 base)：overlay extroot 真生效——重启后 df /overlay 显示
+#    /dev/sda1(U 盘) 挂为 /overlay 且 root overlayfs upperdir 指向之，与 BE 系列(preinit 写死 systemrw)不同。
 #    用 /etc/.glinet_init_overlay_tried 标记：阶段1 重启后即便扩容没生效，也不会反复抹 U 盘，直接进阶段2。
 do_init_all() {
     # —— 阶段1：仅 MT-3000、未扩容、未尝试过 → 先扩容 overlay 并自动重启 ——
