@@ -961,6 +961,33 @@ overlay_menu() {
     done
 }
 
+# 一键 iStoreOS 风格化（按 profile 编排，复刻各设备现有顺序）
+do_one_key_setup() {
+    case "$PROFILE" in
+        be3600)
+            install_istore_os_style   # 内部 do_istore_wget 已含 arch_conf_apply
+            setup_base_init
+            do_istore
+            do_quickstart             # full
+            ;;
+        be6500)
+            install_istore_os_style
+            setup_base_init
+            do_istore
+            # 不跑 quickstart（mdadm 不兼容，复刻 B65 注释掉的行为）
+            ;;
+        mt3000)
+            arch_conf_apply
+            [ "$HAS_FAN_AUTOSET" = 1 ] && setup_cpu_fans
+            recovery_opkg_settings
+            do_istore                 # isopkg
+            install_istore_os_style
+            do_quickstart             # isopkg -> update_luci_app_quickstart
+            setup_base_init
+            ;;
+    esac
+}
+
 main() {
     :  # 占位，Task 8 实现
 }
