@@ -108,7 +108,8 @@ remove_check_signature_option() {
 ## 添加opkg签名
 add_check_signature_option() {
 	local opkg_conf="/etc/opkg.conf"
-	echo "option check_signature 1" >>"$opkg_conf"
+	# 幂等：已存在则不重复追加
+	grep -q "option check_signature 1" "$opkg_conf" || echo "option check_signature 1" >>"$opkg_conf"
 }
 
 #设置第三方软件源
@@ -777,6 +778,13 @@ create_and_format_partitions() {
 
 # 换区到U盘
 change_overlay_usb() {
+    # 防护：已扩容过则确认（避免误操作重新抹盘）；一键初始化阶段1 此时未扩容，不会触发
+    if overlay_is_expanded; then
+        yellow "⚠️ 检测到 /overlay 已扩容到 U 盘（>1GB）。再次执行会重新抹盘并丢失 U 盘数据。"
+        red "确定要重新扩容吗？(y/N)"
+        read -r reconfirm
+        [ "$reconfirm" = y ] || { yellow "已取消。"; return 1; }
+    fi
     install_depends_apps
     blueinfo "现在开始查找USB设备分区 请稍后......"
     local USB_PARTITION=$(lsblk -dn -o NAME,RM,TYPE | awk '$2=="1" && $3=="disk" {print "/dev/"$1; exit}')
