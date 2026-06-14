@@ -988,8 +988,87 @@ do_one_key_setup() {
     esac
 }
 
+# 渲染主菜单（按 profile 动态显示条件项）
+render_menu() {
+    echo "***********************************************************************"
+    echo "*      GL-iNet 一键工具箱  by @wukongdaily"
+    echo "*      当前机型: $PROFILE_NAME"
+    echo "*      支持: BE3600 / BE6500 / MT-3000   快捷键: g"
+    echo "***********************************************************************"
+    green "请确保固件版本在 $FIRMWARE_MIN_VERSION 以上"
+    echo
+    light_magenta " 1. 一键 iStoreOS 风格化"
+    echo " 2. 安装 Argon 紫色主题"
+    echo " 3. 单独安装 iStore 商店"
+    echo " 4. 隐藏首页非必要 UI 元素"
+    echo " 5. 设置风扇工作温度（交互式）"
+    echo " 6. 启用/关闭 AdGuardHome"
+    echo " 7. 安装个性化 UI 辅助插件"
+    echo " 8. 安装高级卸载插件"
+    echo " 9. 安装 luci-app-wireguard"
+    echo "10. 安装文件管理器"
+    light_magenta "11. 安装 Docker（dockerman + compose）"
+    echo "12. 设置/删除自定义软件源"
+    echo "13. 手动安装/更新 quickstart 首页"
+    cyan "14. Overlay 换分区助手"
+    echo "15. 更新本脚本"
+    if [ "$HAS_DISTFEEDS" = 1 ]; then
+        echo "16. 恢复原厂 OPKG 配置 (distfeeds)"
+    fi
+    echo
+    echo " R. 恢复出厂设置/重置路由器"
+    echo " Q. 退出本程序"
+    echo
+}
+
+# 自定义软件源子选择（12）
+custom_feed_menu() {
+    echo " a. 添加自定义软件源"
+    echo " d. 删除自定义软件源"
+    read -p "请选择 (a/d): " fc
+    case "$fc" in
+        a|A) add_custom_feed ;;
+        d|D) remove_custom_feed ;;
+        *) echo "无效选择" ;;
+    esac
+}
+
+dispatch() {
+    case "$1" in
+        1)  do_one_key_setup ;;
+        2)  do_install_argon_skin ;;
+        3)  do_istore ;;
+        4)  hide_ui_elements ;;
+        5)  set_glfan_temp ;;
+        6)  toggle_adguardhome ;;
+        7)  do_install_ui_helper ;;
+        8)  advanced_uninstall ;;
+        9)  do_luci_app_wireguard ;;
+        10) do_install_filemanager ;;
+        11) do_install_docker ;;
+        12) custom_feed_menu ;;
+        13) do_install_new_quickstart ;;
+        14) overlay_menu ;;
+        15) update_myself ;;
+        16) if [ "$HAS_DISTFEEDS" = 1 ]; then recovery_opkg_settings; else echo "无效选项，请重新选择。"; fi ;;
+        r|R) recovery ;;
+        q|Q) echo "退出"; exit 0 ;;
+        *)  echo "无效选项，请重新选择。" ;;
+    esac
+}
+
 main() {
-    :  # 占位，Task 8 实现
+    parse_args "$@"
+    # 设置全局快捷命令 g
+    cp -f "$0" /usr/bin/g 2>/dev/null && chmod +x /usr/bin/g 2>/dev/null
+    detect_profile
+    while true; do
+        clear
+        render_menu
+        read -p "请选择一个选项: " choice
+        dispatch "$choice"
+        read -p "按 Enter 键继续..."
+    done
 }
 
 # 可测性守卫：GLINET_LIB=1 source 时仅加载函数，不进菜单
