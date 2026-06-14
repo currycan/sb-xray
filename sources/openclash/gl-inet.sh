@@ -397,6 +397,165 @@ do_install_ui_helper() {
     opkg install "$ipk_file"
 }
 
+# 应用 arch.conf（按 profile 选源）
+arch_conf_apply() {
+    if ! wget -O /etc/opkg/arch.conf "$HTTP_HOST/$ARCH_CONF"; then
+        red "下载 arch.conf 失败，脚本终止。"
+        exit 1
+    fi
+}
+
+# iStore 安装（按 profile 分支）
+do_istore() {
+    if [ "$ISTORE_METHOD" = isopkg ]; then
+        do_istore_isopkg
+    else
+        do_istore_wget
+    fi
+}
+
+do_istore_wget() {
+	echo "do_istore 64bit ==================>"
+	opkg update
+	# 定义目标 URL 和本地目录
+	URL="https://repo.istoreos.com/repo/all/store/"
+	DIR="/tmp/ipk_store"
+
+	# 创建目录
+	mkdir -p "$DIR"
+	cd "$DIR" || exit 1
+
+	for ipk in $(wget -qO- "$URL" | grep -oE 'href="[^"]+\.ipk"' | cut -d'"' -f2); do
+		echo "下载 $ipk"
+		wget -q "${URL}${ipk}"
+	done
+
+	# 安装所有下载的 .ipk 包
+	opkg install ./*.ipk
+
+	#调整a53架构优先级
+	arch_conf_apply
+
+}
+
+do_istore_isopkg() {
+	echo "do_istore method==================>"
+	ISTORE_REPO=https://istore.linkease.com/repo/all/store
+	FCURL="curl --fail --show-error"
+
+	curl -V >/dev/null 2>&1 || {
+		echo "prereq: install curl"
+		opkg info curl | grep -Fqm1 curl || opkg update
+		opkg install curl
+	}
+
+	IPK=$($FCURL "$ISTORE_REPO/Packages.gz" | zcat | grep -m1 '^Filename: luci-app-store.*\.ipk$' | sed -n -e 's/^Filename: \(.\+\)$/\1/p')
+
+	[ -n "$IPK" ] || exit 1
+
+	$FCURL "$ISTORE_REPO/$IPK" | tar -xzO ./data.tar.gz | tar -xzO ./bin/is-opkg >/tmp/is-opkg
+
+	[ -s "/tmp/is-opkg" ] || exit 1
+
+	chmod 755 /tmp/is-opkg
+	/tmp/is-opkg update
+	# /tmp/is-opkg install taskd
+	/tmp/is-opkg opkg install --force-reinstall luci-lib-taskd luci-lib-xterm
+	/tmp/is-opkg opkg install --force-reinstall luci-app-store || exit $?
+	[ -s "/etc/init.d/tasks" ] || /tmp/is-opkg opkg install --force-reinstall taskd
+	[ -s "/usr/lib/lua/luci/cbi.lua" ] || /tmp/is-opkg opkg install luci-compat >/dev/null 2>&1
+
+}
+
+# iStore 风格化（按 profile 分支）
+install_istore_os_style() {
+    if [ "$ISTORE_METHOD" = isopkg ]; then
+        install_istore_os_style_mt
+    else
+        install_istore_os_style_be
+    fi
+}
+
+install_istore_os_style_be() {
+	##设置Argon 紫色主题
+	do_install_argon_skin
+	#增加终端
+	opkg install luci-i18n-ttyd-zh-cn
+	#默认安装必备工具SFTP 方便下载文件 比如finalshell等工具可以直接浏览路由器文件
+	opkg install openssh-sftp-server
+	#默认使用体积很小的文件传输：系统——文件传输
+	do_install_filetransfer
+	FILE_PATH="/etc/openwrt_release"
+	NEW_DESCRIPTION="Openwrt like iStoreOS Style by wukongdaily"
+	CONTENT=$(cat $FILE_PATH)
+	UPDATED_CONTENT=$(echo "$CONTENT" | sed "s/DISTRIB_DESCRIPTION='[^']*'/DISTRIB_DESCRIPTION='$NEW_DESCRIPTION'/")
+	echo "$UPDATED_CONTENT" >$FILE_PATH
+}
+
+install_istore_os_style_mt() {
+	##设置Argon 紫色主题
+	do_install_argon_skin
+	#增加首页终端图标
+	opkg install ttyd
+	#默认使用体积很小的文件传输：系统——文件传输
+	do_install_filetransfer
+	#默认安装必备工具SFTP 方便下载文件 比如finalshell等工具可以直接浏览路由器文件
+	is-opkg install app-meta-sftp
+	is-opkg install 'app-meta-ddnsto'
+	# 安装磁盘管理
+	is-opkg install 'app-meta-diskman'
+	FILE_PATH="/etc/openwrt_release"
+	NEW_DESCRIPTION="Openwrt like iStoreOS Style by wukongdaily"
+	CONTENT=$(cat $FILE_PATH)
+	UPDATED_CONTENT=$(echo "$CONTENT" | sed "s/DISTRIB_DESCRIPTION='[^']*'/DISTRIB_DESCRIPTION='$NEW_DESCRIPTION'/")
+	echo "$UPDATED_CONTENT" >$FILE_PATH
+
+}
+
+# 基础初始化（WAN 开放仅对 WAN_OPEN=1 的 profile）
+setup_base_init() {
+    add_author_info
+    add_dhcp_domain
+    uci set system.@system[0].zonename='Asia/Shanghai'
+    uci set system.@system[0].timezone='CST-8'
+    uci commit system
+    /etc/init.d/system reload
+    if [ "$WAN_OPEN" = 1 ]; then
+        # 打开防火墙 wan input，方便主路由访问
+        uci set firewall.@zone[1].input='ACCEPT'
+        uci commit firewall
+    fi
+    green "安装完毕！请使用8080端口访问luci界面：http://192.168.8.1:8080"
+    green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
+}
+
+#设置风扇工作温度
+setup_cpu_fans() {
+	#设定温度阀值,cpu高于48度,则风扇开始工作
+	uci set glfan.@globals[0].temperature=50
+	uci set glfan.@globals[0].warn_temperature=50
+	uci set glfan.@globals[0].integration=4
+	uci set glfan.@globals[0].differential=20
+	uci commit glfan
+	/etc/init.d/gl_fan restart
+}
+
+# 恢复原厂 OPKG 配置（仅 MT-3000）
+recovery_opkg_settings() {
+    echo "# add your custom package feeds here" >/etc/opkg/customfeeds.conf
+    local router_name
+    router_name=$(get_router_name)
+    case "$router_name" in
+    *3000*)
+        echo "Router name contains '3000'."
+        wget -O /etc/opkg/distfeeds.conf "$HTTP_HOST/mt-3000/distfeeds.conf"
+        ;;
+    *)
+        echo "当前机型无需恢复 distfeeds。"
+        ;;
+    esac
+}
+
 main() {
     :  # 占位，Task 8 实现
 }
