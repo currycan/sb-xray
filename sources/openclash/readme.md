@@ -1,5 +1,23 @@
 # 说明
 
+## gl-inet.sh —— 统一一键工具箱（BE3600 / BE6500 / MT-3000）
+
+`gl-inet.sh` 合并自 `be3600.sh` / `be6500.sh` / `mt3000.sh` / `mt3000-overlay.sh`，单文件适配三款 GL.iNet 设备。启动时读 `/tmp/sysinfo/model` 自动识别机型；识别失败可用 `gl-inet.sh --device be3600|be6500|mt3000` 手动指定，或在菜单提示时手选。
+
+- **机型差异**：arch.conf 源、iStore 安装法、一键流程 quickstart 走法、WAN 防火墙、distfeeds 恢复、自动风扇——均按机型自动切换；BE6500 一键流程沿用其 mdadm 跳过保护。
+- **三款通用能力**：argon 主题、iStore、AdGuardHome、wireguard、文件管理器、Docker（dockerman + compose 单一入口）、自定义软件源、quickstart、overlay 换分区（U 盘扩容）、高级卸载、`g` 快捷命令、脚本自更新。
+- **取代**：旧四脚本暂时保留，待 gl-inet.sh 在三款设备上稳定后移除。
+
+### 真机验证 checklist（每款设备）
+
+部署后在对应设备上至少验证：
+
+1. 启动后菜单顶部「当前机型」识别正确（错误则用 `--device` 复核子串匹配）。
+2. 菜单项 1「一键 iStoreOS 风格化」跑通，8080 端口 luci 生效。
+3. 抽测：argon 主题（2）、iStore（3）、quickstart（13）、Docker（11）。
+4. MT-3000 额外验证：第 16 项 distfeeds 恢复、overlay 换分区（14，需插 U 盘）。
+5. BE6500 确认一键流程未触发 quickstart（mdadm 保护）。
+
 ## op-amd / op-arm —— OpenClash 配置模板（由 openwrt-init.sh 渲染应用）
 
 `op-amd`（x86_64）/ `op-arm`（aarch64）是路由器 `/etc/config/openclash` 的完整模板，由 [`../openwrt/openwrt-init.sh`](../openwrt/openwrt-init.sh) 按架构自动选择、注入私有值后幂等应用到路由器，无需手动拷贝。
