@@ -18,6 +18,9 @@ cyan() { echo -e "\033[38;2;0;255;255m$1\033[0m"; }
 third_party_source="https://istore.linkease.com/repo/all/nas_luci"
 HTTP_HOST="https://cafe.cpolar.cn/wkdaily/gl/raw/branch/main"
 FIRMWARE_MIN_VERSION="4.7.2"
+# 本脚本自更新源：指向 sb-xray 仓库（与 openwrt-init.sh / vps 脚本同一 raw 约定），
+# 不用 HTTP_HOST（那是上游 ipk/主题素材源，仍需保留）。
+SELF_UPDATE_URL="https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openclash/gl-inet.sh"
 
 # ====================================================================
 # 函数定义区（后续 Task 往此处追加）
@@ -611,8 +614,8 @@ do_install_filemanager() {
 }
 #更新脚本
 update_myself() {
-	wget -O gl-inet.sh "$HTTP_HOST/gl-inet.sh" && chmod +x gl-inet.sh
-	echo "脚本已更新并保存在当前目录 gl-inet.sh,现在将执行新脚本。"
+	wget -O gl-inet.sh "$SELF_UPDATE_URL" && chmod +x gl-inet.sh
+	echo "脚本已从 sb-xray 仓库更新并保存在当前目录 gl-inet.sh,现在将执行新脚本。"
 	./gl-inet.sh
 	exit 0
 }
