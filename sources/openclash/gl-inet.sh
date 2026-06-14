@@ -70,9 +70,9 @@ detect_profile() {
     esac
     PROFILE="$dev"
     case "$PROFILE" in
-        be3600) ARCH_CONF="64bit/arch.conf"; ISTORE_METHOD=wget;   QUICKSTART=full;   HAS_FAN_AUTOSET=0; HAS_DISTFEEDS=0; WAN_OPEN=0; PROFILE_NAME="GL-iNet BE3600" ;;
-        be6500) ARCH_CONF="64bit/arch.conf"; ISTORE_METHOD=wget;   QUICKSTART=none;   HAS_FAN_AUTOSET=0; HAS_DISTFEEDS=0; WAN_OPEN=0; PROFILE_NAME="GL-iNet BE6500" ;;
-        mt3000) ARCH_CONF="mtarch/arch.conf"; ISTORE_METHOD=isopkg; QUICKSTART=isopkg; HAS_FAN_AUTOSET=1; HAS_DISTFEEDS=1; WAN_OPEN=1; PROFILE_NAME="GL-iNet MT-3000" ;;
+        be3600) ARCH_CONF="64bit/arch.conf"; ISTORE_METHOD=wget;   QUICKSTART=full;   HAS_FAN_AUTOSET=0; HAS_DISTFEEDS=0; WAN_OPEN=0; HAS_OVERLAY=0; PROFILE_NAME="GL-iNet BE3600" ;;
+        be6500) ARCH_CONF="64bit/arch.conf"; ISTORE_METHOD=wget;   QUICKSTART=none;   HAS_FAN_AUTOSET=0; HAS_DISTFEEDS=0; WAN_OPEN=0; HAS_OVERLAY=0; PROFILE_NAME="GL-iNet BE6500" ;;
+        mt3000) ARCH_CONF="mtarch/arch.conf"; ISTORE_METHOD=isopkg; QUICKSTART=isopkg; HAS_FAN_AUTOSET=1; HAS_DISTFEEDS=1; WAN_OPEN=1; HAS_OVERLAY=1; PROFILE_NAME="GL-iNet MT-3000" ;;
         unknown) prompt_device_select ;;
     esac
 }
@@ -927,7 +927,9 @@ custom_package_size() {
     done
 }
 
-# Overlay 换分区助手子菜单
+# Overlay 换分区助手子菜单（仅 MT-3000）
+# 注：BE 系列 GL SDK4 固件的 preinit(80_mount_root) 写死 mount_ext4 "systemrw" /overlay、
+# 不读 fstab 的 config mount 'overlay'，故 U 盘 extroot 扩容在 BE 上无效；菜单按 HAS_OVERLAY 门控。
 overlay_menu() {
     while true; do
         clear
@@ -1004,7 +1006,9 @@ render_menu() {
     light_magenta "11. 安装 Docker（dockerman + compose）"
     echo "12. 设置/删除自定义软件源"
     echo "13. 手动安装/更新 quickstart 首页"
-    cyan "14. Overlay 换分区助手"
+    if [ "$HAS_OVERLAY" = 1 ]; then
+        cyan "14. Overlay 换分区助手（U 盘扩容，仅 MT-3000）"
+    fi
     echo "15. 更新本脚本"
     if [ "$HAS_DISTFEEDS" = 1 ]; then
         echo "16. 恢复原厂 OPKG 配置 (distfeeds)"
@@ -1042,7 +1046,7 @@ dispatch() {
         11) do_install_docker ;;
         12) custom_feed_menu ;;
         13) do_install_new_quickstart ;;
-        14) overlay_menu ;;
+        14) if [ "$HAS_OVERLAY" = 1 ]; then overlay_menu; else echo "无效选项，请重新选择。"; fi ;;
         15) update_myself ;;
         16) if [ "$HAS_DISTFEEDS" = 1 ]; then recovery_opkg_settings; else echo "无效选项，请重新选择。"; fi ;;
         r|R) recovery ;;
