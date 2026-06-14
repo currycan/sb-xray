@@ -83,6 +83,11 @@ detect_profile() {
     esac
 }
 
+# 取当前设备 LAN IP（动态，取不到回退 192.168.8.1）
+lan_ip() {
+    uci get network.lan.ipaddr 2>/dev/null || echo "192.168.8.1"
+}
+
 # 判断系统是否为iStoreOS
 is_iStoreOS() {
 	DISTRIB_ID=$(cat /etc/openwrt_release | grep "DISTRIB_ID" | cut -d "'" -f 2)
@@ -276,7 +281,7 @@ toggle_adguardhome() {
 		uci commit adguardhome >/dev/null 2>&1
 		/etc/init.d/adguardhome enable >/dev/null 2>&1
 		/etc/init.d/adguardhome start >/dev/null 2>&1
-		green "AdGuardHome 已开启 访问 http://192.168.8.1:3000"
+		green "AdGuardHome 已开启 访问 http://$(lan_ip):3000"
 	fi
 }
 
@@ -541,7 +546,7 @@ setup_base_init() {
         uci set firewall.@zone[1].input='ACCEPT'
         uci commit firewall
     fi
-    green "安装完毕！请使用8080端口访问luci界面：http://192.168.8.1:8080"
+    green "安装完毕！请使用8080端口访问luci界面：http://$(lan_ip):8080"
     green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
 }
 
@@ -601,9 +606,7 @@ update_luci_app_quickstart() {
 		rm -rf ${TMPATH}
 		hide_ui_elements
 		yellow "恭喜您!现在你的路由器已经变成iStoreOS风格啦!"
-		green "现在您可以访问8080端口 查看是否生效 http://192.168.8.1:8080"
-		green "更多up主项目和动态 请务必收藏我的导航站 https://tvhelper.cpolar.cn "
-		green "赞助本项目作者 https://wkdaily.cpolar.cn/01 "
+		green "现在您可以访问8080端口 查看是否生效 http://$(lan_ip):8080"
 		addr_hostname=$(uci get system.@system[0].hostname)
 	else
 		red "请先执行第一项 一键iStoreOS风格化"
@@ -616,7 +619,7 @@ do_install_filemanager() {
 	do_istore
 	echo "接下来 尝试安装文件管理器......."
 	is-opkg install 'app-meta-linkease'
-	echo "重新登录web页面,然后您可以访问:  http://192.168.8.1/cgi-bin/luci/admin/services/linkease/file/?path=/root"
+	echo "重新登录web页面,然后您可以访问:  http://$(lan_ip)/cgi-bin/luci/admin/services/linkease/file/?path=/root"
 }
 #更新脚本
 update_myself() {
@@ -679,7 +682,7 @@ do_quickstart_be() {
 	opkg install ${TMPATH}/*.ipk
 	rm -rf ${TMPATH}
 	hide_ui_elements
-	green "首页风格安装完毕！请使用8080端口访问luci界面：http://192.168.8.1:8080"
+	green "首页风格安装完毕！请使用8080端口访问luci界面：http://$(lan_ip):8080"
 	green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
 }
 
@@ -697,7 +700,7 @@ do_install_new_quickstart(){
 	opkg install ${TMPATH}/*.ipk
 	rm -rf ${TMPATH}
 	hide_ui_elements
-	green "首页风格安装完毕！请使用8080端口访问luci界面：http://192.168.8.1:8080"
+	green "首页风格安装完毕！请使用8080端口访问luci界面：http://$(lan_ip):8080"
 	green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
 }
 
