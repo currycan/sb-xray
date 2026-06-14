@@ -874,20 +874,6 @@ change_overlay_usb() {
     fi
 }
 
-check_overlay_size() {
-    # 使用df命令获取/overlay分区的总大小（以1K块为单位）
-    OVERLAY_SIZE=$(df /overlay | awk '/\/overlay/{print $2}')
-    # 将1GB转换为1K块单位，即1GB = 1*1024*1024 1K块
-    ONE_GB_IN_1K_BLOCKS=$((1024 * 1024))
-    # 比较/overlay分区的大小是否大于1GB
-    if [ "$OVERLAY_SIZE" -gt "$ONE_GB_IN_1K_BLOCKS" ]; then
-        yellow "检测到您已经换区到U盘啦,可以继续"
-    else
-        echo "您还没有换区到U盘,请先执行选项1."
-        exit 1
-    fi
-}
-
 # 重新绑定
 rebind_usb_overlay() {
     cyan "正在重新绑定U盘设备...."
@@ -965,7 +951,8 @@ overlay_menu() {
 do_one_key_setup() {
     case "$PROFILE" in
         be3600)
-            install_istore_os_style   # 内部 do_istore_wget 已含 arch_conf_apply
+            install_istore_os_style
+            # 注：arch.conf 由下面 do_istore -> do_istore_wget 末尾的 arch_conf_apply 应用
             setup_base_init
             do_istore
             do_quickstart             # full
