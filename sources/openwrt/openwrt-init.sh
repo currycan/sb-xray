@@ -27,7 +27,7 @@ die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-用法: sh openwrt-init.sh [cdn [run|status|clean]] [-h|--help]
+用法: sh openwrt-init.sh [cdn [run|status|clean] | openclash | passwall2] [-h|--help]
 
 sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenClash 配置纳管 + CDN 优选。
 
@@ -52,6 +52,11 @@ sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenCla
 CDN 子命令:
   sh openwrt-init.sh cdn              安装 cdn-speedtest + 同步首跑 + CDN 自检
   sh openwrt-init.sh cdn run|status|clean  透传内嵌 cdn-speedtest 工具
+
+插件安装子命令（独立入口，不进默认全装；幂等，只重启目标插件自身）:
+  sh openwrt-init.sh openclash       装/更新 OpenClash（CloudRunFilesBuilder .run）
+  sh openwrt-init.sh passwall2       装/更新 PassWall2（同上）
+  相关变量: CRFB_TAG(空=latest API) CRFB_FALLBACK_TAG GH_PROXY(镜像前缀,空=直连) CRFB_RESTART(默认1)
 
 前置: fw4/nftables 的 OpenWrt；socks5/balance 模式需已装 OpenClash（本脚本不装本体）。
 完成后自动自检（verify）：硬失败非 0 退出，时序软项只 warn 可稍后重跑复查。
@@ -147,6 +152,13 @@ load_config() {
     # TS_ADVERTISE_ROUTES 无默认值：lan 网段因部署而异，必须显式提供（validate_config 校验）
     RELOAD_OPENCLASH="${RELOAD_OPENCLASH:-0}"
     DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
+    # CloudRunFilesBuilder（仅 openclash/passwall2 子命令用；不进默认全装流程）
+    # 全部带默认兜底，watchtower/旧 env 集重建不受影响。
+    CRFB_REPO="${CRFB_REPO:-wkccd/CloudRunFilesBuilder}"   # 上游每日构建仓库（可换 fork）
+    CRFB_TAG="${CRFB_TAG:-}"                               # 空=查 latest API；填日期 tag 则 pin 该版本
+    CRFB_FALLBACK_TAG="${CRFB_FALLBACK_TAG:-2026-06-14}"   # API 全不可达时的硬兜底 tag
+    GH_PROXY="${GH_PROXY:-https://ghfast.top/}"            # GitHub 镜像前缀（含末尾/）；空=纯直连
+    CRFB_RESTART="${CRFB_RESTART:-1}"                      # 装/更新后是否只重启目标插件自身服务
     # OpenClash 配置纳管默认开（检测到 OpenClash 才实际执行）；CDN 优选默认关（CDN_DOMAIN 非空启用）
     OPENCLASH_MANAGE="${OPENCLASH_MANAGE:-1}"
     # Tailscale 身份自恢复（OAuth admin API）：全部可选，不设维持交互式登录与后台手动操作
@@ -1756,6 +1768,157 @@ verify() {
     log "全部通过 ✅"
 }
 
+# ── passwall2 / openclash 安装（CloudRunFilesBuilder .run 包）────────
+# 两个独立子命令，不进默认 main() 全装流程。幂等：已装且为最新则跳过，否则
+# 下载 .run（makeself 自解压，内含 opkg install）安装/更新。下载先走 GH_PROXY
+# 镜像、失败回退直连；版本发现走 GitHub latest API、不可达回退 pinned tag。
+# 只重启目标插件自身服务，绝不触碰其它已运行插件。
+
+gh_download() {
+    # gh_download <url> <dest> <kind: json|raw>；镜像优先 + 直连兜底，非致命，失败返回 1
+    _gd_url=$1; _gd_dest=$2; _gd_kind=$3
+    _gd_bases="$_gd_url"
+    [ -n "$GH_PROXY" ] && _gd_bases="${GH_PROXY}${_gd_url} $_gd_url"
+    for _gd_b in $_gd_bases; do
+        log "下载尝试: $_gd_b"
+        if wget -q -O "$_gd_dest" "$_gd_b"; then
+            [ -s "$_gd_dest" ] || { warn "下载为空"; continue; }
+            case "$_gd_kind" in
+                json) grep -q '"tag_name"' "$_gd_dest" 2>/dev/null && return 0 ;;
+                *)    return 0 ;;
+            esac
+            warn "内容校验失败"
+        else
+            warn "wget 失败"
+        fi
+    done
+    return 1
+}
+
+crfb_arch_tokens() {
+    # 设备支持的 opkg 架构令牌（精确，剔除 all/noarch）+ TS_ARCH 粗粒度关键字兜底
+    opkg print-architecture 2>/dev/null | awk '$1=="arch"{print $2}' | grep -vE '^(all|noarch)$'
+    case "$TS_ARCH" in
+        arm64) echo aarch64 ;;
+        amd64) echo x86 ;;
+    esac
+}
+
+crfb_assets_from_tag() {
+    # crfb_assets_from_tag <tag> <out>：从 release 页 expanded_assets 提取 .run 下载 URL（每行一条）
+    _ca_tag=$1; _ca_out=$2; _ca_html=/tmp/crfb-assets.html
+    if gh_download "https://github.com/${CRFB_REPO}/releases/expanded_assets/${_ca_tag}" "$_ca_html" raw; then
+        grep -oE 'href="[^"]*/releases/download/[^"]+"' "$_ca_html" 2>/dev/null \
+            | sed -e 's/^href="//' -e 's/"$//' -e 's#^/#https://github.com/#' \
+            | sort -u > "$_ca_out"
+    fi
+    [ -s "$_ca_out" ]
+}
+
+crfb_resolve_latest() {
+    # crfb_resolve_latest <out>：查 latest API，设全局 _crfb_tag 并写资产 URL 到 <out>
+    _rl_out=$1; _rl_json=/tmp/crfb-latest.json
+    if gh_download "https://api.github.com/repos/${CRFB_REPO}/releases/latest" "$_rl_json" json; then
+        _crfb_tag=$(grep -o '"tag_name"[ ]*:[ ]*"[^"]*"' "$_rl_json" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+        grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*"' "$_rl_json" \
+            | sed 's/.*"\(https[^"]*\)"$/\1/' | sort -u > "$_rl_out"
+        [ -n "$_crfb_tag" ] && [ -s "$_rl_out" ] && return 0
+    fi
+    return 1
+}
+
+crfb_pick_url() {
+    # crfb_pick_url <前缀> <资产清单文件>：按前缀 + 架构挑最匹配的 .run，echo 其 URL
+    _pk_prefix=$1; _pk_file=$2
+    # 候选：URL 末段（basename）以前缀开头、以 .run 结尾
+    _pk_cands=$(grep -E "/${_pk_prefix}[^/]*\.run$" "$_pk_file")
+    [ -n "$_pk_cands" ] || return 1
+    # 精确 opkg 令牌优先，命中即返回；否则退化到粗粒度关键字（如 x86 同时覆盖 x86_64/x86-64）
+    for _pk_tok in $(crfb_arch_tokens); do
+        for _u in $_pk_cands; do
+            case "${_u##*/}" in
+                *"$_pk_tok"*) echo "$_u"; return 0 ;;
+            esac
+        done
+    done
+    return 1
+}
+
+install_crfb_pkg() {
+    # install_crfb_pkg <openclash|passwall2>
+    _pkg=$1
+    case "$_pkg" in
+        openclash) _luci=luci-app-openclash; _prefix=openclash;  _svc=openclash ;;
+        passwall2) _luci=luci-app-passwall2; _prefix=passwall2_; _svc=passwall2 ;;
+        *) die "未知包: $_pkg（支持 openclash|passwall2）" ;;
+    esac
+    command -v opkg >/dev/null 2>&1 || die "未找到 opkg，这不是 OpenWrt？"
+
+    _assets=/tmp/crfb-$_pkg-assets.txt
+    : > "$_assets"
+    if [ -n "$CRFB_TAG" ]; then
+        _crfb_tag=$CRFB_TAG
+        log "使用 pin 的 tag: $_crfb_tag"
+        crfb_assets_from_tag "$_crfb_tag" "$_assets" \
+            || die "无法获取 tag $_crfb_tag 的资产清单（检查网络/GH_PROXY/CRFB_TAG）"
+    elif crfb_resolve_latest "$_assets"; then
+        log "latest release tag: $_crfb_tag"
+    else
+        _crfb_tag=$CRFB_FALLBACK_TAG
+        warn "GitHub API 不可达，回退 pinned tag: $_crfb_tag"
+        crfb_assets_from_tag "$_crfb_tag" "$_assets" \
+            || die "回退 tag $_crfb_tag 资产清单也获取失败（检查网络/GH_PROXY）"
+    fi
+
+    _url=$(crfb_pick_url "$_prefix" "$_assets") \
+        || die "未在 $_crfb_tag 找到匹配本机架构的 $_pkg 资产（arch: $(crfb_arch_tokens | tr '\n' ' ')）"
+    _base=${_url##*/}
+    _ver=$(printf '%s' "$_base" | sed 's/\.run$//' | grep -oE '[0-9]+\.[0-9]+[0-9A-Za-z._-]*' | head -1)
+    log "$_pkg 最新资产: $_base（版本 ${_ver:-未知}）"
+
+    # 双锚点幂等：marker 命中，或 opkg 已装版本串包含最新版本 → 跳过（不下载/不重装/不重启）
+    _marker="/etc/sb-xray/crfb-${_pkg}.ver"
+    if [ -f "$_marker" ] && [ "$(cat "$_marker" 2>/dev/null)" = "$_base" ]; then
+        log "$_pkg 已是最新（marker $_base），跳过"
+        return 0
+    fi
+    _inst=$(opkg list-installed "$_luci" 2>/dev/null)
+    if [ -n "$_inst" ] && [ -n "$_ver" ] && printf '%s' "$_inst" | grep -q "$_ver"; then
+        log "$_pkg 已是最新（opkg: $_inst），记录 marker 后跳过"
+        mkdir -p /etc/sb-xray && printf '%s\n' "$_base" > "$_marker"
+        return 0
+    fi
+    if [ -n "$_inst" ]; then log "检测到旧版本，准备更新: $_inst"; else log "未安装 $_pkg，准备安装"; fi
+
+    _run="/tmp/$_base"
+    gh_download "$_url" "$_run" raw || die "$_pkg 下载失败: $_url（检查网络/GH_PROXY）"
+    opkg update >/dev/null 2>&1 || true   # makeself 包自带依赖 ipk；opkg update best-effort 不阻断
+    log "执行安装: sh $_run"
+    sh "$_run" || die "$_pkg 安装失败（$_base）"
+    rm -f "$_run"
+
+    mkdir -p /etc/sb-xray && printf '%s\n' "$_base" > "$_marker"
+    log "$_pkg 安装/更新完成: $_base"
+    _now=$(opkg list-installed "$_luci" 2>/dev/null)
+    [ -n "$_now" ] && log "当前已装: $_now"
+
+    # 只重启目标插件自身服务；绝不触碰其它已运行插件
+    if [ "$CRFB_RESTART" = "1" ] && [ -x "/etc/init.d/$_svc" ]; then
+        /etc/init.d/"$_svc" enabled 2>/dev/null || /etc/init.d/"$_svc" enable >/dev/null 2>&1
+        log "重启 $_svc 使其生效"
+        /etc/init.d/"$_svc" restart >/dev/null 2>&1 || warn "$_svc restart 返回非 0，请手动检查"
+    else
+        warn "未自动重启 $_svc（CRFB_RESTART=$CRFB_RESTART 或无 init 脚本），如需生效请手动启用/重启"
+    fi
+}
+
+main_crfb() {
+    # openclash/passwall2 子命令入口：只需 load_config + detect_arch，不跑全装校验
+    load_config
+    detect_arch
+    install_crfb_pkg "$1"
+}
+
 # ── 主流程 ────────────────────────────────────────────────────────
 
 main_cdn() {
@@ -1819,6 +1982,8 @@ main() {
 case "${1:-}" in
     -h|--help) usage; exit 0 ;;
     cdn) shift; main_cdn "$@" ;;
+    openclash) main_crfb openclash ;;
+    passwall2) main_crfb passwall2 ;;
     '') main ;;
     *) die "未知参数: $1（-h|--help 查看用法）" ;;
 esac

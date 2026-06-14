@@ -462,6 +462,23 @@ sh openwrt-init.sh
 
 **范围边界**（重置后仍需手动、不属本脚本管辖）：OpenWrt 基础系统配置（LAN 网段、wifi、DHCP——建议平时 `sysupgrade -b` 留备份）、OpenClash 本体安装（ipk + smart 内核）。未配 OAuth 时退化为旧流程：登录 URL 手动授权 + 后台手动改 IP / 批准 routes（脚本会打印精确的后台操作路径）。
 
+### 5.7 装/更新 OpenClash / PassWall2（独立子命令，幂等）
+
+两个独立子命令，从上游每日构建 [CloudRunFilesBuilder](https://github.com/wkccd/CloudRunFilesBuilder) 拉对应架构的 `.run`（makeself 自解压，内含 `opkg install` 及依赖）安装/更新。**不进默认全装流程**（裸跑 `sh openwrt-init.sh` 不会碰这两个插件），按需单独执行：
+
+```sh
+sh openwrt-init.sh openclash    # 装/更新 OpenClash
+sh openwrt-init.sh passwall2    # 装/更新 PassWall2
+```
+
+- **版本发现**：默认查 GitHub `releases/latest` API 取最新每日构建；`CRFB_TAG=<日期>` 可 pin 到指定版本。API 全不可达（国内常见）时回退 `CRFB_FALLBACK_TAG`（默认兜底一个确定 tag），弱网下仍能装到确定版本。
+- **架构匹配**：按 `opkg print-architecture` 的精确子目标令牌（如 `aarch64_cortex-a53`）优先匹配资产，退化到粗粒度关键字（`aarch64` / `x86`，兼容 `x86_64`/`x86-64` 命名差异）。
+- **幂等（双锚点）**：marker 文件 `/etc/sb-xray/crfb-<pkg>.ver` 记录已装资产名；marker 命中、或 `opkg list-installed` 的版本串已含最新版本，即判为最新——**不下载、不重装、不重启**，直接跳过。重复执行安全。
+- **不影响已运行插件**：跳过分支永不重启；仅在确有安装/升级时**只**重启目标插件自身服务（`/etc/init.d/<pkg> restart`），绝不触碰其它已运行插件。`CRFB_RESTART=0` 可关闭自动重启（只装不重启）。
+- **下载线路**：API 与 `.run` 下载都先走 `GH_PROXY` 镜像前缀（默认一个 ghproxy 类镜像）、失败回退直连。镜像失效时改 `GH_PROXY` 或置空走纯直连。
+
+相关变量见 `config.env.example`「插件安装」段：`CRFB_REPO` / `CRFB_TAG` / `CRFB_FALLBACK_TAG` / `GH_PROXY` / `CRFB_RESTART`（全部带默认兜底，不填即可用）。
+
 ---
 
 ## 6. 问题处理
