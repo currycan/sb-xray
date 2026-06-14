@@ -52,13 +52,20 @@ prompt_device_select() {
 
 # 识别机型并设定 profile 表
 detect_profile() {
-    local model dev=""
+    local model hostname dev=""
     [ -n "${GLINET_DEVICE:-}" ] && dev="$GLINET_DEVICE"
-    [ -z "$dev" ] && model=$(cat /tmp/sysinfo/model 2>/dev/null)
-    case "${dev:-$model}" in
+    if [ -z "$dev" ]; then
+        # GL.iNet 产品型号体现在 hostname（GL-BE6500 / GL-BE3600 / GL-MT3000）。
+        # /tmp/sysinfo/model 在 MT 系列含型号数字，但 BE 系列是 Qualcomm 板名（IPQ5332…），
+        # 故两者合并匹配：hostname 兜底 BE 系列的识别。
+        model=$(cat /tmp/sysinfo/model 2>/dev/null)
+        hostname=$(uci get system.@system[0].hostname 2>/dev/null)
+        dev="$model $hostname"
+    fi
+    case "$dev" in
         *be3600*|*BE3600*|*3600*) dev=be3600 ;;
         *be6500*|*BE6500*|*6500*) dev=be6500 ;;
-        *3000*)                   dev=mt3000 ;;
+        *mt3000*|*MT3000*|*3000*) dev=mt3000 ;;
         *)                        dev=unknown ;;
     esac
     PROFILE="$dev"
