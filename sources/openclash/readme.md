@@ -19,11 +19,33 @@
 
 > ⚠️ **未验证**：overlay 在 MT-3000 固件上是否真正生效**尚未实测**——本两阶段是按「生效」假设写的。若 MT-3000 与 BE 同为 GL SDK4（preinit 写死 `systemrw`），扩容不生效，阶段 1 重启后 `df /overlay` 仍是内部 flash；此时标记会让第二次跑直接进阶段 2（并提示固件可能不支持），不会反复抹 U 盘。需在 MT-3000 真机确认后去除此 caveat。
 
-### 上传到设备（GL.iNet 固件用 dropbear，无 SFTP）
+### 获取脚本（首次部署）
 
-GL.iNet 固件的 SSH 服务是 **dropbear**，默认**不含 `sftp-server` 子系统**，因此 `scp` / SFTP 客户端直传会失败（TCP 能连上，但 SFTP 子系统协商失败），手动安装：
+**方法 A —— 设备直接从 GitHub 拉取（推荐，设备联网即可，免 PC 中转）**
 
-- **启用 SFTP**：`opkg update && opkg install openssh-sftp-server`，装完 scp/SFTP 恢复可用。
+路由器 SSH 里一行搞定：
+
+```sh
+wget -O gl-inet.sh https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openclash/gl-inet.sh && chmod +x gl-inet.sh && ./gl-inet.sh
+```
+
+中国大陆访问 `raw.githubusercontent.com` 不稳时，换 jsDelivr CDN 镜像（同一文件）：
+
+```sh
+wget -O gl-inet.sh https://cdn.jsdelivr.net/gh/currycan/sb-xray@main/sources/openclash/gl-inet.sh && chmod +x gl-inet.sh && ./gl-inet.sh
+```
+
+装好后下次直接输快捷键 `g` 运行；菜单 14「更新本脚本」从同一 GitHub raw 源自更新（jsDelivr 有 CDN 缓存，要最新版优先用 raw）。
+
+**方法 B —— 从本地电脑上传**
+
+GL.iNet 固件的 SSH 是 **dropbear**，默认**不含 `sftp-server`**，`scp` / SFTP 直传会失败（TCP 能连上但子系统协商失败）。三选一：
+
+- **SSH 管道直传**（免装包，最省事）：`ssh root@<设备IP> 'cat > /root/gl-inet.sh' < gl-inet.sh`
+- **旧版 SCP 协议**：`scp -O gl-inet.sh root@<设备IP>:/root/`
+- **启用 SFTP**：`opkg update && opkg install openssh-sftp-server`，之后 scp / SFTP 恢复可用。
+
+
 
 
 ### 菜单一览
