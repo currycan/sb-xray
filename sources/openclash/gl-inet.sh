@@ -21,6 +21,9 @@ FIRMWARE_MIN_VERSION="4.7.2"
 # 本脚本自更新源：指向 sb-xray 仓库（与 openwrt-init.sh / vps 脚本同一 raw 约定），
 # 不用 HTTP_HOST（那是上游 ipk/主题素材源，仍需保留）。
 SELF_UPDATE_URL="https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openclash/gl-inet.sh"
+# 自定义软件源默认值（菜单12 直接回车时用）：中国大陆可达的清华 TUNA OpenWrt 镜像。
+# 注：标准 OpenWrt 包，userspace 工具配合菜单①的 arch.conf 兼容可装；kmod 与 GL QSDK 内核 ABI 不同，勿装内核模块。
+DEFAULT_CUSTOM_FEED="https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/23.05.5/packages/aarch64_cortex-a53/packages"
 
 # ====================================================================
 # 函数定义区（后续 Task 往此处追加）
@@ -240,8 +243,9 @@ set_glfan_temp() {
 		fi
 	}
 	echo "兼容带风扇机型的GL-iNet路由器"
-	echo "请输入风扇开始工作的温度(建议40-70之间的整数):"
+	echo "请输入风扇开始工作的温度(建议40-70之间的整数,直接回车默认48):"
 	read temp
+	[ -z "$temp" ] && temp=48
 
 	if is_integer "$temp"; then
 		uci set glfan.@globals[0].temperature="$temp"
@@ -287,8 +291,10 @@ add_custom_feed() {
 	# 先清空配置
 	echo "# add your custom package feeds here" >/etc/opkg/customfeeds.conf
 	# Prompt the user to enter the feed URL
-	echo "请输入自定义软件源的地址(通常是https开头 aarch64_cortex-a53 结尾):"
+	echo "请输入自定义软件源的地址(直接回车用默认中国镜像 TUNA):"
+	echo "  默认: $DEFAULT_CUSTOM_FEED"
 	read feed_url
+	[ -z "$feed_url" ] && feed_url="$DEFAULT_CUSTOM_FEED"
 	if [ -n "$feed_url" ]; then
 		echo "src/gz custom_feed $feed_url" >>/etc/opkg/customfeeds.conf
 		opkg update
@@ -916,8 +922,9 @@ rebind_usb_overlay() {
 #默认为U盘容量的10%
 custom_package_size() {
     while :; do
-        echo "请输入想分配的软件包的大小(数字,单位:GB):"
+        echo "请输入想分配的软件包的大小(数字,单位:GB,直接回车默认5):"
         read size
+        [ -z "$size" ] && size=5
         # 检查输入是否为数字
         if [[ $size =~ ^[0-9]+$ ]]; then
             CUSTOM_OPKG_SIZE=$size
