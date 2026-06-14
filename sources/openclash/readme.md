@@ -8,6 +8,16 @@
 - **三款通用能力**：argon 主题、iStore、AdGuardHome、wireguard、文件管理器、Docker（dockerman + compose 单一入口）、自定义软件源、quickstart、overlay 换分区（U 盘扩容）、高级卸载、`g` 快捷命令、脚本自更新。
 - **取代**：旧四脚本暂时保留，待 gl-inet.sh 在三款设备上稳定后移除。
 
+### 上传到设备（GL.iNet 固件用 dropbear，无 SFTP）
+
+GL.iNet 固件的 SSH 服务是 **dropbear**，默认**不含 `sftp-server` 子系统**，因此 `scp` / SFTP 客户端直传会失败（TCP 能连上，但 SFTP 子系统协商失败）。三种处理：
+
+- **SSH 管道直传（推荐，免装包）**：`ssh root@<设备> 'cat > /root/gl-inet.sh' < gl-inet.sh`。
+- **旧版 SCP 协议**：`scp -O gl-inet.sh root@<设备>:/root/`（`-O` 让 scp 走传统 SCP 协议而非 SFTP）。
+- **启用 SFTP**：`opkg update && opkg install openssh-sftp-server`，装完 scp/SFTP 恢复可用。
+
+> 用 `sshpass` 连 dropbear 时建议显式加 `-o PreferredAuthentications=password -o PubkeyAuthentication=no`，否则公钥协商可能干扰密码认证、误报 `Permission denied`。
+
 ### 真机验证 checklist（每款设备）
 
 部署后在对应设备上至少验证：
