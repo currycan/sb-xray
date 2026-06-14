@@ -626,28 +626,6 @@ update_myself() {
 	exit 0
 }
 
-#根据release地址和命名前缀获取apk地址
-get_docker_compose_url() {
-	if [ $# -eq 0 ]; then
-		echo "需要提供GitHub releases页面的URL作为参数。"
-		return 1
-	fi
-	local releases_url=$1
-	# 使用curl获取重定向的URL
-	latest_url=$(curl -Ls -o /dev/null -w "%{url_effective}" "$releases_url")
-	# 使用sed从URL中提取tag值,并保留前导字符'v'
-	tag=$(echo $latest_url | sed 's|.*/v|v|')
-	# 检查是否成功获取到tag
-	if [ -z "$tag" ]; then
-		echo "未找到最新的release tag。"
-		return 1
-	fi
-	# 拼接docker-compose下载链接
-	local repo_path=$(echo "$releases_url" | sed -n 's|https://github.com/\(.*\)/releases/latest|\1|p')
-	docker_compose_download_url="https://github.com/${repo_path}/releases/download/${tag}/docker-compose-linux-aarch64"
-	echo "$docker_compose_download_url"
-}
-
 download_lib_quickstart() {
 	# 目标目录
 	REPO_URL="https://repo.istoreos.com/repo/aarch64_cortex-a53/nas/"
@@ -730,40 +708,6 @@ do_quickstart() {
         isopkg) update_luci_app_quickstart ;;
         none)   yellow "本机型一键流程不含 quickstart（mdadm 不兼容）；如需请用菜单「手动安装/更新 quickstart」。" ;;
     esac
-}
-
-# 统一 Docker 安装入口（dockerman + dockerd + compose 二进制）
-do_install_docker() {
-    # 软性空间预检
-    local overlay_kb
-    overlay_kb=$(df /overlay 2>/dev/null | awk '/\/overlay/{print $2}')
-    if [ -n "$overlay_kb" ] && [ "$overlay_kb" -lt 1048576 ]; then
-        yellow "⚠️ 检测到 /overlay 空间不足 1GB，Docker 可能装不下。"
-        yellow "   建议先用「Overlay 换分区助手」把 overlay 迁到 U 盘再装。"
-        if [ "$INIT_AUTO" = 1 ]; then
-            yellow "（一键初始化模式：空间不足仍继续安装 Docker）"
-        else
-            red "仍要继续吗？(y/N)"
-            read -r ans
-            [ "$ans" = y ] || { yellow "已取消 Docker 安装"; return 1; }
-        fi
-    fi
-    green "正在安装 Docker (dockerd + dockerman)..."
-    opkg update >/dev/null 2>&1
-    opkg install luci-app-dockerman >/dev/null 2>&1
-    opkg install luci-i18n-dockerman-zh-cn >/dev/null 2>&1
-    opkg install dockerd --force-depends >/dev/null 2>&1
-    # docker-compose 二进制（三款均 aarch64，通吃）
-    local url
-    url=$(get_docker_compose_url "https://github.com/docker/compose/releases/latest")
-    green "下载 docker-compose: $url"
-    if wget -O /usr/bin/docker-compose "$url"; then
-        chmod +x /usr/bin/docker-compose
-        green "docker-compose 安装成功"
-    else
-        red "docker-compose 下载失败，可稍后手动放到 /usr/bin/docker-compose 并赋可执行权限"
-    fi
-    cyan "Docker 部署完成，重启后生效。"
 }
 
 # ---- Overlay 换分区助手（搬运自 mt3000-overlay.sh，install_docker 除外）----
@@ -1014,7 +958,6 @@ init_has_usb() {
 # ⚠️ 未验证：overlay 是否在 MT-3000 固件真正生效尚未实测；若与 BE 同为 GL SDK4(preinit 写死 systemrw)则不生效。
 #    用 /etc/.glinet_init_overlay_tried 标记：阶段1 重启后即便扩容没生效，也不会反复抹 U 盘，直接进阶段2。
 do_init_all() {
-    INIT_AUTO=1
     # —— 阶段1：仅 MT-3000、未扩容、未尝试过 → 先扩容 overlay 并自动重启 ——
     if [ "$HAS_OVERLAY" = 1 ] && ! overlay_is_expanded && [ ! -f /etc/.glinet_init_overlay_tried ]; then
         if init_has_usb; then
@@ -1024,15 +967,15 @@ do_init_all() {
             touch /etc/.glinet_init_overlay_tried 2>/dev/null
             CUSTOM_OPKG_SIZE=5
             change_overlay_usb </dev/null   # 内部自动重启，正常到不了下一行
-            INIT_AUTO=0; return 0
+            return 0
         fi
-        red "未检测到 U 盘，跳过 overlay 扩容，直接安装其余（如需扩容请插 U 盘后跑菜单14）。"
+        red "未检测到 U 盘，跳过 overlay 扩容，直接安装其余（如需扩容请插 U 盘后跑菜单13）。"
     fi
     if [ "$HAS_OVERLAY" = 1 ] && [ -f /etc/.glinet_init_overlay_tried ] && ! overlay_is_expanded; then
         yellow "⚠️ 已尝试 overlay 扩容但 /overlay 仍在内部 flash——该固件可能不支持(GL SDK4 写死 systemrw)；继续装其余。"
     fi
     yellow "===== [阶段2] 一键初始化：装除 AdGuard/wireguard/overlay/更新脚本外的全部（交互项用默认值）====="
-    green ">> 自定义软件源（菜单12·默认TUNA·最先执行）"; add_custom_feed </dev/null
+    green ">> 自定义软件源（菜单11·默认TUNA·最先执行）"; add_custom_feed </dev/null
     green ">> 一键 iStoreOS 风格化（菜单1）";            do_one_key_setup
     green ">> Argon 主题（菜单2）";                      do_install_argon_skin
     green ">> iStore 商店（菜单3）";                     do_istore
@@ -1041,10 +984,8 @@ do_init_all() {
     green ">> UI 辅助插件（菜单7·自动继续）";           do_install_ui_helper </dev/null
     green ">> 高级卸载插件（菜单8）";                    advanced_uninstall </dev/null
     green ">> 文件管理器（菜单10）";                     do_install_filemanager
-    green ">> Docker（菜单11）";                         do_install_docker
-    green ">> quickstart 首页（菜单13）";                do_install_new_quickstart
-    [ "$HAS_DISTFEEDS" = 1 ] && { green ">> 恢复原厂 OPKG 配置（菜单16）"; recovery_opkg_settings; }
-    INIT_AUTO=0
+    green ">> quickstart 首页（菜单12）";                do_install_new_quickstart
+    [ "$HAS_DISTFEEDS" = 1 ] && { green ">> 恢复原厂 OPKG 配置（菜单15）"; recovery_opkg_settings; }
     yellow "===== 一键初始化完成 ====="
 }
 
@@ -1068,15 +1009,14 @@ render_menu() {
     echo " 8. 安装高级卸载插件"
     echo " 9. 安装 luci-app-wireguard"
     echo "10. 安装文件管理器"
-    light_magenta "11. 安装 Docker（dockerman + compose）"
-    echo "12. 设置/删除自定义软件源"
-    echo "13. 手动安装/更新 quickstart 首页"
+    echo "11. 设置/删除自定义软件源"
+    echo "12. 手动安装/更新 quickstart 首页"
     if [ "$HAS_OVERLAY" = 1 ]; then
-        cyan "14. Overlay 换分区助手（U 盘扩容，仅 MT-3000）"
+        cyan "13. Overlay 换分区助手（U 盘扩容，仅 MT-3000）"
     fi
-    echo "15. 更新本脚本"
+    echo "14. 更新本脚本"
     if [ "$HAS_DISTFEEDS" = 1 ]; then
-        echo "16. 恢复原厂 OPKG 配置 (distfeeds)"
+        echo "15. 恢复原厂 OPKG 配置 (distfeeds)"
     fi
     echo
     echo " R. 恢复出厂设置/重置路由器"
@@ -1109,12 +1049,11 @@ dispatch() {
         8)  advanced_uninstall ;;
         9)  do_luci_app_wireguard ;;
         10) do_install_filemanager ;;
-        11) do_install_docker ;;
-        12) custom_feed_menu ;;
-        13) do_install_new_quickstart ;;
-        14) if [ "$HAS_OVERLAY" = 1 ]; then overlay_menu; else echo "无效选项，请重新选择。"; fi ;;
-        15) update_myself ;;
-        16) if [ "$HAS_DISTFEEDS" = 1 ]; then recovery_opkg_settings; else echo "无效选项，请重新选择。"; fi ;;
+        11) custom_feed_menu ;;
+        12) do_install_new_quickstart ;;
+        13) if [ "$HAS_OVERLAY" = 1 ]; then overlay_menu; else echo "无效选项，请重新选择。"; fi ;;
+        14) update_myself ;;
+        15) if [ "$HAS_DISTFEEDS" = 1 ]; then recovery_opkg_settings; else echo "无效选项，请重新选择。"; fi ;;
         r|R) recovery ;;
         q|Q) echo "退出"; exit 0 ;;
         *)  echo "无效选项，请重新选择。" ;;
