@@ -556,6 +556,196 @@ recovery_opkg_settings() {
     esac
 }
 
+do_luci_app_wireguard() {
+	setup_software_source 0
+	opkg install luci-app-wireguard
+	opkg install luci-i18n-wireguard-zh-cn
+	echo "请访问 http://"$(uci get network.lan.ipaddr)"/cgi-bin/luci/admin/status/wireguard  查看状态 "
+	echo "也可以去接口中 查看是否增加了新的wireguard 协议的选项 "
+}
+
+update_luci_app_quickstart() {
+	if [ -f "/bin/is-opkg" ]; then
+		# 如果 /bin/is-opkg 存在，则执行 is-opkg update
+		is-opkg update
+		is-opkg install luci-i18n-quickstart-zh-cn --force-depends >/dev/null 2>&1
+		opkg install iptables-mod-tproxy
+		opkg install iptables-mod-socket
+		opkg install iptables-mod-iprange
+		green "正在更新到最新版iStoreOS首页风格 "
+		TMPATH=/tmp/qstart
+		mkdir -p ${TMPATH}
+		app_aarch64='quickstart_0.11.13-r1_aarch64_generic.ipk'
+		app_ui='luci-app-quickstart_0.12.4-r1_all.ipk'
+		app_lng='luci-i18n-quickstart-zh-cn_25.090.31208-f5bf244_all.ipk'
+		wget $HTTP_HOST/newquickstart/$app_aarch64 -O ${TMPATH}/$app_aarch64
+		wget $HTTP_HOST/newquickstart/$app_ui -O ${TMPATH}/$app_ui
+		wget $HTTP_HOST/newquickstart/$app_lng -O ${TMPATH}/$app_lng
+		opkg install ${TMPATH}/*.ipk
+		rm -rf ${TMPATH}
+		hide_ui_elements
+		yellow "恭喜您!现在你的路由器已经变成iStoreOS风格啦!"
+		green "现在您可以访问8080端口 查看是否生效 http://192.168.8.1:8080"
+		green "更多up主项目和动态 请务必收藏我的导航站 https://tvhelper.cpolar.cn "
+		green "赞助本项目作者 https://wkdaily.cpolar.cn/01 "
+		addr_hostname=$(uci get system.@system[0].hostname)
+	else
+		red "请先执行第一项 一键iStoreOS风格化"
+	fi
+}
+
+#单独安装文件管理器
+do_install_filemanager() {
+	echo "为避免bug,安装文件管理器之前,需要先iStore商店"
+	do_istore
+	echo "接下来 尝试安装文件管理器......."
+	is-opkg install 'app-meta-linkease'
+	echo "重新登录web页面,然后您可以访问:  http://192.168.8.1/cgi-bin/luci/admin/services/linkease/file/?path=/root"
+}
+#更新脚本
+update_myself() {
+	wget -O gl-inet.sh "$HTTP_HOST/gl-inet.sh" && chmod +x gl-inet.sh
+	echo "脚本已更新并保存在当前目录 gl-inet.sh,现在将执行新脚本。"
+	./gl-inet.sh
+	exit 0
+}
+
+#根据release地址和命名前缀获取apk地址
+get_docker_compose_url() {
+	if [ $# -eq 0 ]; then
+		echo "需要提供GitHub releases页面的URL作为参数。"
+		return 1
+	fi
+	local releases_url=$1
+	# 使用curl获取重定向的URL
+	latest_url=$(curl -Ls -o /dev/null -w "%{url_effective}" "$releases_url")
+	# 使用sed从URL中提取tag值,并保留前导字符'v'
+	tag=$(echo $latest_url | sed 's|.*/v|v|')
+	# 检查是否成功获取到tag
+	if [ -z "$tag" ]; then
+		echo "未找到最新的release tag。"
+		return 1
+	fi
+	# 拼接docker-compose下载链接
+	local repo_path=$(echo "$releases_url" | sed -n 's|https://github.com/\(.*\)/releases/latest|\1|p')
+	docker_compose_download_url="https://github.com/${repo_path}/releases/download/${tag}/docker-compose-linux-aarch64"
+	echo "$docker_compose_download_url"
+}
+
+download_lib_quickstart() {
+	# 目标目录
+	REPO_URL="https://repo.istoreos.com/repo/aarch64_cortex-a53/nas/"
+	DOWNLOAD_DIR="/tmp/ipk_downloads"
+
+	# 创建下载目录
+	mkdir -p "$DOWNLOAD_DIR"
+
+	# 获取目录索引并筛选 quickstart ipk 链接
+	wget -qO- "$REPO_URL" | grep -oE 'href="[^"]*quickstart[^"]*\.ipk"' |
+		sed 's/href="//;s/"//' | while read -r FILE; do
+		echo "📦 正在下载: $FILE"
+		wget -q -P "$DOWNLOAD_DIR" "$REPO_URL$FILE"
+	done
+
+	echo "✅ 所有 quickstart 相关 IPK 文件已下载到: $DOWNLOAD_DIR"
+}
+
+download_luci_quickstart() {
+	# 目标目录
+	REPO_URL="https://repo.istoreos.com/repo/all/nas_luci/"
+	DOWNLOAD_DIR="/tmp/ipk_downloads"
+
+	# 创建下载目录
+	mkdir -p "$DOWNLOAD_DIR"
+
+	# 获取目录索引并筛选 quickstart ipk 链接
+	wget -qO- "$REPO_URL" | grep -oE 'href="[^"]*quickstart[^"]*\.ipk"' |
+		sed 's/href="//;s/"//' | while read -r FILE; do
+		echo "📦 正在下载: $FILE"
+		wget -q -P "$DOWNLOAD_DIR" "$REPO_URL$FILE"
+	done
+
+	echo "✅ 所有 quickstart 相关 IPK 文件已下载到: $DOWNLOAD_DIR"
+}
+
+# 首页和网络向导（BE3600 专用实现）
+do_quickstart_be() {
+	download_lib_quickstart
+	download_luci_quickstart
+	opkg install /tmp/ipk_downloads/*.ipk
+	green "正在更新到最新版iStoreOS首页风格 "
+	TMPATH=/tmp/qstart
+	mkdir -p ${TMPATH}
+	app_aarch64='quickstart_0.11.13-r1_aarch64_generic.ipk'
+	app_ui='luci-app-quickstart_0.12.4-r1_all.ipk'
+	app_lng='luci-i18n-quickstart-zh-cn_25.090.31208-f5bf244_all.ipk'
+	wget $HTTP_HOST/newquickstart/$app_aarch64 -O ${TMPATH}/$app_aarch64
+	wget $HTTP_HOST/newquickstart/$app_ui -O ${TMPATH}/$app_ui
+	wget $HTTP_HOST/newquickstart/$app_lng -O ${TMPATH}/$app_lng
+	opkg install ${TMPATH}/*.ipk
+	rm -rf ${TMPATH}
+	hide_ui_elements
+	green "首页风格安装完毕！请使用8080端口访问luci界面：http://192.168.8.1:8080"
+	green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
+}
+
+# 安装新首页风格
+do_install_new_quickstart(){
+	green "正在更新到最新版iStoreOS首页风格 "
+	TMPATH=/tmp/qstart
+	mkdir -p ${TMPATH}
+	app_aarch64='quickstart_0.11.13-r1_aarch64_generic.ipk'
+	app_ui='luci-app-quickstart_0.12.4-r1_all.ipk'
+	app_lng='luci-i18n-quickstart-zh-cn_25.090.31208-f5bf244_all.ipk'
+	wget $HTTP_HOST/newquickstart/$app_aarch64 -O ${TMPATH}/$app_aarch64
+	wget $HTTP_HOST/newquickstart/$app_ui -O ${TMPATH}/$app_ui
+	wget $HTTP_HOST/newquickstart/$app_lng -O ${TMPATH}/$app_lng
+	opkg install ${TMPATH}/*.ipk
+	rm -rf ${TMPATH}
+	hide_ui_elements
+	green "首页风格安装完毕！请使用8080端口访问luci界面：http://192.168.8.1:8080"
+	green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
+}
+
+# quickstart 分发（一键流程用；按 profile）
+do_quickstart() {
+    case "$QUICKSTART" in
+        full)   do_quickstart_be ;;
+        isopkg) update_luci_app_quickstart ;;
+        none)   yellow "本机型一键流程不含 quickstart（mdadm 不兼容）；如需请用菜单「手动安装/更新 quickstart」。" ;;
+    esac
+}
+
+# 统一 Docker 安装入口（dockerman + dockerd + compose 二进制）
+do_install_docker() {
+    # 软性空间预检
+    local overlay_kb
+    overlay_kb=$(df /overlay 2>/dev/null | awk '/\/overlay/{print $2}')
+    if [ -n "$overlay_kb" ] && [ "$overlay_kb" -lt 1048576 ]; then
+        yellow "⚠️ 检测到 /overlay 空间不足 1GB，Docker 可能装不下。"
+        yellow "   建议先用「Overlay 换分区助手」把 overlay 迁到 U 盘再装。"
+        red "仍要继续吗？(y/N)"
+        read -r ans
+        [ "$ans" = y ] || { yellow "已取消 Docker 安装"; return 1; }
+    fi
+    green "正在安装 Docker (dockerd + dockerman)..."
+    opkg update >/dev/null 2>&1
+    opkg install luci-app-dockerman >/dev/null 2>&1
+    opkg install luci-i18n-dockerman-zh-cn >/dev/null 2>&1
+    opkg install dockerd --force-depends >/dev/null 2>&1
+    # docker-compose 二进制（三款均 aarch64，通吃）
+    local url
+    url=$(get_docker_compose_url "https://github.com/docker/compose/releases/latest")
+    green "下载 docker-compose: $url"
+    if wget -O /usr/bin/docker-compose "$url"; then
+        chmod +x /usr/bin/docker-compose
+        green "docker-compose 安装成功"
+    else
+        red "docker-compose 下载失败，可稍后手动放到 /usr/bin/docker-compose 并赋可执行权限"
+    fi
+    cyan "Docker 部署完成，重启后生效。"
+}
+
 main() {
     :  # 占位，Task 8 实现
 }
