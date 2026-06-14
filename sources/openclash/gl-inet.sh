@@ -740,9 +740,13 @@ do_install_docker() {
     if [ -n "$overlay_kb" ] && [ "$overlay_kb" -lt 1048576 ]; then
         yellow "⚠️ 检测到 /overlay 空间不足 1GB，Docker 可能装不下。"
         yellow "   建议先用「Overlay 换分区助手」把 overlay 迁到 U 盘再装。"
-        red "仍要继续吗？(y/N)"
-        read -r ans
-        [ "$ans" = y ] || { yellow "已取消 Docker 安装"; return 1; }
+        if [ "$INIT_AUTO" = 1 ]; then
+            yellow "（一键初始化模式：空间不足仍继续安装 Docker）"
+        else
+            red "仍要继续吗？(y/N)"
+            read -r ans
+            [ "$ans" = y ] || { yellow "已取消 Docker 安装"; return 1; }
+        fi
     fi
     green "正在安装 Docker (dockerd + dockerman)..."
     opkg update >/dev/null 2>&1
@@ -994,6 +998,27 @@ do_one_key_setup() {
     esac
 }
 
+# 一键初始化：自动顺序执行除 6(AdGuard)/9(wireguard)/14(overlay,会重启抹U盘)/15(更新本脚本) 外的全部功能项。
+# 交互项一律取默认值：12→TUNA源(最先执行)、5→48℃、7→自动继续、11→空间不足也装。
+do_init_all() {
+    INIT_AUTO=1
+    yellow "===== 一键初始化开始：交互项一律用默认值，跳过 AdGuard/wireguard/overlay/更新脚本 ====="
+    green ">> 自定义软件源（菜单12·默认TUNA·最先执行）"; add_custom_feed </dev/null
+    green ">> 一键 iStoreOS 风格化（菜单1）";            do_one_key_setup
+    green ">> Argon 主题（菜单2）";                      do_install_argon_skin
+    green ">> iStore 商店（菜单3）";                     do_istore
+    green ">> 隐藏首页 UI（菜单4）";                     hide_ui_elements
+    green ">> 风扇温度（菜单5·默认48℃）";              set_glfan_temp </dev/null
+    green ">> UI 辅助插件（菜单7·自动继续）";           do_install_ui_helper </dev/null
+    green ">> 高级卸载插件（菜单8）";                    advanced_uninstall </dev/null
+    green ">> 文件管理器（菜单10）";                     do_install_filemanager
+    green ">> Docker（菜单11）";                         do_install_docker
+    green ">> quickstart 首页（菜单13）";                do_install_new_quickstart
+    [ "$HAS_DISTFEEDS" = 1 ] && { green ">> 恢复原厂 OPKG 配置（菜单16）"; recovery_opkg_settings; }
+    INIT_AUTO=0
+    yellow "===== 一键初始化完成 ====="
+}
+
 # 渲染主菜单（按 profile 动态显示条件项）
 render_menu() {
     echo "***********************************************************************"
@@ -1003,6 +1028,7 @@ render_menu() {
     echo "***********************************************************************"
     green "请确保固件版本在 $FIRMWARE_MIN_VERSION 以上"
     echo
+    light_yellow " 0. 一键初始化（全自动·交互项用默认值·跳过 AdGuard/wireguard/overlay/更新脚本）"
     light_magenta " 1. 一键 iStoreOS 风格化"
     echo " 2. 安装 Argon 紫色主题"
     echo " 3. 单独安装 iStore 商店"
@@ -1043,6 +1069,7 @@ custom_feed_menu() {
 
 dispatch() {
     case "$1" in
+        0)  do_init_all ;;
         1)  do_one_key_setup ;;
         2)  do_install_argon_skin ;;
         3)  do_istore ;;
