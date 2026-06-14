@@ -155,14 +155,6 @@ add_dhcp_domain() {
 	fi
 }
 
-#添加出处信息
-add_author_info() {
-	uci set system.@system[0].description='wukongdaily'
-	uci set system.@system[0].notes='文档说明:
-    https://tvhelper.cpolar.cn/'
-	uci commit system
-}
-
 ##获取软路由型号信息
 get_router_name() {
 	model_info=$(cat /tmp/sysinfo/model)
@@ -507,7 +499,7 @@ install_istore_os_style_be() {
 	#默认使用体积很小的文件传输：系统——文件传输
 	do_install_filetransfer
 	FILE_PATH="/etc/openwrt_release"
-	NEW_DESCRIPTION="Openwrt like iStoreOS Style by wukongdaily"
+	NEW_DESCRIPTION="Openwrt like iStoreOS Style"
 	CONTENT=$(cat $FILE_PATH)
 	UPDATED_CONTENT=$(echo "$CONTENT" | sed "s/DISTRIB_DESCRIPTION='[^']*'/DISTRIB_DESCRIPTION='$NEW_DESCRIPTION'/")
 	echo "$UPDATED_CONTENT" >$FILE_PATH
@@ -526,7 +518,7 @@ install_istore_os_style_mt() {
 	# 安装磁盘管理
 	is-opkg install 'app-meta-diskman'
 	FILE_PATH="/etc/openwrt_release"
-	NEW_DESCRIPTION="Openwrt like iStoreOS Style by wukongdaily"
+	NEW_DESCRIPTION="Openwrt like iStoreOS Style"
 	CONTENT=$(cat $FILE_PATH)
 	UPDATED_CONTENT=$(echo "$CONTENT" | sed "s/DISTRIB_DESCRIPTION='[^']*'/DISTRIB_DESCRIPTION='$NEW_DESCRIPTION'/")
 	echo "$UPDATED_CONTENT" >$FILE_PATH
@@ -535,7 +527,6 @@ install_istore_os_style_mt() {
 
 # 基础初始化（WAN 开放仅对 WAN_OPEN=1 的 profile）
 setup_base_init() {
-    add_author_info
     add_dhcp_domain
     uci set system.@system[0].zonename='Asia/Shanghai'
     uci set system.@system[0].timezone='CST-8'
@@ -547,7 +538,6 @@ setup_base_init() {
         uci commit firewall
     fi
     green "安装完毕！请使用8080端口访问luci界面：http://$(lan_ip):8080"
-    green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
 }
 
 #设置风扇工作温度
@@ -683,7 +673,6 @@ do_quickstart_be() {
 	rm -rf ${TMPATH}
 	hide_ui_elements
 	green "首页风格安装完毕！请使用8080端口访问luci界面：http://$(lan_ip):8080"
-	green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
 }
 
 # 安装新首页风格
@@ -701,7 +690,6 @@ do_install_new_quickstart(){
 	rm -rf ${TMPATH}
 	hide_ui_elements
 	green "首页风格安装完毕！请使用8080端口访问luci界面：http://$(lan_ip):8080"
-	green "作者更多动态务必收藏：https://tvhelper.cpolar.cn/"
 }
 
 # quickstart 分发（一键流程用；按 profile）
@@ -995,7 +983,7 @@ do_init_all() {
 # 渲染主菜单（按 profile 动态显示条件项）
 render_menu() {
     echo "***********************************************************************"
-    echo "*      GL-iNet 一键工具箱  by @wukongdaily"
+    echo "*      GL-iNet 一键工具箱"
     echo "*      当前机型: $PROFILE_NAME"
     echo "*      支持: BE3600 / BE6500 / MT-3000   快捷键: g"
     echo "***********************************************************************"
