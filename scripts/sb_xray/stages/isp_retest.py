@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import time
+from typing import Any
 
 from sb_xray.events import emit_event
 from sb_xray.stages.reload_util import restart_daemons as _restart_daemons
@@ -120,7 +121,7 @@ def _should_reload(
     return False, "no_change"
 
 
-def _speed_summary(outcome: object) -> dict | None:
+def _speed_summary(outcome: object) -> dict[str, Any] | None:
     """Speed-test fields the merged retest card renders, or ``None`` if absent.
 
     The retest card folds in the same numbers a standalone

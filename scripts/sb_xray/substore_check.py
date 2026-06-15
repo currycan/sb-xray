@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Final, NamedTuple
+from typing import Any, Final, NamedTuple
 from urllib.parse import quote
 
 import httpx
@@ -42,7 +42,7 @@ class SubResult(NamedTuple):
     node_count: int
 
 
-def _list_remote_subs(subs_payload: dict) -> list[dict]:
+def _list_remote_subs(subs_payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Pick the URL-fetched (``source == "remote"``) subs from /api/subs."""
     data = subs_payload.get("data") if isinstance(subs_payload, dict) else None
     if not isinstance(data, list):
@@ -50,7 +50,7 @@ def _list_remote_subs(subs_payload: dict) -> list[dict]:
     return [s for s in data if isinstance(s, dict) and s.get("source") == "remote"]
 
 
-def _is_airport(sub: dict) -> bool:
+def _is_airport(sub: dict[str, Any]) -> bool:
     """Airport subs are the ones we gave a fetch ``proxy`` (国内出口)."""
     proxy = sub.get("proxy")
     return isinstance(proxy, str) and proxy.strip() != ""

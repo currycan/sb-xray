@@ -24,7 +24,8 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Final, TextIO
+from types import TracebackType
+from typing import Final, Literal, TextIO
 
 _SYMBOL_START: Final[str] = "▶"
 _SYMBOL_OK: Final[str] = "✓"
@@ -116,7 +117,12 @@ class StageTimer(contextlib.AbstractContextManager["StageTimer"]):
         )
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         duration_ms = (time.monotonic_ns() - self._start_ns) // 1_000_000
 
         if exc is not None:
@@ -130,7 +136,7 @@ class StageTimer(contextlib.AbstractContextManager["StageTimer"]):
                 self.info.name,
                 duration_ms,
                 self._message,
-                exc_info=(exc_type, exc, tb),
+                exc_info=exc,  # narrowed to BaseException here; equivalent to the (type, val, tb) triple
             )
         elif self._status == StageStatus.SKIPPED:
             self._logger.info(
