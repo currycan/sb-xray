@@ -26,6 +26,7 @@ import random
 import re
 import shutil
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +329,7 @@ def _apply_cn_exit(xr_file: Path) -> None:
     # off → 不改写，CN 流量保持 base 模板的 block
 
 
-def _rewire_cn_rules(data: dict, route_tag: str, *, use_balancer: bool = False) -> bool:
+def _rewire_cn_rules(data: dict[str, Any], route_tag: str, *, use_balancer: bool = False) -> bool:
     """把 cn-ip 封禁规则改造为回国出站规则，返回是否找到 cn-ip。
 
     ``use_balancer=True`` 时 cn 流量规则写 ``balancerTag``（balance 模式），
@@ -391,7 +392,7 @@ def _apply_cn_exit_rtunnel(xr_file: Path) -> None:
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _cn_exit_socks5_outbound() -> dict | None:
+def _cn_exit_socks5_outbound() -> dict[str, Any] | None:
     """构造 cn-exit socks outbound；缺少 host 时返回 None。"""
     host = os.environ.get("CN_EXIT_SOCKS5_HOST", "").strip()
     if not host:
@@ -418,7 +419,7 @@ def _apply_cn_exit_socks5(xr_file: Path) -> None:
     xr_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def _merge_observatory(data: dict, selector: list[str]) -> None:
+def _merge_observatory(data: dict[str, Any], selector: list[str]) -> None:
     """把 selector 合并进全局 observatory（xray 仅支持单个 observatory）。"""
     obs = data.get("observatory")
     if obs is None:

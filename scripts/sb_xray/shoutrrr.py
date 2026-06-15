@@ -30,7 +30,7 @@ import shlex
 import subprocess
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Final
+from typing import Any, Final
 
 DEFAULT_PORT: Final[int] = 18085
 DEFAULT_TITLE_PREFIX: Final[str] = "[sb-xray]"
@@ -86,7 +86,7 @@ def _fmt_pct(value: object) -> str | None:
     return f"{value:g}"
 
 
-def _speed_blocks(payload: dict) -> list[str]:
+def _speed_blocks(payload: dict[str, Any]) -> list[str]:
     """测速摘要 → 文本块列表：选定线路/评级/直连基准 + 各线路逐行。
 
     供 ``isp.speed_test.result`` 测速卡与 ``isp.retest.{noop,completed}`` 合并卡
@@ -132,13 +132,13 @@ def _speed_blocks(payload: dict) -> list[str]:
     return blocks
 
 
-def _format_speed_test(payload: dict, title_prefix: str) -> tuple[str, str]:
+def _format_speed_test(payload: dict[str, Any], title_prefix: str) -> tuple[str, str]:
     """isp.speed_test.result → 人话摘要：选定线路 / 评级 / 各线路逐行。"""
     title = f"{title_prefix} 📊 ISP 测速结果"
     return title, "\n\n".join(_speed_blocks(payload))
 
 
-def _format_substore_failure(payload: dict, title_prefix: str) -> tuple[str, str]:
+def _format_substore_failure(payload: dict[str, Any], title_prefix: str) -> tuple[str, str]:
     """substore.sub_fetch.failed → 哪几条订阅今日拉取失败 + 失败原因。"""
     title = f"{title_prefix} 🔴 订阅拉取失败"
     items = payload.get("items")
@@ -170,7 +170,7 @@ _RETEST_REASON_LABEL: Final[dict[str, str]] = {
 }
 
 
-def _format_retest_noop(payload: dict, title_prefix: str) -> tuple[str, str]:
+def _format_retest_noop(payload: dict[str, Any], title_prefix: str) -> tuple[str, str]:
     """isp.retest.noop → 合并卡：测速摘要 + 「线路不变」结论。
 
     retest 一个周期 = 测速 + 切换决策。retest 内部那次 ``isp.speed_test.result``
@@ -191,7 +191,7 @@ def _format_retest_noop(payload: dict, title_prefix: str) -> tuple[str, str]:
     return title, "\n\n".join(blocks)
 
 
-def _format_retest_completed(payload: dict, title_prefix: str) -> tuple[str, str]:
+def _format_retest_completed(payload: dict[str, Any], title_prefix: str) -> tuple[str, str]:
     """isp.retest.completed → 合并卡：切换结论 + 触发原因/重启状态 + 测速摘要。
 
     与 noop 同源:retest 把抑制掉的测速摘要 (payload['speed']) 折进本卡,所以切换
@@ -230,7 +230,7 @@ _CANARY_ROLE_LABEL: Final[dict[str, str]] = {
 }
 
 
-def _format_canary_failed(payload: dict, title_prefix: str) -> tuple[str, str]:
+def _format_canary_failed(payload: dict[str, Any], title_prefix: str) -> tuple[str, str]:
     """watchtower.canary.failed → 自动更新后业务自检失败的中文卡片。"""
     title = f"{title_prefix} 🔴 自动更新自检失败"
     role = _CANARY_ROLE_LABEL.get(str(payload.get("role") or ""), str(payload.get("role") or "?"))
@@ -246,7 +246,7 @@ def _format_canary_failed(payload: dict, title_prefix: str) -> tuple[str, str]:
     return title, "\n\n".join(blocks)
 
 
-def _format_canary_updated(payload: dict, title_prefix: str) -> tuple[str, str]:
+def _format_canary_updated(payload: dict[str, Any], title_prefix: str) -> tuple[str, str]:
     """watchtower.canary.updated → 自动更新成功且自检通过的中文卡片。"""
     title = f"{title_prefix} ✅ 已自动更新"
     built = str(payload.get("built") or payload.get("new") or "未知")
@@ -283,12 +283,12 @@ def _parse_urls(raw: str | None) -> list[str]:
 def _format_ts(value: object) -> str | None:
     """Unix 秒 → 本地时间（容器 TZ）；解析不了返回 None，绝不抛异常。"""
     try:
-        return datetime.fromtimestamp(int(value)).strftime(_TS_FORMAT)  # type: ignore[arg-type]
+        return datetime.fromtimestamp(int(value)).strftime(_TS_FORMAT)  # type: ignore[call-overload]
     except (TypeError, ValueError, OSError, OverflowError):
         return None
 
 
-def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, str]:
+def _format_message(event: str, payload: dict[str, Any], title_prefix: str) -> tuple[str, str]:
     """把 webhook payload 拼成人话 (title, body)。
 
     已知 ban 事件 → emoji 标题 + 摘要正文（谁连了什么 + 来源/入站/时间），
@@ -356,7 +356,7 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
     return title, "\n".join(lines) or event
 
 
-def _send(urls: list[str], title_prefix: str, event: str, payload: dict) -> None:
+def _send(urls: list[str], title_prefix: str, event: str, payload: dict[str, Any]) -> None:
     # Edge-triggered alerting: speed_test results carry a ``notify`` flag set
     # by _persist_routing_decision. Only a notable change (membership flip,
     # tag change, rating-tier flip, first run) sets it true — pure bandwidth
@@ -403,10 +403,10 @@ def _send(urls: list[str], title_prefix: str, event: str, payload: dict) -> None
 
 def _make_handler(urls: list[str], title_prefix: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, fmt, *args):  # silence default access log
+        def log_message(self, fmt: str, *args: object) -> None:  # silence default access log
             return
 
-        def do_POST(self):
+        def do_POST(self) -> None:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(length) if length else b"{}"
@@ -426,7 +426,7 @@ def _make_handler(urls: list[str], title_prefix: str) -> type[BaseHTTPRequestHan
             self.send_response(204)
             self.end_headers()
 
-        def do_GET(self):
+        def do_GET(self) -> None:
             if self.path == "/healthz":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
