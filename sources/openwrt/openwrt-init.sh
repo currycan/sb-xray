@@ -203,12 +203,21 @@ validate_config() {
     if mode_uses_reverse && [ -z "$BRIDGE_NODES" ] && [ ! -f "$_nsrc" ]; then
         _req="$_req SUBSCRIBE_TOKEN"
     fi
+    # CDN 优选为硬契约（所有模式）：CDN_DOMAIN 必填。缺失曾致优选静默跳过 → 灾备换机反复踩坑，
+    # 故升为必填、缺则 die（确需无 CDN 的部署再议）。
+    _req="$_req CDN_DOMAIN"
     _missing=""
     for _v in $_req; do
         eval "_val=\$$_v"
         [ -n "$_val" ] || _missing="$_missing $_v"
     done
     [ -z "$_missing" ] || die "缺少必填项 (CN_EXIT_MODE=$CN_EXIT_MODE):${_missing}（用 config.env 或内联环境变量提供）"
+
+    # 优选域名来源：CDN_SUBDOMAINS（逗号分隔前缀）或已存在的非空 /etc/subdomains.txt，二者全无
+    # 则 cdn-speedtest run 无域名可用、/etc/hosts 不会有任何优选条目 —— 硬失败。
+    if [ -z "$CDN_SUBDOMAINS" ] && [ ! -s /etc/subdomains.txt ]; then
+        die "缺少 CDN 优选域名来源：请设 CDN_SUBDOMAINS（逗号分隔前缀）或提供非空 /etc/subdomains.txt"
+    fi
 
     # 轻量格式校验（仅 warn，不阻断）
     if [ -n "$VPS_DOMAIN" ]; then
@@ -1215,7 +1224,11 @@ LAST_RESULT_FILE="${INSTALL_DIR}/last_best.txt"
 
 log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-    echo "$msg"
+    # 诊断写 stderr（不写 stdout）：run_speedtest 经 best_ip=$(run_speedtest) 命令替换
+    # 调用，若 log 写 stdout 会被 $() 捕获——前台看不到 OpenClash 停/启与测速进度，
+    # 且污染返回值（靠 tail -1 捞 IP）。改 stderr 后 $() 只收 run_speedtest 末尾的
+    # echo "$BEST_IP"，前台诊断照常可见，日志文件不受影响。
+    echo "$msg" >&2
     echo "$msg" >> "$LOG_FILE"
 }
 
@@ -1269,31 +1282,19 @@ detect_arch() {
     esac
 }
 
-# busybox tar 兼容回退：上游 cfst tar.gz 是无 ustar 魔数的老式 tar（bsdtar/GNU tar
-# 可读；busybox tar 硬性要求魔数，-z 与流式管道均报 invalid tar magic，且历代资产
-# 均如此）。按 512 字节块手工走档头，仅抽出 cfst 二进制——零依赖，与上游版本无关。
-extract_cfst_fallback() {
-    local tarball="$1" dest="$2" raw name size_oct size blocks off total
-    raw="${dest}/.cfst_raw.$$"
-    gunzip -c "$tarball" > "$raw" || { rm -f "$raw"; return 1; }
-    total=$(wc -c < "$raw")
-    off=0
-    while [ $((off + 512)) -le "$total" ]; do
-        name=$(dd if="$raw" bs=1 skip="$off" count=100 2>/dev/null | tr -d '\0')
-        [ -n "$name" ] || break
-        size_oct=$(dd if="$raw" bs=1 skip=$((off + 124)) count=12 2>/dev/null | tr -d '\0 ')
-        case "$size_oct" in ''|*[!0-7]*) size=0 ;; *) size=$((0$size_oct)) ;; esac
-        blocks=$(( (size + 511) / 512 ))
-        if [ "$name" = "cfst" ]; then
-            dd if="$raw" bs=512 skip=$((off / 512 + 1)) count="$blocks" 2>/dev/null | head -c "$size" > "${dest}/cfst"
-            rm -f "$raw"
-            [ -s "${dest}/cfst" ] && return 0
-            return 1
-        fi
-        off=$((off + 512 + blocks * 512))
-    done
-    rm -f "$raw"
-    return 1
+# 安装 GNU tar：上游 cfst tar.gz 是无 ustar 魔数的老式 tar，busybox tar（-z 与流式
+# 管道皆然）报 invalid tar magic 解不开。装上 GNU tar 后 `tar -xzf` 一次解出全部条目
+# （cfst + ip.txt/ipv6.txt 测速输入清单），消除「按文件枚举漏抽 ip.txt 致测速白跑」的
+# bug 面。优先 apk（新 OpenWrt/ImmortalWrt 基），回退 opkg；二者皆无则失败。
+ensure_gnu_tar() {
+    if command -v apk > /dev/null 2>&1; then
+        apk add tar > /dev/null 2>&1 || { apk update > /dev/null 2>&1 && apk add tar > /dev/null 2>&1; }
+    elif command -v opkg > /dev/null 2>&1; then
+        opkg update > /dev/null 2>&1
+        opkg install tar > /dev/null 2>&1
+    else
+        return 1
+    fi
 }
 
 install_cloudflarest() {
@@ -1304,7 +1305,10 @@ install_cloudflarest() {
 
     mkdir -p "$INSTALL_DIR"
 
-    if [ -x "${INSTALL_DIR}/cfst" ]; then
+    # 幂等门同时校验 ip.txt：cfst 默认读 cwd 的 ip.txt 作测速输入，缺它则每轮白跑。
+    # 存量设备（已装 cfst 但缺 ip.txt，如早期未解全量者）借此在下次 init 走重装路径、
+    # 由 tar -xzf 解全量自愈补回 ip.txt。
+    if [ -x "${INSTALL_DIR}/cfst" ] && [ -s "${INSTALL_DIR}/ip.txt" ]; then
         log "CloudflareST 已安装"
         return 0
     fi
@@ -1329,11 +1333,12 @@ install_cloudflarest() {
     fi
 
     if ! tar -xzf "${INSTALL_DIR}/${tarball}" -C "$INSTALL_DIR" 2>/dev/null; then
-        log "busybox tar 解包失败（归档无 ustar 魔数），使用内置回退解析..."
-        if ! extract_cfst_fallback "${INSTALL_DIR}/${tarball}" "$INSTALL_DIR"; then
-            log "ERROR: 解包失败，请手动解出 cfst 到 ${INSTALL_DIR}/"
+        log "busybox tar 解包失败（归档无 ustar 魔数），安装 GNU tar 后重试..."
+        if ! ensure_gnu_tar || ! tar -xzf "${INSTALL_DIR}/${tarball}" -C "$INSTALL_DIR" 2>/dev/null; then
+            log "ERROR: 解包失败，请手动 'apk add tar' 或 'opkg install tar' 后重跑"
             exit 1
         fi
+        log "GNU tar 安装并解包成功"
     fi
     chmod +x "${INSTALL_DIR}/cfst"
     rm -f "${INSTALL_DIR}/${tarball}"
@@ -1673,9 +1678,11 @@ build_cdn_env() {
     done
 }
 
-install_cdn_speedtest() {
-    # CDN IP 优选：CDN_DOMAIN 非空才启用。内嵌脚本写出 /usr/bin/cdn-speedtest +
-    # /etc/subdomains.txt + 每日 cron + 预装 CloudflareST，全部幂等。
+install_cdn_tooling() {
+    # CDN IP 优选「工具落盘」：内嵌脚本写出 /usr/bin/cdn-speedtest + /etc/subdomains.txt +
+    # 每日 cron + 预装 CloudflareST，全部幂等。**无服务依赖**，setup 阶段照常执行 —— cron 始终
+    # 在位。优选「首跑」需 OpenClash/Tailscale 正常运行，单列在 cdn_optimize_firstrun，由 main
+    # 在服务自检通过后才调。CDN_DOMAIN 必填由 validate_config 保证，此处保留防御门控兜底独立调用。
     if [ -z "$CDN_DOMAIN" ]; then
         log "未设 CDN_DOMAIN，跳过 CDN IP 优选安装"
         return 0
@@ -1736,30 +1743,60 @@ install_cdn_speedtest() {
         log "已配置 CDN 优选 cron: $_line"
     fi
 
-    # 预装 CloudflareST（幂等：已装直接返回；失败不阻断，首次 run 会重试）
+    # 预装 CloudflareST（幂等：已装直接返回；失败不阻断，首跑会重试）
     "$_bin" install || warn "CloudflareST 预装失败（首次 cdn-speedtest run 时会重试）"
+}
 
-    # 首跑只处理“从无到有”；新鲜度交给每日 cron；last_best.txt 门禁保 init 重跑幂等。
-    if [ -f /etc/CloudflareST/last_best.txt ]; then
-        log "已有优选结果（last_best.txt），跳过首跑——由每日 cron 维持"
-    else
-        log "首次启用：同步执行 CDN 优选首跑（约需几分钟，期间 OpenClash 暂停、测完自动恢复）"
-        env $_cdn_env /usr/bin/cdn-speedtest run || \
-            warn "CDN 优选首跑失败（不阻断；每日 cron 会重试，或手动: sh openwrt-init.sh cdn run）"
+cdn_first_fqdn() {
+    # 输出首个完整 CDN 域名（/etc/subdomains.txt 首个非注释非空前缀 + CDN_DOMAIN）；无则输出空。
+    # cdn_optimize_firstrun 的幂等门禁与 verify_cdn_outcome 的真相源硬检查共用，避免两处逻辑漂移。
+    _p=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' /etc/subdomains.txt 2>/dev/null | head -n1 | tr -d '[:space:]')
+    [ -n "$_p" ] && printf '%s.%s' "$_p" "$CDN_DOMAIN"
+}
+
+cdn_optimize_firstrun() {
+    # CDN 优选「首跑」：需 OpenClash/Tailscale 正常运行（首跑会临时停 OpenClash 跑 CloudflareST
+    # 再恢复），故由 main 在服务自检通过后才调用。首跑失败直接返回非零（不再静默 warn），由调用方 die。
+    # 幂等门禁绑定**真实终态** /etc/hosts 条目（而非 last_best.txt）：已有优选条目则跳过首跑、不重复
+    # 扫描（正常重启/重跑幂等，新鲜度交每日 cron）；条目缺失（新设备 / 被 cdn clean / 被清）则首跑**自愈**。
+    if [ -z "$CDN_DOMAIN" ]; then
+        log "未设 CDN_DOMAIN，跳过 CDN 优选首跑"
+        return 0
     fi
+    _fqdn=$(cdn_first_fqdn)
+    if [ -n "$_fqdn" ] && grep -qE "^[0-9.]+ ${_fqdn}\$" /etc/hosts 2>/dev/null; then
+        log "已有优选条目（/etc/hosts: ${_fqdn}），跳过首跑——新鲜度由每日 cron 维持"
+        return 0
+    fi
+    build_cdn_env
+    log "同步执行 CDN 优选首跑（约需几分钟，期间 OpenClash 暂停、测完自动恢复）"
+    env $_cdn_env /usr/bin/cdn-speedtest run
 }
 
 # ── 端到端自检 ────────────────────────────────────────────────────
 
-verify_cdn() {
-    # CDN 优选自检
-    if [ -n "$CDN_DOMAIN" ]; then
-        check "cdn-speedtest 已安装" test -x /usr/bin/cdn-speedtest
-        check "CDN 优选 cron 已配置" sh -c "grep -qF '/usr/bin/cdn-speedtest run' /etc/crontabs/root"
-        check "/etc/subdomains.txt 非空" test -s /etc/subdomains.txt
-        check "CloudflareST 已安装" test -x /etc/CloudflareST/cfst
-        check_soft "CDN 优选已生效（last_best.txt）" test -f /etc/CloudflareST/last_best.txt
+verify_cdn_outcome() {
+    # CDN 优选「结果」硬自检：main 在优选首跑后调用，cdn 子命令收尾亦用。CDN_DOMAIN 必填由
+    # validate_config 保证 —— 无 `if [ -n "$CDN_DOMAIN" ]` 逃逸外壳，杜绝「CDN_DOMAIN 空 = 零
+    # 检查 = 静默全绿」。返回非零（有新增 [FAIL]）即由调用方 die。
+    log "── CDN 优选自检 ──"
+    _bad_before=$bad
+    check "cdn-speedtest 已安装" test -x /usr/bin/cdn-speedtest
+    check "CDN 优选 cron 已配置" sh -c "grep -qF '/usr/bin/cdn-speedtest run' /etc/crontabs/root"
+    check "/etc/subdomains.txt 非空" test -s /etc/subdomains.txt
+    check "CloudflareST 已安装" test -x /etc/CloudflareST/cfst
+    # 真相源硬检查：/etc/hosts 必须有首个 CDN 域名的优选 IP 条目（update_hosts 写的就是它，也是
+    # 人工排查实际看的东西）——这是优选「真的生效」的权威信号。last_best.txt 仅内部缓存产物，软查即可
+    # （成功首跑必同时写两者；softcheck 不让「hosts 在、缓存被清」的边角情形误判死锁）。
+    _cdn_fqdn=$(cdn_first_fqdn)
+    if [ -n "$_cdn_fqdn" ]; then
+        check "优选 IP 已写入 /etc/hosts（${_cdn_fqdn}）" \
+            sh -c "grep -qE '^[0-9.]+ ${_cdn_fqdn}\$' /etc/hosts"
+    else
+        check "subdomains.txt 至少一个有效前缀" false
     fi
+    check_soft "CDN 优选缓存就位（last_best.txt）" test -f /etc/CloudflareST/last_best.txt
+    [ "$bad" -eq "$_bad_before" ]
 }
 
 verify() {
@@ -1828,7 +1865,8 @@ verify() {
         check "OpenClash dashboard 密码已注入（非占位符）" \
             sh -c "! grep -q '<OPENCLASH_DASHBOARD_PASSWORD>' /etc/config/openclash"
     fi
-    verify_cdn
+    # CDN 优选「结果」自检不在此处：优选需服务正常运行，由 main 在本服务自检通过后才首跑，
+    # 随后单独跑 verify_cdn_outcome 硬验 /etc/hosts（见 main 尾部）。
 
     printf '\n[cn-exit] 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
     if [ "$bad" -gt 0 ]; then
@@ -2007,8 +2045,10 @@ main_cdn() {
     [ -n "$CDN_DOMAIN" ] || die "cdn 子命令需要 CDN_DOMAIN（config.env 或内联环境变量提供）"
     case "$_sub" in
         '')
-            install_cdn_speedtest
-            verify_cdn
+            # 独立补做优选（DR 服务恢复后用）：装工具+cron → 首跑 → 硬验结果。不碰 Tailscale。
+            install_cdn_tooling
+            cdn_optimize_firstrun || die "CDN 优选首跑失败（重试：sh $0 cdn run）"
+            verify_cdn_outcome
             printf '\n[cn-exit] CDN 自检结果: %d 通过 / %d 失败\n' "$ok" "$bad"
             [ "$bad" -eq 0 ] || exit 1 ;;
         run|status|clean|help)
@@ -2051,12 +2091,17 @@ main() {
         install_xray_bridge
     fi
     setup_monitor_cron
-    # CDN IP 优选（自身按 CDN_DOMAIN 非空决定跑不跑）
-    install_cdn_speedtest
+    # CDN 优选「工具 + cron + subdomains」先装好（无服务依赖，cron 始终在位）；优选「首跑」需
+    # 服务正常运行，挪到服务自检通过之后。
+    install_cdn_tooling
     if verify; then
+        # 服务全绿 —— 现在才做 CDN 优选首跑（优选需 OpenClash/Tailscale 正常运行：首跑会临时停
+        # OpenClash 跑 CloudflareST 再恢复）。首跑/结果任一失败即硬失败。
+        cdn_optimize_firstrun || die "CDN 优选首跑失败（服务已就绪仍失败，请排查后重跑：sh $0 cdn run）"
+        verify_cdn_outcome    || die "CDN 优选未生效：/etc/hosts 无优选条目（重试：sh $0 cdn run）"
         log "=== 完成 ==="
     else
-        warn "=== 完成：自检存在硬失败，请按上面 [FAIL] 排查（时序软项见 [warn]，可稍后重跑 verify）==="
+        warn "=== 服务自检存在硬失败 —— 已跳过 CDN 优选（优选需服务正常运行），按上面 [FAIL] 排查后重跑 ==="
         exit 1
     fi
 }
