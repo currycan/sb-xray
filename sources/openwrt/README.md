@@ -481,6 +481,23 @@ sh openwrt-init.sh passwall2    # 装/更新 PassWall2
 
 相关变量见 `config.env.example`「插件安装」段：`CRFB_REPO` / `CRFB_TAG` / `CRFB_FALLBACK_TAG` / `GH_PROXY` / `CRFB_RESTART`（全部带默认兜底，不填即可用）。
 
+### 5.8 单独收口 LAN 公网 IPv6（`ipv6` 子命令）
+
+独立子命令，只跑 `setup_lan_ipv6`（关 LAN 的 RA/DHCPv6/SLAAC + 删 `ip6assign` + WAN 不拉 IPv6 PD + 清残留公网 GUA）。**只动 IPv6，不碰 IPv4/SSH**，幂等可重跑：
+
+```sh
+sh openwrt-init.sh ipv6         # 禁用 LAN 公网 IPv6（KEEP_IPV6=1 跳过）
+```
+
+适用场景：
+
+- **下游路由器**：挂在主回国路由器下游的二级路由，本身不需要回国出口/Tailscale/OpenClash，但若它从某条上联拿到公网 IPv6 并默认作 IPv6 server，会把公网 v6 经 SLAAC 下发给客户端、客户端 v6 直出绕过回国（ipleak 暴露真实 IP/DNS）。这类设备**只需跑 `ipv6` 子命令**收口，**不要跑全套 `sh openwrt-init.sh`**（那会装 Tailscale / 纳管 OpenClash / 装 xray bridge / 上监控，不适合下游机）。
+- **恢复出厂后**：路由器重置会清掉之前的 IPv6 抑制配置，公网 v6 泄露重现；重新 `wget` 脚本后跑一次 `ipv6` 子命令即可恢复防护。
+
+行为与全装流程里的 IPv6 防泄露段完全一致（同一函数），由 `KEEP_IPV6` 控制（默认 `0` 禁用；`1` = 自建 v6 回国出口者保留，见 §4 变量表）。
+
+> **无需 config.env**：本子命令独立运行，不要求 config.env 存在。有则尊重其中的 `KEEP_IPV6`，没有则按默认 `0`（禁用）执行；也支持内联 `KEEP_IPV6=1 sh openwrt-init.sh ipv6`。
+
 ---
 
 ## 6. 问题处理

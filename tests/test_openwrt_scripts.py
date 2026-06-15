@@ -60,6 +60,13 @@ def test_setup_help_documents_modes_and_config() -> None:
         assert keyword in out, f"help 缺少关键说明: {keyword}"
 
 
+def test_setup_help_documents_ipv6_subcommand() -> None:
+    """ipv6 子命令是下游机/恢复出厂后单独收口公网 IPv6 的独立入口，help 必须列出。"""
+    out = _run(_SETUP, "--help").stdout
+    assert "ipv6" in out, "help 缺少 ipv6 子命令说明"
+    assert "KEEP_IPV6" in out, "help 未说明 KEEP_IPV6 逃生阀"
+
+
 def test_bridge_help_documents_subcommands() -> None:
     out = _run(_BRIDGE, "--help").stdout
     for sub in ("list", "up", "down", "status", "menu"):
@@ -162,6 +169,23 @@ def test_setup_main_wires_new_steps_in_order() -> None:
     assert main_body.index("setup_openclash_config") < main_body.index("setup_openclash_decouple")
     assert main_body.index("setup_monitor_cron") < main_body.index("install_cdn_speedtest")
     assert main_body.index("install_cdn_speedtest") < main_body.index("if verify")
+
+
+def test_setup_ipv6_subcommand_wired() -> None:
+    """ipv6 子命令必须接入 dispatch、只复用 setup_lan_ipv6，且独立于 config.env
+    （下游机单独收口入口，不进全装流程、不因缺 config.env 报错）。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "ipv6) main_ipv6 ;;" in src, "dispatch case 未接入 ipv6 子命令"
+    body = src[src.index("main_ipv6() {"):]
+    body = body[: body.index("\n}")]
+    assert "setup_lan_ipv6" in body, "main_ipv6 未调用 setup_lan_ipv6"
+    # config 无关：不得走 load_config（那会校验 CN_EXIT_MODE 并打印配置来源）；
+    # config.env 只能「存在才 source」，缺失不得报错。
+    assert "load_config" not in body, "main_ipv6 不应调用 load_config（应独立于 config.env）"
+    assert "[ -f" in body, "main_ipv6 应对 config.env 用『存在才 source』守卫"
+    # 子命令是轻量入口：不得拉起全装步骤（Tailscale/bridge/OpenClash 纳管）
+    for heavy in ("install_tailscale", "install_xray_bridge", "setup_openclash_config"):
+        assert heavy not in body, f"main_ipv6 误调用全装步骤 {heavy}"
 
 
 @pytest.mark.parametrize("template", ["op-amd", "op-arm"])

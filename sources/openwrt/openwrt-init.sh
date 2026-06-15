@@ -27,7 +27,7 @@ die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-用法: sh openwrt-init.sh [cdn [run|status|clean] | openclash | passwall2] [-h|--help]
+用法: sh openwrt-init.sh [cdn [run|status|clean] | openclash | passwall2 | ipv6] [-h|--help]
 
 sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenClash 配置纳管 + CDN 优选。
 
@@ -57,6 +57,11 @@ CDN 子命令:
   sh openwrt-init.sh openclash       装/更新 OpenClash（CloudRunFilesBuilder .run）
   sh openwrt-init.sh passwall2       装/更新 PassWall2（同上）
   相关变量: CRFB_TAG(空=latest API) CRFB_FALLBACK_TAG GH_PROXY(镜像前缀,空=直连) CRFB_RESTART(默认1)
+
+IPv6 防泄露子命令（独立入口，不进默认全装；幂等，只动 IPv6 不碰 IPv4/SSH）:
+  sh openwrt-init.sh ipv6            仅禁用 LAN 公网 IPv6（回国 IPv4-only，防客户端
+                                     v6 直出绕过；KEEP_IPV6=1 跳过）。适合下游路由器
+                                     或恢复出厂后单独收口，无需跑全套初始化。
 
 前置: fw4/nftables 的 OpenWrt；socks5/balance 模式需已装 OpenClash（本脚本不装本体）。
 完成后自动自检（verify）：硬失败非 0 退出，时序软项只 warn 可稍后重跑复查。
@@ -143,7 +148,7 @@ load_config() {
         . "$CONFIG"
         _cfg_src="$CONFIG"
     else
-        _cfg_src="环境变量（未找到 $CONFIG）"
+        _cfg_src="内联环境变量/默认值（config.env 可选，未提供）"
     fi
     # 默认值
     # CN_EXIT_MODE 未设默认 balance（两套都装，与历史 install.sh 行为一致，不破坏既有部署）
@@ -1984,6 +1989,16 @@ main_crfb() {
     install_crfb_pkg "$1"
 }
 
+main_ipv6() {
+    # ipv6 子命令完全独立于 config.env：存在则仅静默 source（为取 KEEP_IPV6 逃生阀），
+    # 缺失既不报错也不提示。刻意不走全装配置加载器（它会校验 CN_EXIT_MODE 并打印配置
+    # 来源），对「仅关 LAN 公网 IPv6」的下游/恢复出厂场景那是多余噪声。
+    # setup_lan_ipv6 自身 ${KEEP_IPV6:-0} 兜底；内联 KEEP_IPV6=1 sh openwrt-init.sh ipv6 也生效。
+    _cfg="${CONFIG:-$(dirname "$0")/config.env}"
+    [ -f "$_cfg" ] && . "$_cfg"
+    setup_lan_ipv6
+}
+
 # ── 主流程 ────────────────────────────────────────────────────────
 
 main_cdn() {
@@ -2051,6 +2066,7 @@ case "${1:-}" in
     cdn) shift; main_cdn "$@" ;;
     openclash) main_crfb openclash ;;
     passwall2) main_crfb passwall2 ;;
+    ipv6) main_ipv6 ;;
     '') main ;;
     *) die "未知参数: $1（-h|--help 查看用法）" ;;
 esac
