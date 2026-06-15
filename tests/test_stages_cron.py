@@ -202,3 +202,58 @@ def test_substore_check_replaces_stale_entry(tmp_path: Path) -> None:
     content = target.read_text(encoding="utf-8")
     assert content.count("substore-check") == 1
     assert "30 4 * * *" in content
+
+
+def test_installs_secrets_refresh_default_hourly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")  # pin minute 0 (shared jitter)
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "0 */1 * * * /scripts/entrypoint.py secrets-refresh" in content
+    assert content.count("secrets-refresh") == 1
+
+
+def test_secrets_refresh_disabled_with_zero(tmp_path: Path) -> None:
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target, secret_hours=0)
+    content = target.read_text(encoding="utf-8")
+    assert "secrets-refresh" not in content
+    assert "geo-update" in content
+
+
+def test_secrets_refresh_env_var_drives_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SECRET_REFRESH_INTERVAL_HOURS", "4")
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "0 */4 * * * /scripts/entrypoint.py secrets-refresh" in content
+
+
+def test_secrets_refresh_env_var_invalid_disables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SECRET_REFRESH_INTERVAL_HOURS", "garbage")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "secrets-refresh" not in content
+
+
+def test_secrets_refresh_replaces_stale_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    target.write_text(
+        "0 */12 * * * /scripts/entrypoint.py secrets-refresh\n",
+        encoding="utf-8",
+    )
+    sbcron.install_crontab(cron_file=target, secret_hours=1)
+    content = target.read_text(encoding="utf-8")
+    assert content.count("secrets-refresh") == 1
+    assert "0 */1 * * *" in content

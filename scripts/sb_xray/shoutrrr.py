@@ -253,6 +253,24 @@ def _format_canary_updated(payload: dict, title_prefix: str) -> tuple[str, str]:
     return title, "\n\n".join([f"镜像构建: {built}", "四项自检全部通过"])
 
 
+def _format_secret_refresh_completed(payload: dict[str, object], title_prefix: str) -> tuple[str, str]:
+    """secret.refresh.completed → 远端密钥轮换已生效的中文卡片。
+
+    secrets-refresh cron 检测到 tmp.bin 内容变化、重渲染配置并重启 xray/sing-box
+    后推送本卡，运维据此确认轮换已落到运行中的节点。changed/removed 为受影响的
+    凭据键数量（不含明文，避免泄露）。
+    """
+    title = f"{title_prefix} 🔐 密钥已更新"
+    detail: list[str] = []
+    if payload.get("changed"):
+        detail.append(f"变更 {payload['changed']} 项")
+    if payload.get("removed"):
+        detail.append(f"移除 {payload['removed']} 项")
+    head = "凭据已轮换" + (f"（{' · '.join(detail)}）" if detail else "")
+    restarted = "已重启 xray/sing-box 生效" if payload.get("restarted") else "未重启（启动阶段）"
+    return title, "\n".join([head, restarted])
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -288,6 +306,8 @@ def _format_message(event: str, payload: dict, title_prefix: str) -> tuple[str, 
         return _format_canary_updated(payload, title_prefix)
     if event == "substore.sub_fetch.failed":
         return _format_substore_failure(payload, title_prefix)
+    if event == "secret.refresh.completed":
+        return _format_secret_refresh_completed(payload, title_prefix)
     if event in _BAN_TITLES:
         title = f"{title_prefix} {_BAN_TITLES[event]}"
         user = str(payload.get("email") or "").split("@", 1)[0]

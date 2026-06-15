@@ -158,6 +158,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
 
     sub.add_parser(
+        "secrets-refresh",
+        help="Re-fetch + decrypt tmp.bin; hot-reload xray/sing-box if credentials changed (cron entry).",
+    )
+
+    sub.add_parser(
         "xray-run",
         help="Clean stale UDS sockets in /dev/shm, then exec xray (supervisord-managed).",
     )
@@ -560,8 +565,14 @@ def run_pipeline(
         reported after the first VPS re-deploy.
         """
         try:
-            status = sbsecrets.decrypt_remote_secrets(secret_file=_secret_file())
-            logger.info("secrets status=%s", status.value)
+            # ``refresh_remote_secrets`` (not ``decrypt_remote_secrets``): every
+            # boot re-checks upstream ``tmp.bin`` and atomically replaces the
+            # cached ``secret_file`` when the decrypted content changed, so a
+            # ``--force-recreate`` (or a watchtower image swap) picks up a
+            # rotated secret without manually wiping ``.envs/secret``. Offline /
+            # no-DECODE with a cached file degrades to SKIPPED — boot never fails.
+            result = sbsecrets.refresh_remote_secrets(secret_file=_secret_file())
+            logger.info("secrets status=%s", result.status.value)
         except RuntimeError as exc:
             logger.warning("secrets 解密失败，继续启动: %s", exc)
         # ``source "${SECRET_FILE}"`` equivalent — idempotent; no-op if
@@ -724,6 +735,11 @@ def main(argv: list[str] | None = None) -> int:
         from sb_xray import substore_check
 
         return substore_check.run_check_and_report()
+
+    if args.command == "secrets-refresh":
+        from sb_xray.stages import secrets_refresh
+
+        return secrets_refresh.run()
 
     if args.command == "xray-run":
         from sb_xray.stages import xray_run

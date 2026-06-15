@@ -250,6 +250,12 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 
 > `<PREFIX>` 可自定义（如 `LA`、`KR`），需在 `DEFAULT_ISP` 中指定全局兜底前缀。
 
+> 📘 **密钥轮换如何下发到运行中的节点**：`/.env/secret` 是远端加密库 `tmp.bin` 解密后的本地缓存，经宿主机卷持久化。更新 `tmp.bin` 后，运行中的服务通过两条路径感知变更，均**镜像内默认生效**：
+> - **周期 cron**（`secrets-refresh`，默认每小时，见 §6）：下载比对 `tmp.bin`，凭据有变化才重解密 `/.env/secret`、覆盖运行期 env、重测选路并热重启 xray/sing-box，生效延迟有上界（默认 ≤1h），与镜像发布节奏解耦。
+> - **每次 boot 复检**：容器启动时复查上游，内容变化即原子替换缓存，故 `docker compose up -d --force-recreate`（或 watchtower 镜像跳变重建）会顺带刷新——**无需再手删 `.envs/secret`**。上游不可达且本地已有缓存时降级用旧值，启动不失败。
+>
+> 🔧 **立即下发某次轮换**（不等周期 cron）：`docker exec sb-xray /scripts/entrypoint.py secrets-refresh`；期望日志含 `secrets-refresh: completed`（凭据无变化则 `secrets-refresh: noop`）。
+
 ### 2.4 自动生成变量（`/.env/sb-xray`，首次启动后永久缓存）
 
 > ⚠️ **禁止在 docker-compose 中手动设置**，否则会锁死随机值，重建容器无法刷新。
@@ -331,6 +337,8 @@ docker compose restart
 | `ISP_LEADER_HYSTERESIS` | `1.15` | 上报主选（`FASTEST_PROXY_TAG`）的跨轮滞回余量：挑战者需超过上轮 leader 该倍数才换主，抑制抖动翻转告警 |
 | `ISP_8K_SMOOTH_MBPS` | `60` | `IS_8K_SMOOTH` 判定阈值（Mbps），与内部评级梯子 8K 档对齐；旧值 100 对跨境单连接几乎不可达 |
 | `SUBSTORE_CHECK_CRON` | `30 4 * * *` | 每日产出全部 remote 订阅做拉取自检的 cron 表达式；任一订阅失败（HTTP 非 2xx 或 0 节点）即发 `substore.sub_fetch.failed` 告警；置空 `""` 禁用 |
+| `SECRET_REFRESH_INTERVAL_HOURS` | `1` | `secrets-refresh` cron 间隔（小时）：周期下载比对远端 `tmp.bin`，凭据变化才重解密 `/.env/secret` 并热重配；`0` 禁用。与镜像发布解耦，使密钥轮换有上界生效延迟（见 §2.3） |
+| `SECRET_REFRESH_ENABLED` | `true` | 即使 cron 已安装，也可通过此开关让 `secrets-refresh` 子命令 no-op |
 | `ISP_PER_SERVICE_SB` | `false` | 开启后 sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 生成独立 `isp-auto-<service>` urltest balancer,各自用该服务的真实域名探测;xray 因 observatory 单例不受影响 |
 | `ISP_FALLBACK_STRATEGY` | `direct` | `direct`(静默直连) / `block`(fail-closed,CN / HK / RU 建议) |
 | `ISP_SPEED_CACHE_TTL_MIN` | `60` | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
@@ -620,16 +628,17 @@ docker compose restart sb-xray
 
 ### 5.6 定时任务（cron）总表
 
-系统运行期共有 **4 个定时任务**，分属两个调度来源：前 3 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 4 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
+系统运行期共有 **5 个定时任务**，分属两个调度来源：前 4 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 5 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
 
 | # | 任务 | 默认表达式 | 控制变量 | 调度来源 | 用途 |
 |:---:|:---|:---|:---|:---|:---|
 | 1 | `geo-update` | `0 3 * * *` | —（恒定 daily 03:00） | root crontab | 强制刷新 GeoIP/GeoSite 规则库并重启 xray（见 §5.1） |
 | 2 | `isp-retest` | `0 */6 * * *`（按 hostname 打散分钟位） | `ISP_RETEST_INTERVAL_HOURS`（默认 `6`，`0` 禁用） | root crontab | 周期性带宽重测，线路集/类别变化时热重配 balancer（见 §2.6） |
 | 3 | `substore-check` | `30 4 * * *` | `SUBSTORE_CHECK_CRON`（空串禁用） | root crontab | 拉取自检全部 remote 订阅，失败发 `substore.sub_fetch.failed` 告警（见 §2.6） |
-| 4 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
+| 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，发 `secret.refresh.completed` 事件（见 §2.3） |
+| 5 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
 
-> 📘 任务 1–3 用 `docker exec sb-xray crontab -l` 可见；任务 4 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
+> 📘 任务 1–4 用 `docker exec sb-xray crontab -l` 可见；任务 5 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
 
 ---
 

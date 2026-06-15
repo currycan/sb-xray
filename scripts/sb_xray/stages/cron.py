@@ -31,6 +31,7 @@ _GEO_MARKER = "geo-update"
 _ISP_MARKER = "isp-retest"
 _SUBSTORE_MARKER = "substore-check"
 _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
+_SECRET_MARKER = "secrets-refresh"
 
 
 def _hours_to_cron_spec(hours: int, minute: int = 0) -> str:
@@ -104,11 +105,39 @@ def _read_hours_env() -> int:
         return 0
 
 
+def _secret_refresh_entry(hours: int) -> str | None:
+    """Cron line that re-decrypts ``tmp.bin`` and hot-reloads on change.
+
+    Hourly by default so a rotated secret reaches a long-running container
+    within the interval, decoupled from image-release cadence (watchtower only
+    recreates on a new image). Shares :func:`_jitter_minute` fleet spread.
+    """
+    if hours <= 0:
+        return None
+    spec = _hours_to_cron_spec(hours, _jitter_minute())
+    return f"{spec} /scripts/entrypoint.py secrets-refresh >> /var/log/secret_refresh.log 2>&1"
+
+
+def _read_secret_hours_env() -> int:
+    raw = os.environ.get("SECRET_REFRESH_INTERVAL_HOURS", "").strip()
+    if not raw:
+        return 1  # default cadence: hourly upstream poll
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning(
+            "invalid SECRET_REFRESH_INTERVAL_HOURS=%r — disabling cron secret refresh",
+            raw,
+        )
+        return 0
+
+
 def install_crontab(
     *,
     cron_file: Path = _DEFAULT_CRON,
     geo_entry: str = _GEO_ENTRY,
     isp_hours: int | None = None,
+    secret_hours: int | None = None,
 ) -> None:
     """Ensure the periodic crontab entries exist, idempotently.
 
@@ -120,6 +149,8 @@ def install_crontab(
     hours = _read_hours_env() if isp_hours is None else isp_hours
     isp_entry = _isp_retest_entry(hours)
     substore_entry = _substore_check_entry()
+    secret_hours_val = _read_secret_hours_env() if secret_hours is None else secret_hours
+    secret_entry = _secret_refresh_entry(secret_hours_val)
 
     cron_file.parent.mkdir(parents=True, exist_ok=True)
     existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
@@ -130,19 +161,26 @@ def install_crontab(
         and "geo_update.sh" not in ln
         and _ISP_MARKER not in ln
         and _SUBSTORE_MARKER not in ln
+        and _SECRET_MARKER not in ln
     ]
     lines.append(geo_entry)
     if isp_entry is not None:
         lines.append(isp_entry)
     if substore_entry is not None:
         lines.append(substore_entry)
+    if secret_entry is not None:
+        lines.append(secret_entry)
     cleaned = "\n".join(lines).rstrip() + "\n"
     cron_file.write_text(cleaned, encoding="utf-8")
     cron_file.chmod(0o600)
-    if isp_entry is not None:
-        logger.info(
-            "Cron 定时任务已安装 (geo-update daily 03:00; isp-retest every %dh)",
-            hours,
-        )
-    else:
-        logger.info("Cron 定时任务已安装 (geo-update daily 03:00; isp-retest disabled)")
+    isp_desc = f"isp-retest every {hours}h" if isp_entry is not None else "isp-retest disabled"
+    secret_desc = (
+        f"secrets-refresh every {secret_hours_val}h"
+        if secret_entry is not None
+        else "secrets-refresh disabled"
+    )
+    logger.info(
+        "Cron 定时任务已安装 (geo-update daily 03:00; %s; %s)",
+        isp_desc,
+        secret_desc,
+    )
