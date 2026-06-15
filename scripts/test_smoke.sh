@@ -159,6 +159,17 @@ if [ -f "${REPO_ROOT}/pyproject.toml" ] && [ -d "${REPO_ROOT}/scripts/sb_xray" ]
     else
         info "ruff 未安装，跳过静态检查"
     fi
+
+    # mypy 类型检查(若 mypy 可用)——配置见 pyproject [tool.mypy]（strict, files=scripts/sb_xray）
+    if command -v mypy >/dev/null 2>&1; then
+        if (cd "${REPO_ROOT}" && mypy 2>&1); then
+            ok "Python: mypy 通过"
+        else
+            bad "Python: mypy 失败"
+        fi
+    else
+        info "mypy 未安装，跳过类型检查"
+    fi
 else
     info "pyproject.toml / sb_xray 包尚未就绪，跳过 Python 检查"
 fi
