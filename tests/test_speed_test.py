@@ -172,8 +172,7 @@ class _FakeStreamResp:
         pass
 
     def iter_bytes(self, chunk_size: int | None = None):
-        for c in self._chunks:
-            yield c
+        yield from self._chunks
 
 
 class _FakeStreamCM:

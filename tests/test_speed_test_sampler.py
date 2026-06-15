@@ -213,16 +213,8 @@ def test_stream_measure_mbps_uses_mebibit_units() -> None:
     sampler so ``isp_retest._max_delta_pct`` doesn't see a schema-wide
     jump on the v1→v2 cutover.
     """
-    # 10 MiB metered over exactly 1.0s → 80.00 Mib/s
-    chunks = [b"z" * (10 * 1024 * 1024)]
-    clock = _clock_from(
-        [
-            0.0,  # chunk 1 → first byte, warmup starts
-            0.001,  # next chunk would be checked — but iterator is done
-        ]
-    )
-    # Use warmup=0 + window positive; single-chunk path lands in degraded branch
-    # To force the happy path we need ≥3 chunks. Split 10 MiB → 3 × ~3.33 MiB.
+    # 10 MiB metered over exactly 1.0s → 80.00 Mib/s.
+    # Force the happy path with ≥3 chunks. Split 10 MiB → 4 × ~2.5 MiB.
     chunk = b"z" * (10 * 1024 * 1024 // 3)
     client = _FakeStreamClient([chunk, chunk, chunk, chunk])  # 4 chunks
     clock = _clock_from(

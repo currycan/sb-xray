@@ -164,11 +164,11 @@ def test_setup_main_wires_new_steps_in_order() -> None:
     src = _SETUP.read_text(encoding="utf-8")
     # rindex：内嵌 cdn-speedtest heredoc 里也有自己的 main()，外层 main() 是最后一个
     main_body = src[src.rindex("main() {"):]
-    for fn in ("setup_openclash_config", "install_cdn_speedtest"):
+    for fn in ("setup_openclash_config", "install_cdn_tooling"):
         assert fn in main_body, f"main() 未调用 {fn}"
     assert main_body.index("setup_openclash_config") < main_body.index("setup_openclash_decouple")
-    assert main_body.index("setup_monitor_cron") < main_body.index("install_cdn_speedtest")
-    assert main_body.index("install_cdn_speedtest") < main_body.index("if verify")
+    assert main_body.index("setup_monitor_cron") < main_body.index("install_cdn_tooling")
+    assert main_body.index("install_cdn_tooling") < main_body.index("if verify")
 
 
 def test_setup_ipv6_subcommand_wired() -> None:
@@ -395,7 +395,6 @@ def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None
     script = _extract_embedded_cdn(tmp_path)
     src = script.read_text(encoding="utf-8")
     for fn in (
-        "extract_cfst_fallback",
         "restore_proxy_env",
         "build_cdn_domains",
         "install_cloudflarest",
@@ -414,8 +413,8 @@ def test_cdn_install_step_guards_and_cron(tmp_path: Path) -> None:
     """install_cdn_speedtest 契约：CDN_DOMAIN 空则跳过；清理旧版 cdn-speedtest.sh
     cron 行；cron 注入带 grep 守卫。"""
     src = _SETUP.read_text(encoding="utf-8")
-    assert "install_cdn_speedtest()" in src
-    body = src[src.index("install_cdn_speedtest()"):src.index("# ── 端到端自检")]
+    assert "install_cdn_tooling()" in src
+    body = src[src.index("install_cdn_tooling()"):src.index("# ── 端到端自检")]
     assert '"$CDN_DOMAIN"' in body
     assert "/usr/bin/cdn-speedtest run" in body
     assert "cdn-speedtest\\.sh" in body  # 旧路径 cron 清理
@@ -428,21 +427,21 @@ def test_cdn_install_step_guards_and_cron(tmp_path: Path) -> None:
     assert "${SPEED_TEST_COUNT:-5}" in embedded
     assert "${SPEED_TEST_LATENCY_MAX:-200}" in embedded
     assert "${SPEED_TEST_MIN_SPEED:-5}" in embedded
-    assert "verify_cdn()" in src
+    assert "verify_cdn_outcome()" in src
     assert "main_cdn()" in src
     assert "cdn) shift; main_cdn" in src
     main_cdn_start = src.index("main_cdn()")
     main_cdn = src[main_cdn_start:src.index("\nmain()", main_cdn_start)]
-    assert main_cdn.index("install_cdn_speedtest") < main_cdn.index("verify_cdn")
-    assert "CDN 优选已生效（last_best.txt）" in src, "verify_cdn 缺少 CDN 首跑软自检"
+    assert main_cdn.index("install_cdn_tooling") < main_cdn.index("verify_cdn_outcome")
+    assert "CDN 优选缓存就位（last_best.txt）" in src, "verify_cdn_outcome 缺少 CDN 首跑软自检"
 
 
-def test_embedded_cfst_extract_fallback_wired() -> None:
-    """busybox tar 不识别上游无 ustar 魔数归档：内嵌脚本必须带回退解包器并接线。"""
+def test_embedded_cfst_extract_via_gnu_tar() -> None:
+    """busybox tar 不识别上游无 ustar 魔数归档：失败时自动装 GNU tar 解全量
+    （cfst + ip.txt + ipv6.txt 一并解出），结构上消除「漏抽某文件」类 bug。"""
     src = _SETUP.read_text(encoding="utf-8")
-    assert "extract_cfst_fallback()" in src, "缺少回退解包器定义"
-    assert "if ! tar -xzf" in src, "tar 失败路径未接回退"
-    assert 'extract_cfst_fallback "${INSTALL_DIR}/${tarball}"' in src, "回退未被调用"
+    assert "ensure_gnu_tar()" in src, "缺少 GNU tar 自动安装器"
+    assert "if ! ensure_gnu_tar || ! tar -xzf" in src, "tar 失败路径未接 ensure_gnu_tar"
 
 
 def test_embedded_speedtest_trap_recovery(tmp_path: Path) -> None:
@@ -455,7 +454,11 @@ def test_embedded_speedtest_trap_recovery(tmp_path: Path) -> None:
     # 子 shell 陷阱：run_speedtest 经 $() 执行，父进程必须有独立 trap（含杀残留 cfst）
     assert "测速父进程被中断" in embedded, "main() run 分支缺父进程 trap"
     assert "pkill -x cfst" in embedded, "父进程 trap 应清理残留 cfst"
-    assert embedded.index("测速父进程被中断") < embedded.index("best_ip=$(run_speedtest)"), "父 trap 须先于命令替换安装"
+    # 用唯一的实际代码行（含 ``|| exit 1``）定位命令替换；裸字符串 best_ip=$(run_speedtest)
+    # 在上方 stderr 诊断注释里也出现，naive .index() 会误命中注释而非真正的命令替换。
+    assert embedded.index("测速父进程被中断") < embedded.index("best_ip=$(run_speedtest) || exit 1"), (
+        "父 trap 须先于命令替换安装"
+    )
     # 恢复函数不得依赖子 shell 局部变量；OpenClash 恢复须锁串行 + 无条件 restart
     assert "OPENCLASH_STOPPED" not in embedded, "恢复判定不得用 shell 变量"
     assert "mkdir /tmp/.cdn-speedtest-oc-restore.lock" in embedded, "恢复缺原子锁"
