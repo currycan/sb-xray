@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -23,6 +24,20 @@ def _isolate(monkeypatch: pytest.MonkeyPatch) -> None:
         "IS_8K_SMOOTH",
     ):
         monkeypatch.delenv(k, raising=False)
+    # Drop any *_ISP_IP left over so node-backed cache validation is deterministic.
+    for key in [k for k in os.environ if k.endswith("_ISP_IP")]:
+        monkeypatch.delenv(key, raising=False)
+
+
+def _back_nodes(monkeypatch: pytest.MonkeyPatch, *prefixes: str) -> None:
+    """Register live ISP nodes in env so their proxy-<slug> tags are 'backed'.
+
+    ``_back_nodes(monkeypatch, "CN2")`` sets ``CN2_ISP_IP`` / ``CN2_ISP_PORT``,
+    which discovery resolves to the tag ``proxy-cn2-isp``.
+    """
+    for i, prefix in enumerate(prefixes):
+        monkeypatch.setenv(f"{prefix}_ISP_IP", f"10.0.0.{i + 1}")
+        monkeypatch.setenv(f"{prefix}_ISP_PORT", "1080")
 
 
 def _write_status(
@@ -44,9 +59,12 @@ def _write_status(
 
 def test_cache_hit_skips_live_measurement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     status = tmp_path / "status"
-    _write_status(status, ts=int(time.time()), speeds={"proxy-cn2": 100.0})
+    _write_status(
+        status, ts=int(time.time()), speeds={"proxy-cn2-isp": 100.0}, isp_tag="proxy-cn2-isp"
+    )
     monkeypatch.setenv("STATUS_FILE", str(status))
     monkeypatch.setenv("ISP_SPEED_CACHE_ASYNC", "false")
+    _back_nodes(monkeypatch, "CN2")
 
     measure = MagicMock()
     monkeypatch.setattr(speed_test, "measure_isp_speeds", measure)
@@ -54,7 +72,7 @@ def test_cache_hit_skips_live_measurement(tmp_path: Path, monkeypatch: pytest.Mo
     speed_test.run_isp_speed_tests()
 
     measure.assert_not_called()
-    assert json.loads(__import__("os").environ["_ISP_SPEEDS_JSON"]) == {"proxy-cn2": 100.0}
+    assert json.loads(os.environ["_ISP_SPEEDS_JSON"]) == {"proxy-cn2-isp": 100.0}
 
 
 def test_cache_miss_when_no_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,6 +182,7 @@ def test_coldboot_cachehit_then_async_keeps_isp_out(
         encoding="utf-8",
     )
     monkeypatch.setenv("ISP_SPEED_CACHE_ASYNC", "false")  # drive async timing manually
+    _back_nodes(monkeypatch, "US")  # proxy-us-isp must be a live node for the cache to hold
 
     # Main-thread cold boot: cache-hit must set HAS_ISP_NODES.
     st.run_isp_speed_tests()
@@ -192,3 +211,77 @@ def test_coldboot_cachehit_then_async_keeps_isp_out(
     from sb_xray.network import get_fallback_proxy
 
     assert get_fallback_proxy() == "isp-auto"
+
+
+def test_speed_cache_hit_rejects_stale_isp_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: STATUS_FILE caches a node (proxy-us-isp) whose *_ISP_IP was
+    dropped from SECRET_FILE. The TTL cache path must reject the cache and fall
+    through to a live measure — otherwise the stale tag reaches the isp-auto
+    urltest / xray balancer with no matching outbound and the engine crashes
+    with 'dependency proxy-us-isp not found for outbound isp-auto'."""
+    status = tmp_path / "status"
+    _write_status(
+        status,
+        ts=int(time.time()),
+        speeds={"proxy-us-isp": 30.0, "proxy-cn2-isp": 80.0},
+        isp_tag="proxy-cn2-isp",
+    )
+    monkeypatch.setenv("STATUS_FILE", str(status))
+    monkeypatch.setenv("ISP_SPEED_CACHE_ASYNC", "false")
+    _back_nodes(monkeypatch, "CN2")  # US_ISP removed → proxy-us-isp is now stale
+
+    assert speed_test._try_speed_cache_hit() is False
+    # Rejected before mutating env — no stale speeds leak downstream.
+    assert "_ISP_SPEEDS_JSON" not in os.environ
+
+
+def test_speed_cache_hit_accepts_when_all_tags_backed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The node check must not over-reject: a cache whose every tag still has a
+    backing node stays a hit."""
+    status = tmp_path / "status"
+    _write_status(
+        status,
+        ts=int(time.time()),
+        speeds={"proxy-cn2-isp": 80.0, "proxy-hk-isp": 120.0},
+        isp_tag="proxy-hk-isp",
+    )
+    monkeypatch.setenv("STATUS_FILE", str(status))
+    monkeypatch.setenv("ISP_SPEED_CACHE_ASYNC", "false")
+    _back_nodes(monkeypatch, "CN2", "HK")
+
+    assert speed_test._try_speed_cache_hit() is True
+    assert json.loads(os.environ["_ISP_SPEEDS_JSON"]) == {
+        "proxy-cn2-isp": 80.0,
+        "proxy-hk-isp": 120.0,
+    }
+
+
+def test_speed_cache_hit_rejects_non_dict_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-object _ISP_SPEEDS_JSON (e.g. a JSON array) is treated as a miss."""
+    status = tmp_path / "status"
+    status.write_text(
+        "\n".join(
+            [
+                f"export ISP_LAST_RETEST_TS='{int(time.time())}'",
+                "export _ISP_SPEEDS_JSON='[1, 2, 3]'",
+                "export ISP_TAG='proxy-cn2-isp'",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STATUS_FILE", str(status))
+    _back_nodes(monkeypatch, "CN2")
+    assert speed_test._try_speed_cache_hit() is False
+
+
+def test_current_isp_tags_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_current_isp_tags derives proxy-<slug> from each *_ISP_IP prefix."""
+    _back_nodes(monkeypatch, "CN2", "HK")
+    assert speed_test._current_isp_tags() == {"proxy-cn2-isp", "proxy-hk-isp"}
