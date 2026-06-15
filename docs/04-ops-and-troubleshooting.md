@@ -820,6 +820,7 @@ balancer configured: probe=<URL> interval=1m tolerance=300ms nodes=2 per_service
 | `命中缓存 ISP_TAG=proxy-xx，跳过测速` | `/.env/status` 存有旧结果，删除后重启可重新测速 |
 | `speed cache hit (age=… ttl=…) — deferring live test to background` | TTL 缓存命中（`ISP_SPEED_CACHE_TTL_MIN`，默认 60 分钟），后台线程异步刷新 |
 | `缓存 ISP_TAG=… 在当前 *_ISP_IP 环境里已不存在 …，清缓存后重新测速` | 缓存的出口已被运维从密钥库移除，自动失效并重测；同时静默联动清除所有 `*_OUT` 旧缓存（该清除无独立日志行） |
+| `speed cache 含已失效节点 …，清缓存后重新测速` | TTL 缓存里残留了已从密钥库移除的节点出口，自动判缓存失效并实测重选——无需手动清 `/.env/status`。此守卫防止残留出口落进 `isp-auto` 成员却无对应出站，导致 `dependency[proxy-xx] not found` 启动失败 |
 | `→ 新最优` | 该节点速度超过当前最优，成为新的 FASTEST_PROXY_TAG |
 | `最优仍: proxy-xx` | 该节点速度未超过当前最优 |
 | `注入出站: proxy-xx (XX Mbps)` | 全部 ISP 节点按速度降序注入出站配置 |

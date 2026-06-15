@@ -25,6 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`cn-exit-setup.sh` → `openwrt-init.sh` 更名**：与 `vps-cn-exit-init.sh` 命名对称。路由器上的运行时产物名（`cn-bridge`、`cn-bridge-monitor`、`/etc/cn-exit/`、`xray-bridge-<名>`）全部不变，已部署路由器无需迁移；仓库内全部文档/注释/测试引用同步更名（CHANGELOG 历史条目保留旧名）。迁移：下次重跑时按 README 下载新名脚本即可，旧脚本副本可删。
 
+### Fixed（修复）
+
+- **残留测速缓存致删节点后 `dependency[proxy-X] not found` 启动崩溃**（`scripts/sb_xray/speed_test.py` + `scripts/sb_xray/routing/isp.py`）：运维从 `SECRET_FILE` 删除某 ISP 节点后未清 `STATUS_FILE`，启动时 sing-box/xray 报 `dependency[proxy-<slug>] not found for outbound[isp-auto]`。根因：`isp-auto` urltest / xray balancer 的成员来自测速缓存 `_ISP_SPEEDS_JSON`，而 `proxy-*` 出站只由当前 env 的 `*_ISP_IP` 生成——两者不同源；冷启动 TTL 缓存路径 `_try_speed_cache_hit()` 原样复用缓存、**不校验 tag 是否仍是当前节点**（其兄弟函数 `_try_cache_hit()` 早有此校验，加固不一致）。双层修复（均镜像内默认生效、不新增 env，符合 §2）：① **源头校验**——`_try_speed_cache_hit()` 与 `_try_cache_hit()` 对齐，缓存任一 tag 不再有 `*_ISP_IP` 后端即判 cache miss、落到实测重生成干净 speeds 并重选赢家（系统自愈，运维无需手动清 `STATUS_FILE`）；两路径共用新抽出的 `_current_isp_tags()` 消除漂移。② **配置层兜底**——`build_client_and_server_configs()` 生成成员前把 `speeds` 与当前节点求交集，从结构上保证「urltest/balancer 成员 ⊆ 已生成出站」，对 sing-box 与 xray 一处覆盖；全员失配时 speeds 收敛为空、urltest/balancer 优雅置空。新增回归测试覆盖两层（含「删节点不清缓存」「全员失配」「健康缓存不误杀」）。
+
 ### Security（安全）
 
 - **op-amd / op-arm 模板 dashboard 密码脱敏**：真实生产密码以明文存在于公共仓库模板（`option dashboard_password`），改为 `<OPENCLASH_DASHBOARD_PASSWORD>` 占位符，由 `openwrt-init.sh` 从 config.env（`OPENCLASH_DASHBOARD_PASSWORD`，gitignored）注入。注意：git 历史中仍有旧值，建议轮换该密码。
