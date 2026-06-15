@@ -20,15 +20,13 @@ import contextlib
 import json
 import logging
 import os
-import subprocess
 import time
-from pathlib import Path
 
 from sb_xray.events import emit_event
+from sb_xray.stages.reload_util import restart_daemons as _restart_daemons
+from sb_xray.stages.reload_util import restore_media_routing as _restore_media_routing
 
 logger = logging.getLogger(__name__)
-
-_SUPERVISOR_SOCKET = Path("/var/run/supervisor.sock")
 
 
 def _enabled() -> bool:
@@ -65,31 +63,6 @@ def _top_tag(speeds: dict[str, float]) -> str:
     if not speeds:
         return ""
     return max(speeds.items(), key=lambda kv: kv[1])[0]
-
-
-def _restore_media_routing() -> None:
-    """Re-run media probes so sb.json's ``${*_OUT}`` placeholders resolve.
-
-    The ``*_OUT`` media-routing vars (GEMINI_OUT / NETFLIX_OUT / …) are only
-    written to ``os.environ`` during the boot media stage. This cron retest is
-    a fresh process without them, so re-rendering sb.json here would otherwise
-    bake literal ``${GEMINI_OUT}`` into the config — sing-box then drops all
-    media (anytls/tuic) traffic with ``outbound not found``. Best-effort: on
-    probe failure we leave the vars unset and rely on config_builder's
-    direct-fallback safety net (so a flaky probe never aborts the reload).
-    """
-    try:
-        from sb_xray.routing import media as sbmedia
-
-        for key, value in sbmedia.check_all().items():
-            os.environ[key] = value
-        # ISP_OUT (电商: amazon/paypal/ebay；模板还用于 social/tiktok 规则) 不是
-        # media 探针项，须按 boot (entrypoint._cache_media_probes) 同样推导，否则
-        # retest 后悬空 → 两核都退成 direct，电商走数据中心 IP 触发风控。isp-auto
-        # 恒被生成（dead 线已不再过滤），故沿用 boot 的 HAS_ISP_NODES 判据即安全。
-        os.environ["ISP_OUT"] = "isp-auto" if os.environ.get("HAS_ISP_NODES") else "direct"
-    except Exception as exc:  # pragma: no cover — defensive, C-layer catches the rest
-        logger.warning("media 探针恢复失败 (%s); 依赖 sb.json direct 兜底", exc)
 
 
 def _routing_class(isp_tag: str) -> str:
@@ -145,33 +118,6 @@ def _should_reload(
     if _routing_class(old_isp_tag) != _routing_class(new_isp_tag):
         return True, "routing_class_changed"
     return False, "no_change"
-
-
-def _restart_daemons(
-    *,
-    socket_path: Path = _SUPERVISOR_SOCKET,
-    runner: object = subprocess,
-) -> bool:
-    """Restart xray + sing-box through supervisorctl.
-
-    Mirrors :func:`sb_xray.geo._restart_xray_if_running`: no-op when
-    supervisord isn't up yet (i.e. we're inside the boot pipeline).
-    Returns ``True`` on attempted restart, ``False`` on skip.
-    """
-    if not socket_path.is_socket():
-        logger.info("supervisord socket absent — skipping restart (likely boot-time call)")
-        return False
-    for svc in ("xray", "sing-box"):
-        try:
-            runner.run(  # type: ignore[attr-defined]
-                ["supervisorctl", "restart", svc],
-                check=False,
-                timeout=10,
-            )
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.warning("重启 %s 失败: %s", svc, exc)
-    logger.info("xray/sing-box 已重启以加载新 balancer 配置")
-    return True
 
 
 def _speed_summary(outcome: object) -> dict | None:
