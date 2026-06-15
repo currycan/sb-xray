@@ -322,6 +322,7 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | `ARCH_OVERRIDE` | 可选 | 留空自动检测；可强制 `arm64` / `amd64` |
 | `RELOAD_OPENCLASH` | 可选 | `1` = 安装末尾自动 reload OpenClash 使规则立即生效，默认 `0` 只提示 |
 | `DOWNLOAD_RETRIES` | 可选 | 下载失败重试次数，默认 3 |
+| `KEEP_IPV6` | 可选 | 默认 `0` = init 禁用 LAN 公网 IPv6（关 RA/DHCPv6 + WAN 不拉 PD）。回国为 IPv4-only，不禁则客户端公网 IPv6 直出绕过回国、ipleak 暴露真实 IP/DNS。`1` = 保留 IPv6（仅自建 v6 回国出口时用） |
 | `ALERT_TG_TOKEN` / `ALERT_TG_CHAT` | 可选 | telegram bot token / chat id，填了才告警 |
 | `MON_INTERVAL` / `MON_THRESHOLD` | 可选 | 探活周期（分钟，默认 2）/ 连续失败几次才告警（默认 3） |
 | `OPENCLASH_MANAGE` | 可选 | OpenClash 配置纳管开关，默认 `1`；`0` = 不碰 `/etc/config/openclash` 本体 |

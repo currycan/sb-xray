@@ -152,6 +152,9 @@ load_config() {
     # TS_ADVERTISE_ROUTES 无默认值：lan 网段因部署而异，必须显式提供（validate_config 校验）
     RELOAD_OPENCLASH="${RELOAD_OPENCLASH:-0}"
     DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
+    # IPv6 防泄露：默认禁用 LAN 公网 IPv6（回国为 IPv4-only，不代理 v6；见 setup_lan_ipv6）。
+    # KEEP_IPV6=1 = 逃生阀，自建 IPv6 回国者保留 v6。默认 0 向后兼容（旧部署本就无 v6 代理）。
+    KEEP_IPV6="${KEEP_IPV6:-0}"
     # CloudRunFilesBuilder（仅 openclash/passwall2 子命令用；不进默认全装流程）
     # 全部带默认兜底，watchtower/旧 env 集重建不受影响。
     CRFB_REPO="${CRFB_REPO:-wkccd/CloudRunFilesBuilder}"   # 上游每日构建仓库（可换 fork）
@@ -937,6 +940,62 @@ render_openclash_config() {
         END { flush_block() }
     ' > "$2"
     chmod 600 "$2"
+}
+
+# ── IPv6 防泄露（默认禁用 LAN 公网 IPv6）─────────────────────────────
+# 回国是 IPv4-only：socks5（OpenClash）与 reverse（xray bridge）都不代理 IPv6。
+# 若本机 WAN 从 ISP 拿到公网 IPv6（国内 240e 常见）且 LAN 默认作 IPv6 server，
+# 客户端会拿到公网 IPv6 并直出、绕过回国 → ipleak 暴露真实 IP/DNS。默认镜像
+# 「IPv6 全关」的干净配置：LAN 不下发 IPv6（RA/DHCPv6/SLAAC/NDP 全关）+ WAN 不
+# 拉 PD（ipv6=0 + GL 的 *6 dhcpv6 别名口 disabled）。幂等：无变更则跳过。
+# KEEP_IPV6=1 整体跳过（自建 IPv6 回国者用，需自行解决 v6 不走回国的问题）。
+setup_lan_ipv6() {
+    if [ "${KEEP_IPV6:-0}" = "1" ]; then
+        log "KEEP_IPV6=1：跳过 IPv6 禁用（保留公网 IPv6——注意回国不代理 v6，v6 流量直出）"
+        return 0
+    fi
+    _v6_changed=0
+    # 1) LAN 停止向客户端下发 IPv6
+    for _kv in ra=disabled dhcpv6=disabled ra_slaac=0 ndp=disabled; do
+        _k=${_kv%%=*}; _vv=${_kv#*=}
+        if [ "$(uci -q get dhcp.lan.$_k)" != "$_vv" ]; then
+            uci set dhcp.lan.$_k="$_vv"; _v6_changed=1
+        fi
+    done
+    # 停止给 LAN 切分委派前缀
+    if [ -n "$(uci -q get network.lan.ip6assign)" ]; then
+        uci delete network.lan.ip6assign 2>/dev/null && _v6_changed=1
+    fi
+    # 2) WAN 停止拉取 IPv6（含 GL 的 *6 dhcpv6 别名口）
+    for _w in wan secondwan; do
+        if [ -n "$(uci -q get network.$_w)" ] && [ "$(uci -q get network.$_w.ipv6)" != "0" ]; then
+            uci set network.$_w.ipv6="0"; _v6_changed=1
+        fi
+    done
+    for _w6 in wan6 secondwan6 wwan6 tethering6; do
+        if [ -n "$(uci -q get network.$_w6)" ] && [ "$(uci -q get network.$_w6.disabled)" != "1" ]; then
+            uci set network.$_w6.disabled="1"; _v6_changed=1
+        fi
+    done
+    if [ "$_v6_changed" = "0" ]; then
+        log "IPv6 已是禁用态，跳过"
+        return 0
+    fi
+    uci commit dhcp; uci commit network
+    /etc/init.d/odhcpd restart 2>/dev/null
+    for _w6 in wan6 secondwan6 wwan6 tethering6; do
+        [ -n "$(uci -q get network.$_w6)" ] && ifdown "$_w6" >/dev/null 2>&1
+    done
+    # runtime 立即生效：关 accept_ra + 清残留公网 GUA（仅 2000::/3，保留 ULA；
+    # 全是 IPv6 操作，不触碰 IPv4/SSH）
+    for _i in $(ls /sys/class/net 2>/dev/null); do
+        sysctl -w "net.ipv6.conf.$_i.accept_ra=0" >/dev/null 2>&1
+    done
+    ip -o -6 addr show scope global 2>/dev/null | while read -r _x _dev _fam _addr _rest; do
+        case "$_addr" in 2*|3*) ip -6 addr del "$_addr" dev "$_dev" 2>/dev/null ;; esac
+    done
+    ip -6 route flush proto ra 2>/dev/null
+    log "已禁用 LAN 公网 IPv6（防回国 IPv6/DNS 泄露；如确需保留设 KEEP_IPV6=1）"
 }
 
 setup_openclash_config() {
@@ -1749,6 +1808,12 @@ verify() {
     # LuCI 上易被误开，且症状隐蔽（域名通、裸 IP 不通），此处兜底拦截。
     check "OpenClash 未开启「仅代理 FakeIP」绕过 (lan_ac_traffic)" \
         sh -c "[ \"\$(uci -q get 'openclash.@lan_ac_traffic[0].enabled' 2>/dev/null)\" != '1' ]"
+    # IPv6 防泄露护栏：回国不代理 IPv6，LAN 一旦下发公网 IPv6（GUA 2000::/3）客户端
+    # 就直出绕过回国（ipleak 暴露真实 IP/DNS）。KEEP_IPV6=1 是用户显式选择，跳过。
+    if [ "${KEEP_IPV6:-0}" != "1" ]; then
+        check "LAN 未下发公网 IPv6（防回国泄露；确需保留设 KEEP_IPV6=1 并自行解决 v6 回国）" \
+            sh -c "! ip -6 addr show dev br-lan 2>/dev/null | grep -qE 'inet6 [23]'"
+    fi
     # OpenClash 配置纳管自检（渲染产物由 setup_openclash_config 留在 /tmp 供比对）。
     # 漂移比对必须用软检查：OpenClash 启动头 ~10s 会把 redirect_dns/cachesize_dns
     # 临时翻 0、移除 dnsmasq_cachesize（DNS 接管交接期状态暂存），随后自行恢复——
@@ -1958,6 +2023,8 @@ main() {
         setup_socks_skip_auth
         setup_socks5_force_direct   # socks5 入站回国流量强制 direct，对齐 r-tunnel
     fi
+    # IPv6 防泄露（所有模式：回国 IPv4-only，公网 v6 会绕过；KEEP_IPV6=1 可保留）
+    setup_lan_ipv6
     # OpenClash 配置纳管：模板渲染 + 幂等应用（自身按 OPENCLASH_MANAGE 与 OpenClash
     # 存在性决定跑不跑）；放在解耦/重排前，统一由解耦末尾的 restart 生效
     setup_openclash_config
