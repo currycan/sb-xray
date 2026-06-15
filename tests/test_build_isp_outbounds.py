@@ -143,3 +143,54 @@ def test_service_rules_use_env_or_fallback(monkeypatch: pytest.MonkeyPatch) -> N
     rules = out["XRAY_SERVICE_RULES"]
     assert '"outboundTag": "proxy-hk-isp"' in rules
     assert '"balancerTag": "isp-auto"' in rules
+
+
+def test_stale_speed_tag_excluded_from_urltest_and_balancer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defense-in-depth: a speeds dict carrying a tag with no backing node
+    (operator removed US_ISP_* but STATUS_FILE still lists proxy-us-isp) must
+    not leak into the isp-auto urltest / xray balancer members — otherwise
+    sing-box/xray crash with 'dependency proxy-us-isp not found'. The builder
+    must guarantee members ⊆ generated outbounds."""
+    monkeypatch.setenv("HAS_ISP_NODES", "true")
+    monkeypatch.setenv("FASTEST_PROXY_TAG", "proxy-cn2-isp")
+    monkeypatch.setenv("CN2_ISP_IP", "1.1.1.1")
+    monkeypatch.setenv("CN2_ISP_PORT", "1080")
+    monkeypatch.setenv("CN2_ISP_USER", "u1")
+    monkeypatch.setenv("CN2_ISP_SECRET", "p1")
+    # proxy-us-isp is stale: no US_ISP_* in env.
+    speeds = {"proxy-us-isp": 30.0, "proxy-cn2-isp": 80.0}
+
+    out = sbisp.build_client_and_server_configs(speeds=speeds)
+
+    # Stale tag absent everywhere; live node present.
+    for section in ("CUSTOM_OUTBOUNDS", "SB_CUSTOM_OUTBOUNDS", "SB_ISP_URLTEST"):
+        assert "proxy-us-isp" not in out[section]
+    assert "proxy-cn2-isp" in out["SB_CUSTOM_OUTBOUNDS"]
+    assert "proxy-us-isp" not in out["XRAY_BALANCERS_SECTION"]
+    assert "proxy-us-isp" not in out["XRAY_OBSERVATORY_SECTION"]
+
+    # Invariant: every proxy-* member of the urltest is a generated outbound.
+    urltest = json.loads(out["SB_ISP_URLTEST"].rstrip(","))
+    proxy_members = [t for t in urltest["outbounds"] if t.startswith("proxy-")]
+    assert proxy_members == ["proxy-cn2-isp"]
+    for tag in proxy_members:
+        assert tag in out["SB_CUSTOM_OUTBOUNDS"]
+
+
+def test_all_stale_speeds_yields_no_urltest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When every cached tag is stale, the filtered speeds are empty — urltest
+    and balancer collapse to empty (no dangling members), no exception."""
+    monkeypatch.setenv("HAS_ISP_NODES", "true")
+    monkeypatch.setenv("FASTEST_PROXY_TAG", "proxy-us-isp")
+    # No *_ISP_IP backing any of these tags.
+    speeds = {"proxy-us-isp": 30.0, "proxy-old-isp": 20.0}
+
+    out = sbisp.build_client_and_server_configs(speeds=speeds)
+
+    assert out["SB_ISP_URLTEST"] == ""
+    assert out["XRAY_BALANCERS_SECTION"] == ""
+    assert out["XRAY_OBSERVATORY_SECTION"] == ""
+    assert out["SB_CUSTOM_OUTBOUNDS"] == ""
+    assert out["CUSTOM_OUTBOUNDS"] == ""

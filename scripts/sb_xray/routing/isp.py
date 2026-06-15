@@ -495,6 +495,15 @@ def build_client_and_server_configs(*, speeds: dict[str, float] | None = None) -
         os.environ[v] = ""
 
     nodes_by_tag = _discover_isp_nodes_with_tags()
+    # Defense-in-depth: drop speed entries whose proxy outbound won't be
+    # generated (no backing node in the current env). The outbound loop below
+    # already skips unbacked tags via `node is None`, but build_sb_urltest /
+    # build_xray_balancer receive `speeds` directly — an unfiltered stale tag
+    # would land in the isp-auto urltest / balancer members with no matching
+    # outbound → "dependency proxy-X not found". Filtering here guarantees
+    # members ⊆ generated outbounds for both sing-box and xray in one place.
+    if speeds:
+        speeds = {t: v for t, v in speeds.items() if t in nodes_by_tag}
     has_isp_nodes = bool(os.environ.get("HAS_ISP_NODES"))
     fastest_tag = os.environ.get("FASTEST_PROXY_TAG", "")
 

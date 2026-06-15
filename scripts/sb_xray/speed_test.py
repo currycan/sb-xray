@@ -712,6 +712,16 @@ def _discover_isp_nodes() -> list[tuple[str, str, str, str, str]]:
     return nodes
 
 
+def _current_isp_tags() -> set[str]:
+    """Proxy tags backed by a live ISP node in the current env.
+
+    Single source of truth shared by both cache-read paths
+    (:func:`_try_cache_hit`, :func:`_try_speed_cache_hit`) so neither can
+    drift and accept a tag whose ``*_ISP_IP`` was dropped from SECRET_FILE.
+    """
+    return {_isp_tag_for(prefix) for prefix, *_ in _discover_isp_nodes()}
+
+
 def _status_file() -> Path:
     return Path(os.environ.get("STATUS_FILE", "/.env/status"))
 
@@ -873,7 +883,7 @@ def _try_cache_hit(cached_tag: str) -> bool:
     and the caller runs a fresh measurement.
     """
     nodes = _discover_isp_nodes()
-    available_tags = {_isp_tag_for(prefix) for prefix, *_ in nodes}
+    available_tags = _current_isp_tags()
     if cached_tag == "direct" or cached_tag in available_tags:
         logger.info("命中缓存 ISP_TAG=%s，跳过测速", cached_tag)
         if nodes:
@@ -1289,8 +1299,26 @@ def _try_speed_cache_hit() -> bool:
 
     # Validate parsed speeds before accepting.
     try:
-        _json.loads(speeds_raw)
+        cached_speeds = _json.loads(speeds_raw)
     except _json.JSONDecodeError:
+        return False
+    if not isinstance(cached_speeds, dict):
+        return False
+
+    # Reject the cache when it references an ISP node no longer in the env
+    # (operator dropped a node from SECRET_FILE without clearing STATUS_FILE).
+    # Mirrors _try_cache_hit so the TTL path self-heals too; otherwise the
+    # stale proxy-<slug> flows into the isp-auto urltest / xray balancer members
+    # while its outbound is skipped → sing-box/xray crash with
+    # "dependency proxy-<slug> not found".
+    available_tags = _current_isp_tags()
+    stale = {t for t in cached_speeds if t not in ("direct", "block") and t not in available_tags}
+    if stale:
+        logger.warning(
+            "speed cache 含已失效节点 %s（当前 %s），清缓存后重新测速",
+            sorted(stale),
+            sorted(available_tags) or "无",
+        )
         return False
 
     os.environ["_ISP_SPEEDS_JSON"] = speeds_raw
