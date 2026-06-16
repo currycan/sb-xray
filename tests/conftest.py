@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+# 让 tests 能 import sources/deploy-config/ 下的独立脚本（gen_deploy_config），该目录不在 pyproject pythonpath。
+_DEPLOY_CONFIG_DIR = Path(__file__).resolve().parent.parent / "sources" / "deploy-config"
+if str(_DEPLOY_CONFIG_DIR) not in sys.path:
+    sys.path.insert(0, str(_DEPLOY_CONFIG_DIR))
 
 
 @pytest.fixture
