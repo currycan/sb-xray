@@ -17,6 +17,7 @@
 | `nodes.list.example` | 多 VPS 节点清单模板（多节点高可用用） | 与主脚本同目录，装入 `/etc/cn-exit/nodes.list` |
 | `cn-bridge` | 拨号工具：随时拨通 / 断开任意 VPS 的回国隧道 | 脚本自动装到 `/usr/bin/cn-bridge` |
 | `cn-bridge-monitor` | 双腿探活 + telegram 告警 | 脚本自动装到 `/usr/bin/cn-bridge-monitor` |
+| `cn-backup` | 配置备份 / 一键恢复（官方 sysupgrade 机制 + 加密离机留存），见 §5.9 | 脚本自动装到 `/usr/bin/cn-backup` |
 | `gl-inet.sh` | GL.iNet 设备一键工具箱（BE3600/BE6500/MT-3000），独立于 cn-exit，用法见 [gl-inet.md](gl-inet.md) | 设备 SSH 里 wget 自取，跑完即可删 |
 
 另有两类产物不在本目录，由主脚本自动取用/生成：OpenClash 配置模板在 [`../openclash/`](../openclash/)（同目录文件优先，否则按架构自动下载）；`cdn-speedtest` 工具内嵌在主脚本里（启用 CDN 优选时写出到 `/usr/bin/cdn-speedtest`）。
@@ -498,6 +499,61 @@ sh openwrt-init.sh ipv6         # 禁用 LAN 公网 IPv6（KEEP_IPV6=1 跳过）
 行为与全装流程里的 IPv6 防泄露段完全一致（同一函数），由 `KEEP_IPV6` 控制（默认 `0` 禁用；`1` = 自建 v6 回国出口者保留，见 §4 变量表）。
 
 > **无需 config.env**：本子命令独立运行，不要求 config.env 存在。有则尊重其中的 `KEEP_IPV6`，没有则按默认 `0`（禁用）执行；也支持内联 `KEEP_IPV6=1 sh openwrt-init.sh ipv6`。
+
+---
+
+### 5.9 配置备份 / 一键恢复（`cn-backup`）
+
+**面向场景**：同一台机器、固件不动，只是配置丢了或被改坏，回滚到已知正确状态。整机重建 / 灾备切换是另一条路径，见 `docs/11`。
+
+**机制**：完全复用 OpenWrt 官方 `sysupgrade`，不自造打包/解包。`openwrt-init.sh` 全装时（或单跑 `sh openwrt-init.sh backup`）会幂等补全 `/etc/sysupgrade.conf`，把官方备份默认漏掉但有用的路径纳入：`/etc/cn-exit/`、`/usr/bin/cn-bridge*`、`/usr/bin/cn-ts-keepalive`、`/etc/init.d/xray-bridge-*`、`/etc/init.d/tailscale`、`/etc/hotplug.d/iface/99-tailscale-udp-gro`、`/root/sb-xray-openwrt/`、`/root/.ssh/`、`/etc/subdomains.txt`（CDN 优选输入）、`/etc/CloudflareST/last_best.txt`（CDN 优选门禁）、`/etc/sb-xray/`（CRFB 插件版本 marker）。补全后连 LuCI「系统 → 备份与更新 → 生成备份」也已够全。
+
+> CDN 优选的**实际结果**（优选 IP → 域名映射）写在 `/etc/hosts`，已被官方 keep.d 清单纳入备份；上面再补输入 `subdomains.txt` 与门禁 `last_best.txt`，使纯 `sysupgrade -r` 恢复（不重跑全装）后 CDN 优选 cron 也能直接续跑。`/etc/CloudflareST/` 的 cfst 二进制（~8MB）可再生，故不入备份。
+
+**每次 `save` 产两份**：
+
+| 产物 | 范围 | 用途 |
+|------|------|------|
+| `*-safe.tar.gz` | 官方清单（**不含** Tailscale 活动身份） | 灌到替换机不抢单例 IP（配合 `docs/11` 重建） |
+| `*-full.tar.gz` | 额外并入 `/etc/tailscale/` | 同机回滚连身份一起恢复，免重新授权 |
+
+> ⚠️ 两份**都含 secret**（`/etc/shadow` 密码哈希、SSH 主机密钥、VPS token、config.env，以及 `/root/.ssh/` 里能登录整个 VPS 机队的私钥）。本地明文留存（路由器本就持有全部活 secret），**上云前一律 `openssl` 加密**。因加密口令默认复用路由器密码、且密文会上传到机队各 VPS，务必保证口令强度与离机保管（见下）。
+
+**用法**：
+
+```sh
+# 一次性 bootstrap（补清单 + 装 cn-backup + 写 backup.env + 注册每日 cron）
+sh openwrt-init.sh backup
+
+cn-backup save                 # 立即备份：safe+full → 本地留存最近 N 份 → 加密推云端
+cn-backup save --local-only    # 只本地、不上云
+cn-backup list                 # 列出本地备份
+cn-backup restore <file>       # 还原（.enc 自动解密）；高危，见下
+```
+
+**存储策略**（由 `config.env` 的 `BACKUP_*` 变量驱动，见 `config.env.example`）：
+
+| | 本地（`/root/backups`） | 云端（各 VPS，`scp`） |
+|---|---|---|
+| 目标 | 路由器自身 | **`BRIDGE_HOT` 指定的各 VPS**（按节点名从 `nodes.list` 取 FQDN，SSH 直连） |
+| 产物 | safe + full，**明文** | safe + full，**`openssl` 加密 `.enc`** |
+| 留存 | 最近 `BACKUP_RETENTION_DAYS` 份（默认 3） | 每台节点各自同样保留 |
+| 频率 | 每日 cron（`BACKUP_CRON_SCHEDULE`，默认 04:30） | 同一次 `save` 推送 |
+
+**前置（一次性）**：
+
+- 加密：`BACKUP_ENC_PASS`（可复用路由器密码）→ 写入 `/etc/cn-exit/backup.pass`；`openssl` CLI 由脚本 `apk add openssl-util` 自动装。**口令务必另存安全位置**——丢了云端密文无法解密。
+- 云端目标：复用 `BRIDGE_HOT` 节点（与拨号/监控同一组）。把一把能登录这些 VPS 的 SSH 私钥放到路由器 `BACKUP_REMOTE_KEY`（默认 `/root/.ssh/id_ed25519`），公钥须已在各 VPS `authorized_keys`（复用现成的运维 key 即免额外配置）；`BACKUP_REMOTE_USER`（默认 root）/`BACKUP_REMOTE_PORT`（按机队实际，如 38666）/`BACKUP_REMOTE_DIR`。`BACKUP_REMOTE_DIR` 空或无 `BRIDGE_HOT` 节点则仅本地备份。
+- SSH 客户端：配置了云端目标时，脚本会自动 `apk add openssh-client openssh-client-utils`。OpenWrt 默认的 dropbear `dbclient` **无法解析 RSA-4096 私钥**（报 `String too long`）且不认 `-o` 选项，故云端上传依赖 OpenSSH client；装好后 cn-backup 自动优先用它。
+- 告警：失败（备份/加密/任一节点上传）时推 Telegram，复用 `ALERT_TG_TOKEN`/`ALERT_TG_CHAT`；未配则只写 `/var/log/cn-backup.log`。
+
+**恢复（高危）**：`cn-backup restore` 走 `sysupgrade -r`，含 `network`/`firewall`，远程执行**可能自锁 SSH**。建议在 **console / 物理可达**时操作；工具内置二次确认（`--yes` 跳过）。还原后建议 `reboot` 使全部配置生效。
+
+```sh
+# 例：用云端取回的加密全量备份还原
+scp root@vps.example:/opt/openwrt-backups/openwrt-<host>-<ts>-full.tar.gz.enc /tmp/
+cn-backup restore /tmp/openwrt-<host>-<ts>-full.tar.gz.enc
+```
 
 ---
 

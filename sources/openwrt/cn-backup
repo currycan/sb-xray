@@ -1,0 +1,315 @@
+#!/bin/sh
+# cn-backup —— sb-xray OpenWrt 配置备份 / 一键恢复（OpenWrt / BusyBox ash）
+#
+# 设计：完全复用官方 sysupgrade 机制，不自造打包/解包逻辑。
+#   - 备份 = `sysupgrade -b <file>`（打包范围由各包 keep.d + /etc/sysupgrade.conf 决定，
+#     后者由 openwrt-init.sh 的 setup_sysupgrade_conf 幂等补全）。
+#   - 恢复 = `sysupgrade -r <file>`。
+#   每次 save 产两份：
+#     *-safe.tar.gz  —— 官方清单范围（不含 Tailscale 活动身份，可灌到替换机不抢单例 IP）
+#     *-full.tar.gz  —— 额外并入 /etc/tailscale/（同机回滚连身份一起恢复，免重新授权）
+#   注意：两份都含 secret（/etc/shadow、SSH key、VPS token、/root/.ssh 私钥等）——
+#   本地明文留存，上云前一律 openssl 加密。
+#
+# 云端：scp 到 BRIDGE_HOT 指定的各 VPS（按节点名从 nodes.list 取 FQDN，直连 SSH）。
+# 告警：任一环节失败时 curl Telegram（复用 ALERT_TG_TOKEN/ALERT_TG_CHAT）。
+# 运行配置读自 /etc/cn-exit/backup.env（由 openwrt-init.sh 从 config.env 生成）。
+#
+# 用法：
+#   cn-backup save [--local-only]      生成 safe+full、本地留存、（默认）加密推各 VPS
+#   cn-backup restore <file> [--yes]   用备份还原配置（含 network/firewall，高危）
+#   cn-backup list                     列出本地备份
+#
+# 兼容 BusyBox ash / POSIX sh —— 不用 bashism。
+
+ENVFILE=/etc/cn-exit/backup.env
+SUCONF=/etc/sysupgrade.conf
+TS_PATH=/etc/tailscale/
+
+# 默认值（可被 backup.env 覆盖）
+BDIR=/root/backups
+RETENTION=3
+BACKUP_RETRIES=6
+NODES=/etc/cn-exit/nodes.list
+HOT=
+REMOTE_USER=root
+REMOTE_PORT=22
+REMOTE_KEY=/root/.ssh/id_ed25519
+REMOTE_DIR=
+PASSFILE=/etc/cn-exit/backup.pass
+TG_TOKEN=
+TG_CHAT=
+ENABLE=1
+
+log()  { printf '[cn-backup] %s\n' "$*"; }
+warn() { printf '[cn-backup] WARN: %s\n' "$*" >&2; }
+die()  { printf '[cn-backup] ERROR: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<'USAGE'
+用法: cn-backup [save [--local-only]|restore <file> [--yes]|list|-h|--help]
+
+sb-xray OpenWrt 配置备份 / 一键恢复，完全复用官方 sysupgrade 机制。
+每次 save 产两份：
+  *-safe.tar.gz  官方清单范围（不含 Tailscale 活动身份）
+  *-full.tar.gz  额外并入 /etc/tailscale/（同机回滚连身份恢复）
+两份都含 secret（密码/SSH key/token）；上云前一律 openssl 加密。
+
+子命令:
+  save [--local-only]    生成 safe+full → 本地留存最近 N 份 → 默认加密推各 VPS
+                         --local-only 只本地、不上云
+  restore <file> [--yes] sysupgrade -r 还原；.enc 自动解密；含 network/firewall（高危，
+                         可能中断 SSH，建议 console/物理可达时执行）；--yes 跳过确认
+  list                   列出本地备份目录
+
+云端目标: BRIDGE_HOT 指定的各 VPS（按节点名从 nodes.list 取 FQDN，scp 直连）
+告警:     失败时 curl Telegram（ALERT_TG_TOKEN/ALERT_TG_CHAT）
+运行配置: /etc/cn-exit/backup.env（由 openwrt-init.sh 从 config.env 生成）
+本地目录: /root/backups（保留份数 RETENTION，默认 3）
+USAGE
+}
+
+case "${1:-}" in -h|--help|help) usage; exit 0 ;; esac
+
+# shellcheck source=/dev/null
+[ -f "$ENVFILE" ] && . "$ENVFILE"
+
+# 传输客户端选择：OpenWrt 默认 dropbear，但其 dbclient 无法解析 RSA-4096 私钥
+# （加载 -i key 即报 "String too long"），且不认 OpenSSH 的 -o 选项。装了 OpenSSH
+# client 则优先用它（解析各类 key + 支持 -o）；否则回退 dropbear dbclient（-y 自动接受
+# host key）。openwrt-init.sh 的 setup_backup_cron 会在配置了云端时自动装 openssh-client。
+if ssh -V 2>&1 | grep -qi openssh; then
+    _DB=0
+elif command -v dbclient >/dev/null 2>&1; then
+    _DB=1
+else
+    _DB=0
+fi
+
+_hostname() {
+    _h=$(uci -q get system.@system[0].hostname 2>/dev/null)
+    [ -n "$_h" ] || _h=$(cat /proc/sys/kernel/hostname 2>/dev/null) || _h=openwrt
+    printf '%s' "$_h"
+}
+
+# 节点名 → FQDN（nodes.list 每行：<名> <FQDN> <token>，# 注释忽略）
+_node_fqdn() {
+    [ -f "$NODES" ] || return 1
+    awk -v n="$1" '!/^#/ && $1==n {print $2; exit}' "$NODES" 2>/dev/null
+}
+
+# 失败告警（无 TG 配置则静默跳过）
+_notify() {
+    [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] || return 0
+    curl -s -m 15 "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+        --data-urlencode "chat_id=$TG_CHAT" \
+        --data-urlencode "text=$1" >/dev/null 2>&1 || true
+}
+
+# sysupgrade -b 带重试：OpenClash 持续写 /etc/openclash/（smart_weight_data.csv、
+# cache/history db 等），busybox tar 偶发 "file changed as we read it" → sysupgrade
+# 整体非零退出并删产物。该竞争是瞬时的，重试采样到 OpenClash 不写的窗口即过。
+_sysupgrade_b() {
+    _out=$1
+    _n=0
+    while [ "$_n" -lt "$BACKUP_RETRIES" ]; do
+        _n=$((_n + 1))
+        if sysupgrade -b "$_out" >/dev/null 2>&1; then return 0; fi
+        rm -f "$_out" 2>/dev/null
+        sleep 3
+    done
+    return 1
+}
+
+# safe：官方清单原样
+_backup_safe() {
+    _sysupgrade_b "$1" || die "sysupgrade 备份失败（重试 $BACKUP_RETRIES 次仍失败）: $1"
+}
+
+# full：子 shell 内临时把 /etc/tailscale/ 并入 sysupgrade.conf，EXIT trap 保证还原
+_backup_full() {
+    _out=$1
+    (
+        _orig=$(mktemp)
+        if [ -f "$SUCONF" ]; then cp "$SUCONF" "$_orig"; _had=1; else _had=0; fi
+        trap '[ "$_had" = 1 ] && cp "$_orig" "$SUCONF" 2>/dev/null; [ "$_had" = 0 ] && rm -f "$SUCONF" 2>/dev/null; rm -f "$_orig"' EXIT
+        grep -qxF "$TS_PATH" "$SUCONF" 2>/dev/null || printf '%s\n' "$TS_PATH" >> "$SUCONF"
+        _sysupgrade_b "$_out"
+    ) || die "sysupgrade 全量备份失败（重试 $BACKUP_RETRIES 次仍失败）: $_out"
+}
+
+# 按份数 prune（每天 1 次 → 份数即天数，与定时无关，确定性更强）
+_prune_local() {
+    _series=$1
+    # ls -t 按 mtime 排序保留最新 N 份；备份文件名自带时间戳，无特殊字符，SC2012 不适用
+    # shellcheck disable=SC2012
+    ls -1t "$BDIR"/openwrt-*-"$_series".tar.gz 2>/dev/null | tail -n +$((RETENTION + 1)) | while read -r _f; do
+        rm -f "$_f"
+    done
+}
+
+_encrypt() {
+    _in=$1; _out=$2
+    command -v openssl >/dev/null 2>&1 || die "openssl 未安装（apk add openssl-util）"
+    [ -s "$PASSFILE" ] || die "加密口令文件缺失或为空: $PASSFILE"
+    openssl enc -aes-256-cbc -pbkdf2 -salt -in "$_in" -out "$_out" -pass file:"$PASSFILE" \
+        || die "加密失败: $_in"
+}
+
+# 远端执行命令（_ssh_node <fqdn> <cmd>）
+_ssh_node() {
+    _fqdn=$1; _cmd=$2
+    if [ "$_DB" = 1 ]; then
+        dbclient -y -i "$REMOTE_KEY" -p "$REMOTE_PORT" "${REMOTE_USER}@${_fqdn}" "$_cmd"
+    else
+        ssh -p "$REMOTE_PORT" -i "$REMOTE_KEY" \
+            -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+            "${REMOTE_USER}@${_fqdn}" "$_cmd"
+    fi
+}
+
+# 上传文件（dropbear 无可用 scp -o；用 dbclient 管道 cat 写远端，规避 host-key 交互）
+_push_to() {
+    _fqdn=$1; _file=$2; _bn=$(basename "$_file")
+    if [ "$_DB" = 1 ]; then
+        dbclient -y -i "$REMOTE_KEY" -p "$REMOTE_PORT" "${REMOTE_USER}@${_fqdn}" \
+            "cat > '$REMOTE_DIR/$_bn'" < "$_file"
+    else
+        scp -P "$REMOTE_PORT" -i "$REMOTE_KEY" \
+            -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+            "$_file" "${REMOTE_USER}@${_fqdn}:${REMOTE_DIR}/"
+    fi
+}
+
+_prune_remote_node() {
+    _fqdn=$1; _series=$2
+    _ssh_node "$_fqdn" "ls -1t '$REMOTE_DIR'/openwrt-*-$_series.tar.gz.enc 2>/dev/null | tail -n +$((RETENTION + 1)) | xargs -r rm -f" \
+        2>/dev/null || warn "远端 prune 失败（$_fqdn $_series）"
+}
+
+# 失败告警：cmd_save 全程 EXIT trap，未走到 done 即视为失败并推 TG
+_save_phase=init
+_save_on_exit() {
+    _rc=$?
+    [ "$_save_phase" = ok ] && return 0
+    _notify "⚠️ cn-backup 失败 @$(_hostname) 阶段[$_save_phase] rc=$_rc，见 /var/log/cn-backup.log"
+}
+
+cmd_save() {
+    _local_only=0
+    [ "${1:-}" = "--local-only" ] && _local_only=1
+    command -v sysupgrade >/dev/null 2>&1 || die "sysupgrade 不可用（非 OpenWrt？）"
+    trap '_save_on_exit' EXIT
+    mkdir -p "$BDIR"
+    _ts=$(date +%Y%m%d-%H%M%S)
+    _host=$(_hostname)
+    _safe="$BDIR/openwrt-$_host-$_ts-safe.tar.gz"
+    _full="$BDIR/openwrt-$_host-$_ts-full.tar.gz"
+
+    _save_phase="本地备份(safe)"
+    log "生成 safe 备份: $_safe"
+    _backup_safe "$_safe"
+    _save_phase="本地备份(full)"
+    log "生成 full 备份（含 Tailscale 身份）: $_full"
+    _backup_full "$_full"
+    _prune_local safe
+    _prune_local full
+    log "本地备份完成（每系列保留最近 $RETENTION 份）"
+
+    if [ "$_local_only" = 1 ]; then _save_phase=ok; trap - EXIT; log "--local-only：跳过云端"; return 0; fi
+    if [ "${ENABLE:-1}" != 1 ]; then _save_phase=ok; trap - EXIT; log "BACKUP_ENABLE=0：跳过云端"; return 0; fi
+    if [ -z "$HOT" ] || [ -z "$REMOTE_DIR" ]; then
+        _save_phase=ok; trap - EXIT
+        warn "未配置 HOT/REMOTE_DIR —— 仅本地备份"
+        return 0
+    fi
+
+    _save_phase="加密"
+    log "加密 safe / full"
+    _encrypt "$_safe" "$_safe.enc"
+    _encrypt "$_full" "$_full.enc"
+
+    _save_phase="上传"
+    _fail=""
+    for _name in $HOT; do
+        _fqdn=$(_node_fqdn "$_name")
+        if [ -z "$_fqdn" ]; then
+            warn "节点 $_name 在 nodes.list 无 FQDN，跳过"
+            _fail="$_fail $_name(no-fqdn)"
+            continue
+        fi
+        _ssh_node "$_fqdn" "mkdir -p '$REMOTE_DIR'" 2>/dev/null
+        _ok=1
+        for _v in safe full; do
+            case "$_v" in safe) _e="$_safe.enc" ;; full) _e="$_full.enc" ;; esac
+            _push_to "$_fqdn" "$_e" || _ok=0
+        done
+        if [ "$_ok" = 1 ]; then
+            _prune_remote_node "$_fqdn" safe
+            _prune_remote_node "$_fqdn" full
+            log "已上传到 $_name ($_fqdn)"
+        else
+            warn "上传 $_name ($_fqdn) 失败"
+            _fail="$_fail $_name"
+        fi
+    done
+    rm -f "$_safe.enc" "$_full.enc"
+
+    _save_phase=ok
+    trap - EXIT
+    if [ -n "$_fail" ]; then
+        warn "部分节点上传失败:$_fail"
+        _notify "⚠️ cn-backup @$(_hostname)：本地 OK，部分节点上传失败:$_fail"
+    else
+        log "云端备份完成（$HOT）"
+    fi
+}
+
+cmd_restore() {
+    _file=$1; _yes=0
+    [ "${2:-}" = "--yes" ] && _yes=1
+    [ -n "$_file" ] || die "用法: cn-backup restore <file> [--yes]"
+    [ -f "$_file" ] || die "备份文件不存在: $_file"
+    command -v sysupgrade >/dev/null 2>&1 || die "sysupgrade 不可用（非 OpenWrt？）"
+
+    _tar=$_file
+    case "$_file" in
+        *.enc)
+            command -v openssl >/dev/null 2>&1 || die "openssl 未安装，无法解密（apk add openssl-util）"
+            [ -s "$PASSFILE" ] || die "加密口令文件缺失或为空: $PASSFILE"
+            _tar=/tmp/cn-backup-restore.$$.tar.gz
+            openssl enc -d -aes-256-cbc -pbkdf2 -in "$_file" -out "$_tar" -pass file:"$PASSFILE" \
+                || { rm -f "$_tar"; die "解密失败（口令不符？）"; }
+            ;;
+    esac
+
+    warn "即将用 [$_file] 覆盖当前配置（sysupgrade -r）。含 network/firewall，可能中断 SSH —— 建议 console/物理可达时执行。"
+    if [ "$_yes" != 1 ]; then
+        printf '确认恢复？[y/N]: '
+        read -r _a
+        case "$_a" in
+            y|Y) : ;;
+            *) log "已取消"; [ "$_tar" != "$_file" ] && rm -f "$_tar"; return 1 ;;
+        esac
+    fi
+    if sysupgrade -r "$_tar"; then
+        [ "$_tar" != "$_file" ] && rm -f "$_tar"
+        log "配置已还原。建议 reboot 使全部配置生效。"
+    else
+        [ "$_tar" != "$_file" ] && rm -f "$_tar"
+        die "sysupgrade 还原失败"
+    fi
+}
+
+cmd_list() {
+    [ -d "$BDIR" ] || { log "无本地备份目录: $BDIR"; return 0; }
+    log "本地备份（$BDIR，每系列保留最近 $RETENTION 份）:"
+    ls -lh "$BDIR"/openwrt-*-*.tar.gz 2>/dev/null || log "（空）"
+}
+
+case "${1:-}" in
+    save)    shift; cmd_save "$@" ;;
+    restore) shift; cmd_restore "$@" ;;
+    list)    cmd_list ;;
+    *)       die "未知命令: ${1:-}（save|restore|list，-h 查看用法）" ;;
+esac
