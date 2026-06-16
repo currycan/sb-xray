@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -388,6 +389,122 @@ def test_trim_runtime_configs_filters_existing_daemon_ini(env: Path, tmp_path: P
 def test_trim_runtime_configs_silent_when_daemon_missing(env: Path, tmp_path: Path) -> None:
     """No daemon.ini present → must not raise."""
     cb.trim_runtime_configs(daemon_ini=tmp_path / "missing.ini")
+
+
+# ---------------------------------------------------------------------------
+# nginx access-log 档位 (NGINX_ACCESS_LOG) + logrotate
+# ---------------------------------------------------------------------------
+
+
+def test_access_log_minimal_default(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NGINX_ACCESS_LOG", raising=False)
+    monkeypatch.setenv("LOGDIR", "/var/log")
+    cb._apply_access_log_env()
+    assert (
+        os.environ["NGINX_HTTP_ACCESS_LOG"]
+        == "access_log /var/log/nginx/http-access.log http_json if=$loggable;"
+    )
+    assert (
+        os.environ["NGINX_TCP_ACCESS_LOG"]
+        == "access_log /var/log/nginx/tcp-access.log tcp_json if=$loggable;"
+    )
+
+
+def test_access_log_full(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NGINX_ACCESS_LOG", "full")
+    monkeypatch.setenv("LOGDIR", "/var/log")
+    cb._apply_access_log_env()
+    assert (
+        os.environ["NGINX_HTTP_ACCESS_LOG"]
+        == "access_log /var/log/nginx/http-access.log http_json;"
+    )
+    assert "if=" not in os.environ["NGINX_TCP_ACCESS_LOG"]
+
+
+def test_access_log_off(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NGINX_ACCESS_LOG", "off")
+    cb._apply_access_log_env()
+    assert os.environ["NGINX_HTTP_ACCESS_LOG"] == "access_log off;"
+    assert os.environ["NGINX_TCP_ACCESS_LOG"] == "access_log off;"
+
+
+def test_access_log_invalid_falls_back_to_minimal(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NGINX_ACCESS_LOG", "verbose")
+    monkeypatch.setenv("LOGDIR", "/var/log")
+    cb._apply_access_log_env()
+    assert "if=$loggable" in os.environ["NGINX_HTTP_ACCESS_LOG"]
+
+
+def test_access_log_normalises_logdir_trailing_slash(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NGINX_ACCESS_LOG", "full")
+    monkeypatch.setenv("LOGDIR", "/var/log/")
+    cb._apply_access_log_env()
+    assert "/var/log/nginx/http-access.log" in os.environ["NGINX_HTTP_ACCESS_LOG"]
+    assert "//nginx" not in os.environ["NGINX_HTTP_ACCESS_LOG"]
+
+
+def test_access_log_placeholder_survives_render(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rendered access_log line keeps the runtime ``$loggable`` var.
+
+    The single-pass envsubst must not rescan the substituted text, otherwise
+    ``$loggable`` would collapse to a literal and break the nginx ``if=``.
+    """
+    monkeypatch.setenv("NGINX_ACCESS_LOG", "minimal")
+    monkeypatch.setenv("LOGDIR", "/var/log")
+    cb._apply_access_log_env()
+    src = tmp_path / "n.conf"
+    src.write_text("    ${NGINX_HTTP_ACCESS_LOG}\n", encoding="utf-8")
+    dest = tmp_path / "out.conf"
+    cb._render_flat(src, dest)
+    out = dest.read_text(encoding="utf-8")
+    assert "access_log /var/log/nginx/http-access.log http_json if=$loggable;" in out
+    assert "$loggable" in out
+
+
+def test_run_logrotate_skips_when_conf_missing(env: Path, tmp_path: Path) -> None:
+    assert cb.run_logrotate(conf=tmp_path / "nope.conf", state=tmp_path / "s") == 0
+
+
+def test_run_logrotate_invokes_binary(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conf = tmp_path / "sb-xray.conf"
+    conf.write_text("/var/log/*.log {}\n", encoding="utf-8")
+    state = tmp_path / "lib" / "sb-xray.status"
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(cb.shutil, "which", lambda _: "/usr/sbin/logrotate")
+    monkeypatch.setattr(cb.subprocess, "run", fake_run)
+
+    assert cb.run_logrotate(conf=conf, state=state) == 0
+    assert captured["argv"][0] == "/usr/sbin/logrotate"
+    assert "-s" in captured["argv"]
+    assert str(state) in captured["argv"]
+    assert str(conf) in captured["argv"]
+    assert state.parent.is_dir()  # parent dir created before invocation
+
+
+def test_run_logrotate_propagates_nonzero(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conf = tmp_path / "sb-xray.conf"
+    conf.write_text("/var/log/*.log {}\n", encoding="utf-8")
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(cb.subprocess, "run", fake_run)
+    assert cb.run_logrotate(conf=conf, state=tmp_path / "s") == 1
 
 
 # ---------------------------------------------------------------------------

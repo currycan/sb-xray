@@ -32,6 +32,13 @@ services:
       - SB_LOG_LEVEL=INFO
       # 设为 "1" 关闭 entrypoint 日志 ANSI 彩色（非 TTY 容器 stdout 默认自动关闭）。
       # - NO_COLOR=1
+      # 日志体积治理（均有镜像内默认，以下仅为可选覆盖；详见 docs/04 §6.7）：
+      #   nginx 访问日志档位 minimal(默认,仅记非 2xx/3xx) | full | off
+      # - NGINX_ACCESS_LOG=minimal
+      #   logrotate 轮转：单文件阈值 / 保留份数 / 调度(空串禁用)
+      # - LOG_ROTATE_SIZE=50M
+      # - LOG_ROTATE_KEEP=3
+      # - LOG_ROTATE_CRON=0 * * * *
       - DUFS_PATH_PREFIX=/myfiles
       - XUI_WEBBASEPATH=3xadmin
       # Gemini直连, true=直连, false=使用代理, 空=自动判断

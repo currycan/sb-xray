@@ -1,6 +1,6 @@
 """Root crontab install (entrypoint.sh:main_init step 14 equivalent).
 
-Manages three periodic entries:
+Manages these periodic entries:
 
 1. **geo-update** (daily 03:00) — refresh GeoIP / GeoSite rule-sets.
 2. **isp-retest** (every N hours, driven by ``ISP_RETEST_INTERVAL_HOURS``,
@@ -9,6 +9,11 @@ Manages three periodic entries:
 3. **substore-check** (daily, driven by ``SUBSTORE_CHECK_CRON``, default
    ``30 4 * * *``, empty disables) — produce every remote Sub-Store
    subscription and alert if any fails to fetch.
+4. **secrets-refresh** (hourly, driven by ``SECRET_REFRESH_INTERVAL_HOURS``,
+   0 disables) — re-decrypt ``tmp.bin`` and hot-reload on change.
+5. **log-rotate** (hourly, driven by ``LOG_ROTATE_CRON``, default
+   ``0 * * * *``, empty disables) — size-based logrotate over ``/var/log``
+   so nginx/xray/sing-box logs can't fill the disk.
 
 All entries are installed idempotently: each rewrite strips prior
 copies before appending, so upgrading a running container converges
@@ -32,6 +37,8 @@ _ISP_MARKER = "isp-retest"
 _SUBSTORE_MARKER = "substore-check"
 _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
 _SECRET_MARKER = "secrets-refresh"
+_LOGROTATE_MARKER = "log-rotate"
+_LOGROTATE_DEFAULT_CRON = "0 * * * *"  # hourly size-based; LOG_ROTATE_CRON="" disables
 
 
 def _hours_to_cron_spec(hours: int, minute: int = 0) -> str:
@@ -89,6 +96,21 @@ def _substore_check_entry() -> str | None:
     if not spec:
         return None
     return f"{spec} /scripts/entrypoint.py substore-check >> /var/log/substore_check.log 2>&1"
+
+
+def _logrotate_entry() -> str | None:
+    """Hourly size-based logrotate; ``LOG_ROTATE_CRON=""`` disables.
+
+    Mirrors :func:`_substore_check_entry`: the env value, when set, is a full
+    cron spec (5 fields); unset falls back to the hourly default. logrotate
+    rotation is a node-local file op, so no jitter is needed (unlike isp-retest,
+    which hits shared upstream proxies).
+    """
+    raw = os.environ.get("LOG_ROTATE_CRON")
+    spec = _LOGROTATE_DEFAULT_CRON if raw is None else raw.strip()
+    if not spec:
+        return None
+    return f"{spec} /scripts/entrypoint.py log-rotate >> /var/log/logrotate.log 2>&1"
 
 
 def _read_hours_env() -> int:
@@ -151,6 +173,7 @@ def install_crontab(
     substore_entry = _substore_check_entry()
     secret_hours_val = _read_secret_hours_env() if secret_hours is None else secret_hours
     secret_entry = _secret_refresh_entry(secret_hours_val)
+    logrotate_entry = _logrotate_entry()
 
     cron_file.parent.mkdir(parents=True, exist_ok=True)
     existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
@@ -162,6 +185,7 @@ def install_crontab(
         and _ISP_MARKER not in ln
         and _SUBSTORE_MARKER not in ln
         and _SECRET_MARKER not in ln
+        and _LOGROTATE_MARKER not in ln
     ]
     lines.append(geo_entry)
     if isp_entry is not None:
@@ -170,6 +194,8 @@ def install_crontab(
         lines.append(substore_entry)
     if secret_entry is not None:
         lines.append(secret_entry)
+    if logrotate_entry is not None:
+        lines.append(logrotate_entry)
     cleaned = "\n".join(lines).rstrip() + "\n"
     cron_file.write_text(cleaned, encoding="utf-8")
     cron_file.chmod(0o600)
@@ -179,8 +205,10 @@ def install_crontab(
         if secret_entry is not None
         else "secrets-refresh disabled"
     )
+    logrotate_desc = "log-rotate on" if logrotate_entry is not None else "log-rotate disabled"
     logger.info(
-        "Cron 定时任务已安装 (geo-update daily 03:00; %s; %s)",
+        "Cron 定时任务已安装 (geo-update daily 03:00; %s; %s; %s)",
         isp_desc,
         secret_desc,
+        logrotate_desc,
     )

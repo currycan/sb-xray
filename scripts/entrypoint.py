@@ -163,6 +163,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
 
     sub.add_parser(
+        "log-rotate",
+        help="Rotate /var/log logs via the rendered logrotate ruleset (cron entry).",
+    )
+
+    sub.add_parser(
         "xray-run",
         help="Clean stale UDS sockets in /dev/shm, then exec xray (supervisord-managed).",
     )
@@ -715,6 +720,11 @@ def main(argv: list[str] | None = None) -> int:
 
         sbcfg.trim_runtime_configs()
         return 0
+
+    if args.command == "log-rotate":
+        from sb_xray import config_builder as sbcfg
+
+        return sbcfg.run_logrotate()
 
     if args.command == "geo-update":
         from sb_xray import geo

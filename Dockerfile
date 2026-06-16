@@ -252,7 +252,7 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
     --mount=type=cache,target=/root/.cache/pip,sharing=locked \
   set -ex; \
-  runtime_pkgs="curl bash iproute2 net-tools tzdata bash-completion ca-certificates python3 py3-pip py3-jinja2 py3-httpx py3-yaml py3-pydantic gettext libc6-compat gcompat vim libqrencode-tools jq sqlite nodejs grep sed coreutils dumb-init"; \
+  runtime_pkgs="curl bash iproute2 net-tools tzdata bash-completion ca-certificates python3 py3-pip py3-jinja2 py3-httpx py3-yaml py3-pydantic gettext libc6-compat gcompat vim libqrencode-tools jq sqlite nodejs grep sed coreutils dumb-init logrotate"; \
   apk -U add --virtual .runtime-deps ${runtime_pkgs}; \
   echo -e "[global]\nbreak-system-packages = true" > /etc/pip.conf; \
   # socksio: httpx transport dep for socks5h:// ISP speed-test proxy. bash
@@ -286,6 +286,13 @@ ENV LOGDIR=/var/log/
 ENV SUPERVISOR_LOG_MAX_BYTES="20MB"
 # xray 与 sing-box 共用日志级别：debug | info | warning | error
 ENV LOG_LEVEL="warning"
+# nginx access 日志档位：minimal(仅记非 2xx/3xx 异常请求) | full(全量) | off(关闭)
+ENV NGINX_ACCESS_LOG="minimal"
+# logrotate 轮转参数(镜像内默认生效，无需 compose env)：单文件超 SIZE 即轮转，
+# 保留 KEEP 份压缩历史，CRON 为调度频率(空字符串禁用)。
+ENV LOG_ROTATE_SIZE="50M"
+ENV LOG_ROTATE_KEEP="3"
+ENV LOG_ROTATE_CRON="0 * * * *"
 
 # shoutrrr-forwarder 事件总线：
 #   SHOUTRRR_URLS 为空时 dry-run（仅日志，不推送），这是默认安全状态

@@ -628,7 +628,7 @@ docker compose restart sb-xray
 
 ### 5.6 定时任务（cron）总表
 
-系统运行期共有 **5 个定时任务**，分属两个调度来源：前 4 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 5 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
+系统运行期共有 **6 个定时任务**，分属两个调度来源：前 5 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 6 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
 
 | # | 任务 | 默认表达式 | 控制变量 | 调度来源 | 用途 |
 |:---:|:---|:---|:---|:---|:---|
@@ -636,9 +636,10 @@ docker compose restart sb-xray
 | 2 | `isp-retest` | `0 */6 * * *`（按 hostname 打散分钟位） | `ISP_RETEST_INTERVAL_HOURS`（默认 `6`，`0` 禁用） | root crontab | 周期性带宽重测，线路集/类别变化时热重配 balancer（见 §2.6） |
 | 3 | `substore-check` | `30 4 * * *` | `SUBSTORE_CHECK_CRON`（空串禁用） | root crontab | 拉取自检全部 remote 订阅，失败发 `substore.sub_fetch.failed` 告警（见 §2.6） |
 | 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，发 `secret.refresh.completed` 事件（见 §2.3） |
-| 5 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
+| 5 | `log-rotate` | `0 * * * *` | `LOG_ROTATE_CRON`（空串禁用） | root crontab | 按大小轮转 `/var/log` 下日志（logrotate），防止 nginx/xray/sing-box 日志撑满磁盘（见 §6.7） |
+| 6 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
 
-> 📘 任务 1–4 用 `docker exec sb-xray crontab -l` 可见；任务 5 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
+> 📘 任务 1–5 用 `docker exec sb-xray crontab -l` 可见；任务 6 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
 
 ---
 
@@ -749,12 +750,16 @@ nc -zuv ${SERVER_IP} ${PORT_HYSTERIA2}
 | `/var/log/xray/access.log` | Xray 访问日志 |
 | `/var/log/xray/error.log` | Xray 错误日志 |
 | `/var/log/sing-box/sing-box.log` | Sing-box 日志 |
-| `/var/log/nginx/error.log` | Nginx 错误日志 |
-| `/var/log/nginx/access.log` | Nginx 访问日志 |
+| `/var/log/nginx/error.log` | Nginx 错误日志（stderr，经 supervisord 进 `docker logs`） |
+| `/var/log/nginx/http-access.log` | Nginx HTTP 访问日志（默认 `minimal` 档仅记非 2xx/3xx，见 §6.7） |
+| `/var/log/nginx/tcp-access.log` | Nginx TCP/SNI 访问日志（同档位策略） |
 | `/var/log/nginx/subscribe_access.log` | 订阅成功访问 |
 | `/var/log/nginx/subscribe_scan.log` | 扫描/攻击记录 |
-| `/var/log/supervisord.log` | Supervisor 主日志 |
+| `/var/log/supervisord.log` | Supervisor 主日志（自带 `SUPERVISOR_LOG_MAX_BYTES` 轮转） |
+| `/var/log/logrotate.log` | logrotate 每次轮转的输出（见 §6.7） |
 | `/var/log/acme.sh.log` | 证书申请/续期日志 |
+
+> 📘 除 supervisord 主日志外，上表所有 `/var/log` 下日志由 logrotate 按大小轮转封顶（见 §6.7），轮转后历史份为 `*.log.1`、`*.log.2.gz` …
 
 ### 6.4 快速运维命令汇总
 
@@ -941,6 +946,52 @@ docker logs sb-xray 2>&1 | grep "\[xray-exit\]"
 | `expected` | 退出码是否在 supervisord 预期集内（`0` = 非预期退出） | `expected=0` 表示意外崩溃，需查根因 |
 
 > 📘 典型场景：小内存节点上 xray 被内核 OOM-killer 以 `SIGKILL` 杀掉（退出码 `-9`），表现为 `expected=0` 的非预期退出 + autorestart 循环。配合 `dmesg | grep -i "killed process"` 与 §7 小内存降载开关定位并缓解。诊断器本身永不因事件解析失败而退出（始终回 `OK`），不会给 supervisord 添乱。
+
+---
+
+### 6.7 日志体积治理与爆盘清理
+
+长时间运行的节点日志会持续累积——尤其 nginx 的 JSON 访问日志高频写入。系统用**两层机制**把 `/var/log` 总量封顶，全部镜像内默认生效，无需运维设置 compose env（watchtower 用旧 env 重建镜像也能止血）。
+
+#### 📘 两层治理
+
+| 层 | 机制 | 控制变量 | 作用 |
+|:---|:---|:---|:---|
+| 源头精简 | nginx access 日志按状态码条件记录 | `NGINX_ACCESS_LOG`（默认 `minimal`） | `minimal` 仅记非 2xx/3xx 异常请求，大幅压制高频访问日志产生；`full` 全量；`off` 关闭。`subscribe_*` 安全审计日志不受影响，始终全量 |
+| 轮转兜底 | logrotate 按大小轮转 `/var/log` 全部日志 | `LOG_ROTATE_SIZE` / `LOG_ROTATE_KEEP` / `LOG_ROTATE_CRON` | 单文件超 `LOG_ROTATE_SIZE`（默认 `50M`）即轮转，保留 `LOG_ROTATE_KEEP`（默认 `3`）份压缩历史；由 cron 每 `LOG_ROTATE_CRON`（默认每小时）触发（任务表见 §5.6 #5） |
+
+> 📘 单文件稳态上限 ≈ `LOG_ROTATE_SIZE × (LOG_ROTATE_KEEP + 1)`，默认约 200 MB/文件。logrotate 用 `copytruncate`（先复制再清空原文件），nginx/xray/sing-box 无需重开 fd、进程无感。supervisord 主日志由 `SUPERVISOR_LOG_MAX_BYTES` 自管，不重复纳入。
+
+#### 🔧 调整与验证
+
+```bash
+# 查看当前 access 日志档位（容器内 env）
+docker exec sb-xray printenv NGINX_ACCESS_LOG    # 期望: minimal
+
+# dry-run 预演 logrotate 规则解析（不实际轮转）
+docker exec sb-xray logrotate -d /etc/logrotate.d/sb-xray
+# 期望: 无 error，逐条列出 /var/log/nginx/*.log 等纳管路径
+
+# 临时改为全量访问日志（排查具体请求时）：在 compose 设 NGINX_ACCESS_LOG=full 后重建容器
+#   environment: [ NGINX_ACCESS_LOG=full ]
+```
+
+#### 🔧 磁盘被日志占满时的一次性清理
+
+拉取含本能力的镜像后，logrotate 会在下一次 cron（≤1 小时）自动把存量大日志轮转压缩。需要**立即止血**时手动强制轮转一次：
+
+```bash
+# 强制轮转所有纳管日志（无视大小阈值），立即压缩历史、清空原文件
+docker exec sb-xray logrotate -f /etc/logrotate.d/sb-xray
+
+# 或对单个超大日志直接清空（不留历史）
+docker exec sb-xray truncate -s 0 /var/log/nginx/http-access.log
+
+# 复核磁盘占用（按大小倒序）
+docker exec sb-xray du -sh /var/log/* | sort -rh | head
+```
+
+> 📘 日志经 `./logs:/var/log` 持久化到宿主机（见 §1.3），容器重启不会清空；务必用上述命令在容器内清理。直接在宿主机删除运行中的日志文件可能因进程仍持 fd 而不释放空间。
 
 ---
 
