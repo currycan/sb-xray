@@ -451,7 +451,7 @@ tailscale up --timeout=60s --accept-dns=false --advertise-routes=<LAN_CIDR> \
 - 关停被替换的现役机。
 - 更新 `.credentials/openwrt.txt`：主路由 SSH / dashboard 地址 → 接管机的新管理入口；注明网段与设备状态。
 - 若本机权威配置 `openwrt-config.env` 的 `TS_ADVERTISE_ROUTES` 仍是旧网段，回写为 `<LAN_CIDR>`，保持本机权威值与现网一致。
-- 把本次切换过程追加进 `.local/` 运维过程记录（不入库）。
+- 把本次切换过程实时追记进 `.ops/ops-log/` 运维留痕（不入库；规范见 `project-operator` skill）。
 
 ↩️ **回退**：现役机已关但配置完好 → 重新开机 + 身份回退即可恢复；再不行用黄金备份整机恢复（见 [`./11-openwrt-reinitialize.md`](./11-openwrt-reinitialize.md) 路径 B）+ 重跑 init。
 

@@ -17,7 +17,7 @@ ag_output_*.txt
 .gstack/
 .superpowers/
 .credentials/
-.local/
+.ops/
 Plans/
 scripts/__pycache__/
 
