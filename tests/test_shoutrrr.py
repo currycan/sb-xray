@@ -190,6 +190,49 @@ def test_send_pushes_notable_speed_test(monkeypatch):
     run.assert_called_once()
 
 
+def test_send_suppresses_secret_refresh_noop(monkeypatch, caplog):
+    """secret.refresh.noop is hourly no-change noise — must not page anyone."""
+    import logging
+
+    called = MagicMock()
+    monkeypatch.setattr(shoutrrr.subprocess, "run", called)
+    with caplog.at_level(logging.INFO):
+        shoutrrr._send(
+            ["telegram://token@telegram?chats=1"],
+            "[p]",
+            "secret.refresh.noop",
+            {"reason": "unchanged"},
+        )
+    called.assert_not_called()
+    assert "skipping push" in caplog.text
+
+
+def test_send_pushes_secret_refresh_completed(monkeypatch):
+    """An actual credential rotation (completed) must still reach shoutrrr."""
+    run = MagicMock(return_value=MagicMock(returncode=0, stderr="", stdout=""))
+    monkeypatch.setattr(shoutrrr.subprocess, "run", run)
+    shoutrrr._send(
+        ["telegram://token@telegram?chats=1"],
+        "[p]",
+        "secret.refresh.completed",
+        {"changed": 1, "removed": 0, "restarted": True},
+    )
+    run.assert_called_once()
+
+
+def test_send_pushes_secret_refresh_error(monkeypatch):
+    """A refresh failure (error) is actionable — must still reach shoutrrr."""
+    run = MagicMock(return_value=MagicMock(returncode=0, stderr="", stdout=""))
+    monkeypatch.setattr(shoutrrr.subprocess, "run", run)
+    shoutrrr._send(
+        ["telegram://token@telegram?chats=1"],
+        "[p]",
+        "secret.refresh.error",
+        {"error": "decrypt failed", "stage": "fetch"},
+    )
+    run.assert_called_once()
+
+
 def test_format_message_substore_failure_lists_failed_subs():
     payload = {
         "event": "substore.sub_fetch.failed",

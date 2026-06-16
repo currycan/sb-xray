@@ -364,6 +364,14 @@ def _send(urls: list[str], title_prefix: str, event: str, payload: dict[str, Any
     if event == "isp.speed_test.result" and payload.get("notify") is False:
         logger.info("speed_test result not notable — skipping push (notify=false)")
         return
+    # Edge-triggered alerting: secret-refresh runs hourly and is a no-op on
+    # nearly every tick (credentials unchanged / offline fallback / no DECODE /
+    # disabled). Only secret.refresh.completed (an actual rotation) and
+    # secret.refresh.error (a real failure) are notable — silence the noop so it
+    # stays in the stdout audit trail (emit_event logs it) without paging anyone.
+    if event == "secret.refresh.noop":
+        logger.info("secret refresh noop — skipping push (no credential change)")
+        return
     if not urls:
         logger.info(
             "dry-run event=%s payload=%s",
