@@ -257,3 +257,46 @@ def test_secrets_refresh_replaces_stale_entry(
     content = target.read_text(encoding="utf-8")
     assert content.count("secrets-refresh") == 1
     assert "0 */1 * * *" in content
+
+
+def test_installs_logrotate_default_hourly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOG_ROTATE_CRON", raising=False)
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "0 * * * * /scripts/entrypoint.py log-rotate" in content
+    assert content.count("log-rotate") == 1
+
+
+def test_logrotate_custom_cron(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_ROTATE_CRON", "*/30 * * * *")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "*/30 * * * * /scripts/entrypoint.py log-rotate" in content
+
+
+def test_logrotate_disabled_with_empty_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOG_ROTATE_CRON", "")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "log-rotate" not in content
+    assert "geo-update" in content
+
+
+def test_logrotate_replaces_stale_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOG_ROTATE_CRON", raising=False)
+    target = tmp_path / "crontab"
+    target.write_text(
+        "0 */6 * * * /scripts/entrypoint.py log-rotate >> /var/log/logrotate.log 2>&1\n",
+        encoding="utf-8",
+    )
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert content.count("log-rotate") == 1
+    assert "0 * * * *" in content

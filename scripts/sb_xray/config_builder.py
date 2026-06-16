@@ -25,6 +25,7 @@ import os
 import random
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,7 @@ _FLAT_RENDERS: tuple[tuple[str, str], ...] = (
     ("nginx/tcp.conf", "/etc/nginx/stream.d/tcp.conf"),
     ("dufs/conf.yml", "${WORKDIR}/dufs/conf.yml"),
     ("providers/providers.yaml", "${WORKDIR}/providers"),
+    ("logrotate/sb-xray.conf", "/etc/logrotate.d/sb-xray"),
 )
 
 _FLAT_COPIES: tuple[tuple[str, str], ...] = (
@@ -487,6 +489,80 @@ def _apply_reverse_proxy(workdir: Path) -> None:
         _inject_reverse_route(xr, domains)
 
 
+# --- nginx access-log 档位 + logrotate -------------------------------------
+
+_NGINX_ACCESS_MODES = frozenset({"minimal", "full", "off"})
+
+_LOGROTATE_CONF = Path("/etc/logrotate.d/sb-xray")
+# State file lives outside the /var/log bind-mount; size-based rotation doesn't
+# depend on prior timestamps, so a reset on container recreate is harmless.
+_LOGROTATE_STATE = Path("/var/lib/logrotate/sb-xray.status")
+
+
+def _access_log_line(path: str, fmt: str, mode: str) -> str:
+    """Build one nginx ``access_log`` directive for the given mode.
+
+    - ``off``     → ``access_log off;``
+    - ``minimal`` → only non-2xx/3xx requests, via ``if=$loggable`` (the
+      ``map $status $loggable`` block in nginx.conf / stream sets it).
+    - ``full``    → every request.
+    """
+    if mode == "off":
+        return "access_log off;"
+    cond = " if=$loggable" if mode == "minimal" else ""
+    return f"access_log {path} {fmt}{cond};"
+
+
+def _apply_access_log_env() -> None:
+    """Resolve ``NGINX_ACCESS_LOG`` into the two access_log placeholder vars.
+
+    nginx.conf (http) and its ``stream`` block carry
+    ``${NGINX_HTTP_ACCESS_LOG}`` / ``${NGINX_TCP_ACCESS_LOG}`` placeholders so
+    the minimal/full/off policy lives here (testable) rather than baked into
+    the template. The rendered value embeds the runtime ``$loggable`` variable;
+    the single-pass envsubst never rescans substituted text, so it survives.
+    """
+    mode = os.environ.get("NGINX_ACCESS_LOG", "minimal").strip().lower()
+    if mode not in _NGINX_ACCESS_MODES:
+        logger.warning("NGINX_ACCESS_LOG=%r 无法识别,回退 minimal", mode)
+        mode = "minimal"
+    logdir = os.environ.get("LOGDIR", "/var/log").rstrip("/")
+    os.environ["NGINX_HTTP_ACCESS_LOG"] = _access_log_line(
+        f"{logdir}/nginx/http-access.log", "http_json", mode
+    )
+    os.environ["NGINX_TCP_ACCESS_LOG"] = _access_log_line(
+        f"{logdir}/nginx/tcp-access.log", "tcp_json", mode
+    )
+
+
+def run_logrotate(
+    *,
+    conf: Path = _LOGROTATE_CONF,
+    state: Path = _LOGROTATE_STATE,
+) -> int:
+    """Invoke ``logrotate`` against the rendered sb-xray ruleset (cron entry).
+
+    Returns logrotate's exit code, or 0 when the ruleset is absent (e.g. an
+    upgrade that hasn't re-rendered configs yet). Resolves the binary via
+    ``which`` with an absolute fallback because cron's ``PATH`` often omits
+    ``/usr/sbin``.
+    """
+    if not conf.is_file():
+        logger.warning("logrotate 配置缺失: %s,跳过", conf)
+        return 0
+    state.parent.mkdir(parents=True, exist_ok=True)
+    logrotate_bin = shutil.which("logrotate") or "/usr/sbin/logrotate"
+    proc = subprocess.run(
+        [logrotate_bin, "-s", str(state), str(conf)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        logger.error("logrotate 退出码 %d: %s", proc.returncode, proc.stderr.strip())
+    return proc.returncode
+
+
 def trim_runtime_configs(
     *,
     daemon_ini: Path = Path("/etc/supervisor.d/daemon.ini"),
@@ -508,6 +584,7 @@ def create_config(*, workdir: Path | None = None) -> None:
 
     logger.info("渲染所有模板...")
     os.environ["RANDOM_NUM"] = str(random.randint(0, 9))
+    _apply_access_log_env()
 
     for src, dest in _FLAT_RENDERS:
         dest_path = _expand_dest(dest)

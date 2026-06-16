@@ -485,6 +485,10 @@ dig @ns1.example.com TXT probe.ns1.example.com
 | `LOG_LEVEL` | `warning` | xray + sing-box 日志级别（debug/info/warning/error） | - |
 | `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）；与 `LOG_LEVEL` 分离避免冲突 | - |
 | `NO_COLOR` | *(空)* | 非空 → 禁用 entrypoint 日志 ANSI 彩色；容器 stdout 非 TTY 时自动禁用 | - |
+| `NGINX_ACCESS_LOG` | `minimal` | nginx 访问日志档位：`minimal`(仅记非 2xx/3xx 异常请求) / `full`(全量) / `off`(关闭)。默认精简，压制高频访问日志体积。**权威说明见 [docs/04](./04-ops-and-troubleshooting.md) §6.7** | `scripts/sb_xray/config_builder.py` |
+| `LOG_ROTATE_SIZE` | `50M` | logrotate 单文件触发轮转的大小阈值 | `templates/logrotate/sb-xray.conf` |
+| `LOG_ROTATE_KEEP` | `3` | logrotate 保留的压缩历史份数（单文件总量 ≈ size × (keep+1)） | `templates/logrotate/sb-xray.conf` |
+| `LOG_ROTATE_CRON` | `0 * * * *` | logrotate 调度频率（cron 表达式）；空串禁用 | `scripts/sb_xray/stages/cron.py` |
 
 ---
 
