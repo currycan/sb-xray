@@ -20,7 +20,8 @@ _OPENCLASH = Path(__file__).resolve().parent.parent / "sources" / "openclash"
 _SETUP = _OPENWRT / "openwrt-init.sh"
 _BRIDGE = _OPENWRT / "cn-bridge"
 _MONITOR = _OPENWRT / "cn-bridge-monitor"
-_ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR]
+_BACKUP = _OPENWRT / "cn-backup"
+_ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR, _BACKUP]
 
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -467,3 +468,156 @@ def test_embedded_speedtest_trap_recovery(tmp_path: Path) -> None:
     # 防陈旧结果:测速前必须清掉上一轮 result.csv
     assert "rm -f result.csv" in embedded, "缺少测速前旧结果清理"
     assert embedded.index("rm -f result.csv") < embedded.index("./cfst"), "清理须在 cfst 之前"
+
+
+# ---- cn-backup 配置备份 / 恢复 ------------------------------------------------
+
+
+def test_backup_help_documents_subcommands() -> None:
+    out = _run(_BACKUP, "--help").stdout
+    for sub in ("save", "restore", "list"):
+        assert sub in out, f"help 缺少子命令说明: {sub}"
+
+
+def test_backup_unknown_command_fails_fast() -> None:
+    proc = _run(_BACKUP, "bogus-subcommand")
+    assert proc.returncode != 0
+
+
+def test_backup_uses_official_sysupgrade_mechanism() -> None:
+    """契约核心：备份/恢复完全复用官方 sysupgrade，不自造打包/解包。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    assert "sysupgrade -b" in src, "备份必须用官方 sysupgrade -b"
+    assert "sysupgrade -r" in src, "恢复必须用官方 sysupgrade -r"
+
+
+def test_backup_produces_safe_and_full_variants() -> None:
+    """每次 save 产两份：safe（官方清单）+ full（额外并入 /etc/tailscale/）。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    assert "-safe.tar.gz" in src
+    assert "-full.tar.gz" in src
+    assert "/etc/tailscale/" in src, "full 变体须并入 Tailscale 身份"
+
+
+def test_backup_retries_transient_sysupgrade_failure() -> None:
+    """sysupgrade -b 打包 /etc/openclash 时会因 OpenClash 写文件偶发 tar『file changed』
+    非零退出——备份必须重试,否则每日 cron 会随机失败。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    assert "_sysupgrade_b()" in src, "缺少带重试的 sysupgrade 包装"
+    body = src[src.index("_sysupgrade_b()"):src.index("_backup_safe()")]
+    assert "BACKUP_RETRIES" in body and "while" in body, "_sysupgrade_b 须循环重试"
+    # safe/full 都走重试包装,不直接裸调 sysupgrade -b
+    assert "_sysupgrade_b" in src[src.index("_backup_safe()"):src.index("_prune_local()")]
+
+
+def test_backup_full_variant_restores_sysupgrade_conf() -> None:
+    """full 变体临时改 /etc/sysupgrade.conf 后必须还原（trap 兜底，含中断路径）。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    body = src[src.index("_backup_full()"):src.index("_prune_local()")]
+    assert "trap " in body and "EXIT" in body, "full 变体缺少 trap 还原 sysupgrade.conf"
+    assert "$SUCONF" in body
+
+
+def test_backup_encrypts_before_cloud_push() -> None:
+    """两份上云前一律 openssl 加密；不存在明文上云路径。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    assert "openssl enc" in src, "云端备份必须加密"
+    assert "scp " in src, "云端推送用 scp"
+    # 加密与推送在同一流程里成对出现（先 _encrypt 再 _push_to）
+    save_body = src[src.index("cmd_save()"):src.index("cmd_restore()")]
+    assert save_body.index("_encrypt") < save_body.index("_push_to"), "必须先加密再上传"
+
+
+def test_backup_targets_bridge_hot_nodes_via_fqdn() -> None:
+    """云端目标来自 BRIDGE_HOT（backup.env 的 HOT），按节点名从 nodes.list 取 FQDN 直连。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    assert "_node_fqdn()" in src, "缺少节点名→FQDN 解析"
+    assert "$NODES" in src, "FQDN 解析须读 nodes.list"
+    assert "for _name in $HOT" in src, "上传须遍历 BRIDGE_HOT 节点"
+    assert "${REMOTE_USER}@${_fqdn}" in src, "scp/ssh 须用 user@FQDN 直连"
+
+
+def test_backup_alerts_on_failure_via_telegram() -> None:
+    """失败（含部分节点上传失败）须 curl Telegram 告警；无 TG 配置则静默。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    assert "_notify()" in src, "缺少告警函数"
+    assert "api.telegram.org" in src, "告警须走 Telegram"
+    notify_body = src[src.index("_notify()"):src.index("_backup_safe()")]
+    assert "$TG_TOKEN" in notify_body and "$TG_CHAT" in notify_body, "无 TG 配置须静默跳过"
+    # cmd_save 全程 EXIT trap，未走到成功哨兵即告警
+    assert "_save_on_exit" in src and "trap '_save_on_exit' EXIT" in src, "save 须有失败兜底告警"
+
+
+def test_backup_help_independent_of_environment() -> None:
+    """help 必须在 source backup.env / 任何 sysupgrade 调用之前短路退出。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    help_short = src.index("usage; exit 0")
+    assert src.index('. "$ENVFILE"') > help_short, "help 短路必须早于 source backup.env"
+
+
+# ---- openwrt-init.sh 备份接线契约 --------------------------------------------
+
+
+def test_setup_backup_functions_exist_and_wired() -> None:
+    src = _SETUP.read_text(encoding="utf-8")
+    for fn in (
+        "setup_sysupgrade_conf()",
+        "install_cn_backup()",
+        "setup_backup_cron()",
+        "ensure_openssl()",
+        "ensure_ssh_client()",
+        "main_backup()",
+    ):
+        assert fn in src, f"缺少函数: {fn}"
+    assert "backup) shift; main_backup" in src, "dispatch 未接入 backup 子命令"
+    main_body = src[src.rindex("main() {"):]
+    assert "setup_backup_cron" in main_body, "main() 未调用 setup_backup_cron"
+
+
+def test_setup_backup_cron_writes_targets_and_alert_creds() -> None:
+    """backup.env 必须带：上传目标 HOT（来自 BRIDGE_HOT）、SSH 直连参数、Telegram 告警凭据。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    body = src[src.index("setup_backup_cron()"):src.index("# ── CDN IP 优选")]
+    assert "BRIDGE_HOT" in body, "上传目标须复用 BRIDGE_HOT"
+    assert "HOT=" in body and "REMOTE_USER=" in body and "REMOTE_DIR=" in body
+    assert "TG_TOKEN=" in body and "ALERT_TG_TOKEN" in body, "告警凭据须取自 ALERT_TG_*"
+
+
+def test_setup_sysupgrade_conf_portable_and_excludes_identity() -> None:
+    """补全清单必须可移植（init.d 反向桥用 glob、不写死节点名），且不把 Tailscale
+    活动身份并入官方清单（身份单例敏感，由 cn-backup full 变体临时并入）。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    body = src[src.index("setup_sysupgrade_conf()"):src.index("install_cn_backup()")]
+    assert "/etc/init.d/xray-bridge-*" in body, "init.d 反向桥应用 glob 保持可移植"
+    for hardcoded in ("dc99", "xray-bridge-jp"):
+        assert hardcoded not in body, f"清单不得写死环境特定节点名: {hardcoded}"
+    for path in (
+        "/etc/cn-exit/",
+        "/root/sb-xray-openwrt/",
+        "/usr/bin/cn-bridge",
+        "/root/.ssh/",
+        "/etc/subdomains.txt",            # CDN 优选输入
+        "/etc/CloudflareST/last_best.txt",  # CDN 优选门禁/结果
+        "/etc/hotplug.d/iface/99-tailscale-udp-gro",  # UDP GRO hotplug 钩子
+        "/etc/init.d/tailscale",          # 被改的 Tailscale 启动脚本
+        "/etc/sb-xray/",                  # CRFB 版本 marker
+    ):
+        assert path in body, f"清单缺少有用路径: {path}"
+    # /etc/tailscale/ 不得作为 for 循环里的备份路径（注释提及不算；循环行以反斜杠续行）
+    loop_paths = [ln.strip().rstrip("\\").strip() for ln in body.splitlines() if ln.strip().endswith("\\")]
+    assert "/etc/tailscale/" not in loop_paths, "官方清单不得并入 Tailscale 活动身份"
+
+
+def test_config_env_example_documents_backup_vars() -> None:
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in (
+        "BACKUP_ENABLE",
+        "BACKUP_ENC_PASS",
+        "BACKUP_REMOTE_DIR",
+        "BACKUP_REMOTE_PORT",
+        "BACKUP_RETENTION_DAYS",
+    ):
+        assert var in src, f"config.env.example 缺少备份变量说明: {var}"
+    # 云端目标复用 BRIDGE_HOT；告警复用 Telegram 通道
+    assert "BRIDGE_HOT" in src
+    assert "ALERT_TG_TOKEN" in src

@@ -27,7 +27,7 @@ die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-用法: sh openwrt-init.sh [cdn [run|status|clean] | openclash | passwall2 | ipv6] [-h|--help]
+用法: sh openwrt-init.sh [cdn [run|status|clean] | openclash | passwall2 | ipv6 | backup [save|restore|list]] [-h|--help]
 
 sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenClash 配置纳管 + CDN 优选。
 
@@ -47,6 +47,7 @@ sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenCla
   reverse     XRAY_VERSION BRIDGE_HOT；监控 ALERT_TG_TOKEN ALERT_TG_CHAT
   OpenClash   OPENCLASH_MANAGE(默认 1) OPENCLASH_DASHBOARD_PASSWORD OPENCLASH_SUBS("名=URL ...")
   CDN 优选    CDN_DOMAIN(非空启用) CDN_SUBDOMAINS(逗号分隔前缀) CDN_CRON_SCHEDULE(默认 0 4 * * *)
+  配置备份    BACKUP_ENABLE(默认1) BACKUP_ENC_PASS(云端加密口令) BACKUP_REMOTE_HOST/DIR(云端 scp 目标) BACKUP_RETENTION_DAYS(默认3)
   其他        RELOAD_OPENCLASH=1（完成后自动重启 OpenClash）ARCH_OVERRIDE=arm64|amd64
 
 CDN 子命令:
@@ -63,10 +64,17 @@ IPv6 防泄露子命令（独立入口，不进默认全装；幂等，只动 IP
                                      v6 直出绕过；KEEP_IPV6=1 跳过）。适合下游路由器
                                      或恢复出厂后单独收口，无需跑全套初始化。
 
+配置备份子命令（官方 sysupgrade 机制 + 加密离机留存；同机配置回滚用）:
+  sh openwrt-init.sh backup         一次性 bootstrap：补全 /etc/sysupgrade.conf + 装
+                                     cn-backup + 写 backup.env + 注册每日备份 cron。
+  sh openwrt-init.sh backup save [--local-only]   立即备份（safe+full，默认加密推云端）
+  sh openwrt-init.sh backup restore <file> [--yes]  从备份还原（高危，含 network/firewall）
+  sh openwrt-init.sh backup list    列出本地备份。详见 cn-backup -h 与 README.md。
+
 前置: fw4/nftables 的 OpenWrt；socks5/balance 模式需已装 OpenClash（本脚本不装本体）。
 完成后自动自检（verify）：硬失败非 0 退出，时序软项只 warn 可稍后重跑复查。
 配套工具: cn-bridge（隧道拨号管理）、cn-bridge-monitor（探活告警）、cdn-speedtest
-（CDN 优选，本脚本内嵌生成），见 README.md。
+（CDN 优选，本脚本内嵌生成）、cn-backup（配置备份/恢复），见 README.md。
 USAGE
 }
 
@@ -1195,6 +1203,130 @@ setup_monitor_cron() {
     [ -n "$ALERT_TG_TOKEN" ] || warn "未设 ALERT_TG_TOKEN —— 监控只记录、不发 telegram 告警"
 }
 
+# ── 配置备份 / 一键恢复（cn-backup；官方 sysupgrade 机制 + 加密离机留存）────────
+
+ensure_openssl() {
+    # 加密备份需 openssl CLI（ImmortalWrt/新 OpenWrt 默认只装 libopenssl 库不含 CLI）。
+    # 优先 apk（包名 openssl-util），回退 opkg；二者皆无则失败。
+    command -v openssl >/dev/null 2>&1 && return 0
+    if command -v apk >/dev/null 2>&1; then
+        apk add openssl-util >/dev/null 2>&1 || { apk update >/dev/null 2>&1 && apk add openssl-util >/dev/null 2>&1; }
+    elif command -v opkg >/dev/null 2>&1; then
+        opkg update >/dev/null 2>&1; opkg install openssl-util >/dev/null 2>&1
+    fi
+    command -v openssl >/dev/null 2>&1
+}
+
+ensure_ssh_client() {
+    # 云端上传需要 OpenSSH client：OpenWrt 默认的 dropbear dbclient 无法解析 RSA-4096
+    # 私钥（报 "String too long"）。已是 OpenSSH 则跳过；优先 apk，回退 opkg。
+    ssh -V 2>&1 | grep -qi openssh && return 0
+    if command -v apk >/dev/null 2>&1; then
+        apk add openssh-client openssh-client-utils >/dev/null 2>&1 \
+            || { apk update >/dev/null 2>&1 && apk add openssh-client openssh-client-utils >/dev/null 2>&1; }
+    elif command -v opkg >/dev/null 2>&1; then
+        opkg update >/dev/null 2>&1; opkg install openssh-client openssh-client-utils >/dev/null 2>&1
+    fi
+    ssh -V 2>&1 | grep -qi openssh
+}
+
+setup_sysupgrade_conf() {
+    # 把官方备份默认漏掉、但对 sb-xray 有用的路径补进 /etc/sysupgrade.conf，让官方
+    # `sysupgrade -b` / LuCI「生成备份」自动打包它们。逐行 grep 守卫，幂等可重跑。
+    # 不含 /etc/tailscale/（活动身份，单例敏感）——由 cn-backup 的 full 变体临时并入。
+    # init.d 反向桥服务用 glob（xray-bridge-<节点名> 因部署而异），保持可移植不写死节点名。
+    _su=/etc/sysupgrade.conf
+    touch "$_su"
+    for _p in \
+        /etc/cn-exit/ \
+        /usr/bin/cn-bridge \
+        /usr/bin/cn-bridge-monitor \
+        /usr/bin/cn-ts-keepalive \
+        /etc/init.d/xray-bridge-* \
+        /root/sb-xray-openwrt/ \
+        /root/.ssh/ \
+        /etc/subdomains.txt \
+        /etc/CloudflareST/last_best.txt \
+        /etc/hotplug.d/iface/99-tailscale-udp-gro \
+        /etc/init.d/tailscale \
+        /etc/sb-xray/
+    do
+        grep -qxF "$_p" "$_su" || printf '%s\n' "$_p" >> "$_su"
+    done
+    log "已补全 /etc/sysupgrade.conf（官方备份纳入 sb-xray 自定义路径）"
+}
+
+install_cn_backup() {
+    _src="$(dirname "$0")/cn-backup"
+    if [ -f "$_src" ]; then
+        cp "$_src" /usr/bin/cn-backup
+    else
+        download_verify \
+            "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/cn-backup" \
+            /usr/bin/cn-backup raw
+    fi
+    chmod +x /usr/bin/cn-backup
+    log "已安装 cn-backup 备份工具"
+}
+
+setup_backup_cron() {
+    # 补 sysupgrade.conf（让官方备份够全）+ 装 cn-backup + 写 backup.env + 下发加密口令
+    # + 注册每日 cron。BACKUP_ENABLE=0 时仍补清单/装工具，只跳过 cron 自动化。
+    setup_sysupgrade_conf
+    install_cn_backup
+
+    # 云端上传目标 = BRIDGE_HOT 指定的节点（默认清单内全部，与监控/拨号一致）；
+    # cn-backup 按节点名从 nodes.list 取 FQDN，scp 直连。
+    _hot="${BRIDGE_HOT:-$(awk '!/^#/&&NF{print $1}' /etc/cn-exit/nodes.list 2>/dev/null)}"
+    _hot=$(printf '%s' "$_hot" | tr ',' ' ')
+    mkdir -p /etc/cn-exit
+    _benv=/etc/cn-exit/backup.env
+    backup_file "$_benv"
+    {
+        printf 'ENABLE=%s\n' "${BACKUP_ENABLE:-1}"
+        printf 'BDIR=%s\n' "${BACKUP_DIR:-/root/backups}"
+        printf 'RETENTION=%s\n' "${BACKUP_RETENTION_DAYS:-3}"
+        printf 'NODES=%s\n' "/etc/cn-exit/nodes.list"
+        printf 'HOT="%s"\n' "$_hot"
+        printf 'REMOTE_USER=%s\n' "${BACKUP_REMOTE_USER:-root}"
+        printf 'REMOTE_PORT=%s\n' "${BACKUP_REMOTE_PORT:-22}"
+        printf 'REMOTE_KEY=%s\n' "${BACKUP_REMOTE_KEY:-/root/.ssh/id_ed25519}"
+        printf 'REMOTE_DIR=%s\n' "${BACKUP_REMOTE_DIR}"
+        printf 'PASSFILE=%s\n' "/etc/cn-exit/backup.pass"
+        printf 'TG_TOKEN=%s\n' "${ALERT_TG_TOKEN}"
+        printf 'TG_CHAT=%s\n' "${ALERT_TG_CHAT}"
+    } > "$_benv"
+    chmod 600 "$_benv"
+
+    # 加密口令下发（值取 config.env 的 BACKUP_ENC_PASS；缺失则只能 --local-only）
+    if [ -n "${BACKUP_ENC_PASS:-}" ]; then
+        printf '%s' "$BACKUP_ENC_PASS" > /etc/cn-exit/backup.pass
+        chmod 600 /etc/cn-exit/backup.pass
+        ensure_openssl || warn "openssl 安装失败 —— 云端加密不可用，可先 cn-backup save --local-only"
+    else
+        warn "未设 BACKUP_ENC_PASS —— 云端加密口令缺失，仅支持 cn-backup save --local-only"
+    fi
+
+    # 配置了云端目标则确保 OpenSSH client 在位（dropbear dbclient 解析不了 RSA-4096 key）
+    if [ -n "${BACKUP_REMOTE_DIR:-}" ]; then
+        ensure_ssh_client || warn "OpenSSH client 安装失败 —— 云端上传可能不可用（dropbear dbclient 无法解析 RSA-4096 key）"
+    fi
+
+    [ "${BACKUP_ENABLE:-1}" = 1 ] || { log "BACKUP_ENABLE=0：跳过备份 cron（官方备份清单仍已补全）"; return 0; }
+    _sched="${BACKUP_CRON_SCHEDULE:-30 4 * * *}"
+    _line="$_sched /usr/bin/cn-backup save >> /var/log/cn-backup.log 2>&1"
+    _crontab=/etc/crontabs/root
+    touch "$_crontab"
+    if grep -qF "/usr/bin/cn-backup save" "$_crontab"; then
+        log "备份 cron 已存在，跳过"
+    else
+        printf '%s\n' "$_line" >> "$_crontab"
+        /etc/init.d/cron enable 2>/dev/null
+        /etc/init.d/cron restart 2>/dev/null
+        log "已添加备份 cron（$_sched）"
+    fi
+}
+
 # ── CDN IP 优选（内嵌 cdn-speedtest，写出 /usr/bin/cdn-speedtest）──
 
 write_cdn_speedtest() {
@@ -2035,6 +2167,17 @@ main_crfb() {
     install_crfb_pkg "$1"
 }
 
+main_backup() {
+    # backup 子命令：独立入口。无参数 = 一次性 bootstrap（补 sysupgrade.conf + 装
+    # cn-backup + 写 backup.env + 配 cron）；带参数则透传给 cn-backup（save/restore/list）。
+    load_config
+    setup_backup_cron
+    _sub="${1:-}"
+    [ -n "$_sub" ] || { log "backup bootstrap 完成（sysupgrade.conf + cn-backup + cron）"; return 0; }
+    [ -x /usr/bin/cn-backup ] || die "cn-backup 未安装"
+    exec /usr/bin/cn-backup "$@"
+}
+
 main_ipv6() {
     # ipv6 子命令完全独立于 config.env：存在则仅静默 source（为取 KEEP_IPV6 逃生阀），
     # 缺失既不报错也不提示。刻意不走全装配置加载器（它会校验 CN_EXIT_MODE 并打印配置
@@ -2099,6 +2242,8 @@ main() {
         install_xray_bridge
     fi
     setup_monitor_cron
+    # 配置备份：补全官方 sysupgrade 清单 + 装 cn-backup + 每日加密离机备份 cron
+    setup_backup_cron
     # CDN 优选「工具 + cron + subdomains」先装好（无服务依赖，cron 始终在位）；优选「首跑」需
     # 服务正常运行，挪到服务自检通过之后。
     install_cdn_tooling
@@ -2120,6 +2265,7 @@ case "${1:-}" in
     openclash) main_crfb openclash ;;
     passwall2) main_crfb passwall2 ;;
     ipv6) main_ipv6 ;;
+    backup) shift; main_backup "$@" ;;
     '') main ;;
     *) die "未知参数: $1（-h|--help 查看用法）" ;;
 esac
