@@ -168,7 +168,7 @@ cd /root/sb-xray-openwrt && sh openwrt-init.sh
 - **同一 OpenWrt target 换机**（如两台都是 `x86/64` 软路由，仅 CPU / 内存不同）：配置 tar **可跨设备直接恢复**——同 target 下 `board.json` 通用、网口命名一致（`eth0/eth1…`），`/etc/config/network` 套得上。CPU / 内存差异只影响性能，不影响配置语义。
 
 🔬 **跨设备恢复的两条真实边界**（命中才需改走路径 A 全新初始化）：
-1. **Tailscale 身份是单例**（§7 铁律 2）：备份可能含 `tailscaled` 状态，**新旧两台同时在线会抢同一枚 `<TS_FIXED_IP>`**。简单搬配置时确保**老机先 `tailscale logout` 下线**；现役机在产的整机替换不要靠备份还原身份，走 §15 的显式身份交接。
+1. **Tailscale 身份不随配置备份迁移**：`sysupgrade -b` 默认不含 `/etc/tailscale/tailscaled.state`，故换机后新机为登出态（`NeedsLogin`），**不会自动接管 `<TS_FIXED_IP>`**——该 IP 仍被旧节点条目占用，回国腿无在线落地。须按 §13b（OAuth 带 `tag` 登录）+ §15.3（删旧节点 + API 夺固定 IP + 批准 routes）显式重建身份。身份单例（§7 铁律 2）：夺 IP 前确保旧机已 `tailscale logout`/下线，避免抢 IP。
 2. **跨型号嵌入式路由器**（不同 ARM/MIPS 板）：`board.json` + DSA/swconfig 端口映射 + 网口命名按型号不同，`/etc/config/network` 可能对不上（LAN/WAN 口错位）；板载无线芯片不同则 `/etc/config/wireless` 需重配。这类跨设备恢复后要逐项核对网络/无线，或直接走路径 A 更稳。
 
 ---

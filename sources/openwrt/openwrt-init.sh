@@ -302,6 +302,11 @@ install_tailscale() {
     # 每次重启都会注册成新节点（踩坑固化）。
     mkdir -p /etc/tailscale /var/run/tailscale
     backup_file /etc/init.d/tailscale
+    # tagged 节点（OAuth 登录）每次 tailscale up 必带 --advertise-tags，否则被控制面拒、
+    # 停在 stopped（2026-06-16 实战：备份换机后开机 auto-up 缺 tag 致回国起不来）。仅 OAuth
+    # 路径烘焙进下方 auto-up（静态，无运行时依赖）；普通 auth-key/交互登录维持原样不强加。
+    _TS_TAGINIT=""
+    ts_has_oauth && _TS_TAGINIT="--advertise-tags=${TS_OAUTH_TAGS} "
     # 关键固化：--port 固定端口、kernel TUN 模式（默认 tailscale0）、显式 state/socket 路径
     cat > /etc/init.d/tailscale <<EOF
 #!/bin/sh /etc/rc.common
@@ -328,7 +333,7 @@ start_service() {
     # 无条件回到声明状态。flags 与 prefs 一致时 up 幂等。
     (sleep 8; /usr/sbin/tailscale up --timeout=60s --accept-dns=false \\
         --advertise-routes=${TS_ADVERTISE_ROUTES} --advertise-exit-node \\
-        --hostname=${TS_HOSTNAME} >/dev/null 2>&1) &
+        --hostname=${TS_HOSTNAME} ${_TS_TAGINIT}>/dev/null 2>&1) &
 }
 
 stop_service() {
@@ -456,6 +461,9 @@ setup_tailscale() {
     # router 本体，不需要接受任何对端路由。
     # 登录态分支（设备重置后 state 丢失场景）：TS_AUTH_KEY > OAuth 现场铸 key > 交互式 URL
     _akflag=""
+    # tagged 节点每次 up 须带 --advertise-tags（含已登录后的幂等 re-up），否则被拒停 stopped。
+    _tagflag=""
+    ts_has_oauth && _tagflag="--advertise-tags=$TS_OAUTH_TAGS"
     if tailscale status 2>&1 | grep -qiE "logged out|needslogin|login required"; then
         if [ -n "$TS_AUTH_KEY" ]; then
             log "未登录：使用 TS_AUTH_KEY 免交互登录"
@@ -474,7 +482,7 @@ setup_tailscale() {
     fi
     log "运行 tailscale up —— 若打印登录 URL，请在浏览器打开授权（仅首次需要）"
     # $_akflag 不加引号：为空时须整体消失（auth key 无空格，ash 分词安全）
-    tailscale up --reset $_akflag \
+    tailscale up --reset $_akflag $_tagflag \
         --timeout=120s \
         --accept-dns=false \
         --advertise-routes="$TS_ADVERTISE_ROUTES" \
