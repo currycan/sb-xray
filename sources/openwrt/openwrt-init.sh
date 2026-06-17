@@ -28,7 +28,7 @@ die()  { printf '[install] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-用法: sh openwrt-init.sh [cdn [run|status|clean] | openclash | passwall2 | ipv6 | backup [save|restore|list]] [-h|--help]
+用法: sh openwrt-init.sh [cdn [run|status|clean] | openclash | passwall2 | istore | ipv6 | backup [save|restore|list]] [-h|--help]
 
 sb-xray OpenWrt 一键初始化。幂等可重跑，覆盖回国出口 + OpenClash 配置纳管 + CDN 优选。
 
@@ -59,6 +59,12 @@ CDN 子命令:
   sh openwrt-init.sh openclash       装/更新 OpenClash（CloudRunFilesBuilder .run）
   sh openwrt-init.sh passwall2       装/更新 PassWall2（同上）
   相关变量: CRFB_TAG(空=latest API) CRFB_FALLBACK_TAG GH_PROXY(镜像前缀,空=直连) CRFB_RESTART(默认1)
+
+iStore 应用商店子命令（也随默认全装自动装；幂等，已装则跳过）:
+  sh openwrt-init.sh istore          装 iStore 应用商店（luci-app-store）。官方 reinstall.run
+                                     自动识别 apk(ImmortalWrt 25.x)/opkg(≤24.10)；装后 LuCI →
+                                     服务 → iStore 商店，应用命名 app-meta-<名>。
+  相关变量: INSTALL_ISTORE(默认1,全装时装;0=跳过) ISTORE_REINSTALL_URL(上游脚本,可覆盖) GH_PROXY
 
 IPv6 防泄露子命令（独立入口，不进默认全装；幂等，只动 IPv6 不碰 IPv4/SSH）:
   sh openwrt-init.sh ipv6            仅禁用 LAN 公网 IPv6（回国 IPv4-only，防客户端
@@ -211,6 +217,11 @@ load_config() {
     CLASH_CORE_VARIANT="${CLASH_CORE_VARIANT:-}"           # 空=自动检测；覆盖填 amd64-v2/amd64-v3/arm64 等
     CLASH_CORE_FALLBACK_HASH="${CLASH_CORE_FALLBACK_HASH:-5c165b4}"  # 资产清单抓取失败时兜底拼 URL
     CLASH_MODEL="${CLASH_MODEL-__AUTO__}"                  # __AUTO__=按架构(amd→large/arm→lite)；空=跳过(靠 lgbm_auto_update 兜底)
+    # iStore 应用商店（luci-app-store）安装：全装流程与 istore 子命令默认装。官方 reinstall.run
+    # 同时支持 apk（ImmortalWrt 25.x，repo-apk/.adb 源）与 opkg（≤24.10，.ipk 源），自动识别。
+    # 全部带默认兜底，旧 config.env / watchtower 旧 env 集不受影响。INSTALL_ISTORE=0 跳过保留旧行为。
+    INSTALL_ISTORE="${INSTALL_ISTORE:-1}"                  # 0=跳过 iStore 安装
+    ISTORE_REINSTALL_URL="${ISTORE_REINSTALL_URL:-https://github.com/linkease/openwrt-app-actions/raw/main/applications/luci-app-systools/root/usr/share/systools/istore-reinstall.run}"
     # OpenClash 配置纳管默认开（检测到 OpenClash 才实际执行）；CDN 优选默认关（CDN_DOMAIN 非空启用）
     OPENCLASH_MANAGE="${OPENCLASH_MANAGE:-1}"
     # Tailscale 身份自恢复（OAuth admin API）：全部可选，不设维持交互式登录与后台手动操作
@@ -1773,6 +1784,43 @@ install_clash_core() {
     fi
 }
 
+install_istore() {
+    # 装 iStore 应用商店（luci-app-store）。幂等、默认开、非致命（便利商店，非回国关键基础设施，
+    # 装失败只 warn 不阻断全装）。官方 reinstall.run 自动识别 apk（ImmortalWrt 25.x，走 repo-apk
+    # 的 .adb 源）或 opkg（≤24.10，走 .ipk 源），经 gh_download(GH_PROXY 镜像优先) 取上游脚本。
+    # INSTALL_ISTORE=0 整体跳过保留旧行为。失败返回非 0，调用方决定是否致命。
+    [ "$INSTALL_ISTORE" = "1" ] || { log "INSTALL_ISTORE=$INSTALL_ISTORE，跳过 iStore 安装"; return 0; }
+    # 幂等：本体已装（LuCI store controller 在位）→ 跳过，不下载/不重装
+    if [ -s /usr/lib/lua/luci/controller/store.lua ]; then
+        log "iStore 已就位（luci-app-store），跳过安装"
+        return 0
+    fi
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 \
+        || { warn "install_istore: 缺 curl/wget，跳过 iStore"; return 1; }
+
+    _run=/tmp/istore-reinstall.run
+    gh_download "$ISTORE_REINSTALL_URL" "$_run" raw \
+        || { warn "iStore 安装脚本下载失败（检查网络/GH_PROXY），跳过"; return 1; }
+    log "执行 iStore 安装: sh $_run"
+    sh "$_run" || { warn "iStore 安装失败（istore-reinstall.run 返回非 0）"; rm -f "$_run"; return 1; }
+    rm -f "$_run"
+    [ -s /usr/lib/lua/luci/controller/store.lua ] \
+        || { warn "iStore 安装后未见 store.lua controller，安装异常"; return 1; }
+    log "iStore 安装完成: $(apk list -I 2>/dev/null | grep -oE 'luci-app-store-[0-9][0-9A-Za-z._-]*' | head -1)"
+    # 刷新 LuCI（菜单出「iStore 商店」）；best-effort 不阻断
+    [ -x /etc/init.d/rpcd ] && /etc/init.d/rpcd reload >/dev/null 2>&1
+    return 0
+}
+
+main_istore() {
+    # istore 子命令：独立装 iStore 应用商店。最小依赖，不跑全装校验。显式调用 → 强制装
+    # （忽略 config 的 INSTALL_ISTORE=0），且失败即致命（区别于全装流程的非致命降级）。
+    load_config
+    INSTALL_ISTORE=1
+    install_istore || die "iStore 安装失败（见上方日志；检查网络/GH_PROXY 后重试：sh $0 istore）"
+    log "iStore 就绪：LuCI → 服务 → iStore 商店（应用命名为 app-meta-<名>）"
+}
+
 main_crfb() {
     # openclash/passwall2 子命令入口：只需 load_config + detect_arch，不跑全装校验
     load_config
@@ -1864,6 +1912,9 @@ main() {
     setup_openclash_decouple
     # GLOBAL 组重排同样对两套方案适用（自身按 overwrite 钩子是否存在决定跑不跑）
     setup_global_reorder
+    # iStore 应用商店：独立便利设施，非回国关键路径。装失败只 warn 不阻断全装/回国自检
+    # （自身按 INSTALL_ISTORE 与是否已装决定跑不跑）。
+    install_istore || warn "iStore 安装未完成（非致命，可后续重试：sh $0 istore）"
     if mode_uses_reverse; then
         install_xray_bridge
     fi
@@ -1890,6 +1941,7 @@ case "${1:-}" in
     cdn) shift; main_cdn "$@" ;;
     openclash) main_crfb openclash ;;
     passwall2) main_crfb passwall2 ;;
+    istore) main_istore ;;
     ipv6) main_ipv6 ;;
     backup) shift; main_backup "$@" ;;
     '') main ;;

@@ -560,6 +560,22 @@ scp root@vps.example:/opt/openwrt-backups/openwrt-<host>-<ts>-full.tar.gz.enc /t
 cn-backup restore /tmp/openwrt-<host>-<ts>-full.tar.gz.enc
 ```
 
+### 5.10 装 iStore 应用商店（`istore` 子命令 + 全装默认装）
+
+iStore（`luci-app-store`）是 OpenWrt 标准应用商店,装后 LuCI 左栏出「服务 → iStore 商店」,可图形化搜索/安装插件(应用命名 `app-meta-<名>`,如 `app-meta-alist`/`app-meta-aria2`)。本脚本经 [上游官方 `istore-reinstall.run`](https://github.com/linkease/openwrt-app-actions) 安装,**随默认全装自动装**(裸跑 `sh openwrt-init.sh` 即装),也可单独执行:
+
+```sh
+sh openwrt-init.sh istore       # 单独装 iStore（已装则幂等跳过）
+```
+
+- **包管理器自适应**:官方 reinstall.run 自动识别系统——**apk**(ImmortalWrt 25.x / OpenWrt 24.10+,走 `repo-apk` 的 `.adb` 源)或 **opkg**(≤24.10,走 `.ipk` 源),无需手动切换。已在 ImmortalWrt 25.12.0 (apk / x86_64) 真机验证装入 `luci-app-store-0.2.0-r3` + 131 个可装应用。
+- **下载线路**:reinstall.run 脚本本身经 `GH_PROXY` 镜像优先、失败回退直连;商店内容走 `istore.istoreos.com` CDN(国内可达)。
+- **幂等**:已装(`/usr/lib/lua/luci/controller/store.lua` 在位)则跳过,不下载/不重装。重复执行安全。
+- **非致命降级**:iStore 是便利设施、非回国关键路径——**全装流程中装失败只 `warn` 不阻断**回国出口配置与自检;`istore` 子命令显式调用则失败即报错。可后续 `sh openwrt-init.sh istore` 重试。
+- **总开关**:`INSTALL_ISTORE=0` 跳过(保留旧行为,不装商店);`ISTORE_REINSTALL_URL` 可覆盖上游脚本地址(特殊镜像/pin 版本)。
+
+相关变量见 `config.env.example`「iStore 应用商店」段:`INSTALL_ISTORE`(默认 1)/ `ISTORE_REINSTALL_URL` / `GH_PROXY`(全部带默认兜底,不填即可用)。
+
 ---
 
 ## 6. 问题处理
