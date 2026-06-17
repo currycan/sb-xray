@@ -236,19 +236,15 @@ detect_os() {
 
 ensure_prereqs() {
     # 保证后续所有下载步骤可用 curl（install_docker 跳过时也不至于缺 curl）。
-    if ! command -v curl >/dev/null 2>&1; then
-        log "安装基础依赖 ca-certificates/curl"
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get install -y ca-certificates curl linux-headers-generic
-    fi
-    # 常用排障工具：jq（解析 JSON）、tree（看目录树）。缺任一则装（幂等）。
-    if ! command -v jq >/dev/null 2>&1 || ! command -v tree >/dev/null 2>&1; then
-        log "安装常用工具 jq/tree"
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update
-        apt-get install -y jq tree
-    fi
+    # 基础工具集 + 排障常用：ca-certificates/curl 是后续所有下载步骤的前提；
+    # 其余为日常运维/排障常备（vim/jq/tree/net-tools/telnet/lsof/python3 等）。
+    # apt-get install 幂等：已装即跳过。linux-headers-generic 供 DKMS（tcp-brutal）。
+    log "安装基础工具集（vim/curl/jq/tree/net-tools/python3/git 等）"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y \
+        vim ca-certificates curl lsof bash-completion tree net-tools telnet \
+        python3 python3-pip psmisc git jq linux-headers-generic
 }
 
 set_timezone() {
