@@ -193,11 +193,11 @@ flowchart LR
 ssh root@<路由器IP>
 mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
 for f in openwrt-init.sh config.env.example cn-bridge cn-bridge-monitor nodes.list.example; do
-  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
+  wget -O "$f" "https://ghfast.top/https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
 done
 ```
 
-> 国内直连 GitHub raw 可能失败：让路由器先走代理再下载，或换一台能访问 GitHub 的机器下载后传入。`cn-bridge` / `cn-bridge-monitor` 缺失也不要紧——主脚本运行时会自动补下载。
+> 上面已默认走 `ghfast.top` 镜像适配国内可达性；镜像失效时换其它 GitHub 代理前缀、或去掉前缀走直连，或换一台能访问 GitHub 的机器下载后传入。`cn-bridge` / `cn-bridge-monitor` 缺失也不要紧——主脚本运行时会自动经 `GH_PROXY` 镜像补下载。
 
 ### 步骤 2：填配置
 
@@ -465,11 +465,13 @@ sh openwrt-init.sh
 
 脚本自动完成：OAuth 铸 key 免交互登录 → **API 删除旧设备条目、把本机 IP 恢复为 `TS_EXPECTED_IP`**（所有 VPS 的 socks5 腿指向零改动）→ API 批准 subnet routes + exit node → Tailscale/xray/bridge/钩子/cron/监控/OpenClash 配置/CDN 优选全量重建。自检对固定 IP 做硬校验。
 
-**范围边界**（重置后仍需手动、不属本脚本管辖）：OpenWrt 基础系统配置（LAN 网段、wifi、DHCP——建议平时 `sysupgrade -b` 留备份）、OpenClash 本体安装（ipk + smart 内核）。未配 OAuth 时退化为旧流程：登录 URL 手动授权 + 后台手动改 IP / 批准 routes（脚本会打印精确的后台操作路径）。
+**范围边界**（重置后仍需手动、不属本脚本管辖）：OpenWrt 基础系统配置（LAN 网段、wifi、DHCP——建议平时 `sysupgrade -b` 留备份）。OpenClash 本体（LuCI ipk）+ mihomo Smart 核现由 `openclash` 子命令一并装好（见 §5.7，核心按 CPU 微架构自动选 v1/v2/v3）。未配 OAuth 时退化为旧流程：登录 URL 手动授权 + 后台手动改 IP / 批准 routes（脚本会打印精确的后台操作路径）。
 
 ### 5.7 装/更新 OpenClash / PassWall2（独立子命令，幂等）
 
 两个独立子命令，从上游每日构建 [CloudRunFilesBuilder](https://github.com/wkccd/CloudRunFilesBuilder) 拉对应架构的 `.run`（makeself 自解压，内含 `opkg install` 及依赖）安装/更新。**不进默认全装流程**（裸跑 `sh openwrt-init.sh` 不会碰这两个插件），按需单独执行：
+
+> **apk 系统 / OpenWrt 24.10+（如 ImmortalWrt 25.x，无 `opkg`）**：`.run` 本体安装依赖 `opkg`，此时若本体已就位（`apk` 装或镜像预置）则**自动跳过本体步骤、继续后续（如装 clash 核）**；本体也缺则提示先 `apk add luci-app-openclash`。
 
 ```sh
 sh openwrt-init.sh openclash    # 装/更新 OpenClash
@@ -481,8 +483,10 @@ sh openwrt-init.sh passwall2    # 装/更新 PassWall2
 - **幂等（双锚点）**：marker 文件 `/etc/sb-xray/crfb-<pkg>.ver` 记录已装资产名；marker 命中、或 `opkg list-installed` 的版本串已含最新版本，即判为最新——**不下载、不重装、不重启**，直接跳过。重复执行安全。
 - **不影响已运行插件**：跳过分支永不重启；仅在确有安装/升级时**只**重启目标插件自身服务（`/etc/init.d/<pkg> restart`），绝不触碰其它已运行插件。`CRFB_RESTART=0` 可关闭自动重启（只装不重启）。
 - **下载线路**：API 与 `.run` 下载都先走 `GH_PROXY` 镜像前缀（默认一个 ghproxy 类镜像）、失败回退直连。镜像失效时改 `GH_PROXY` 或置空走纯直连。
+- **mihomo Smart 核自动安装**（`openclash` 子命令专属，默认开）：装完 LuCI 本体后,按 CPU 微架构自动选核——x86_64 读 `/proc/cpuinfo` flags 选 `v3`(avx2)/`v2`(sse4_2)/`v1`(基线)，arm64 用 `linux-arm64`——经 `GH_PROXY` 从 `vernesong/mihomo` 拉对应 Smart 核到 `/etc/openclash/core/clash_meta`，**装后即跑 `-v` 自检**（CPU 不支持该等级会拒绝执行，自检失败即报错并提示用 `CLASH_CORE_VARIANT` 降级），再写 `core_version` + `enable=1` 并重启。幂等：核已在且可执行且版本匹配则跳过下载。同时按架构装 Smart 模型 `Model.bin`。**主全装流程（裸跑 `sh openwrt-init.sh`）也会在 OpenClash 配置应用后补装/校验核心**，堵住「本体+配置就位但核心缺失→7891 不监听」的洞。
+  - 历史坑：本体装了但核心从未自动下载（国内网络）、或从异 CPU 设备的黄金备份恢复来的 v3 核在不支持 AVX2 的新机（如 J6413/Tremont）上 SIGILL 起不来——此特性即为根治。
 
-相关变量见 `config.env.example`「插件安装」段：`CRFB_REPO` / `CRFB_TAG` / `CRFB_FALLBACK_TAG` / `GH_PROXY` / `CRFB_RESTART`（全部带默认兜底，不填即可用）。
+相关变量见 `config.env.example`「插件安装」段：`CRFB_REPO` / `CRFB_TAG` / `CRFB_FALLBACK_TAG` / `GH_PROXY` / `CRFB_RESTART`；核心安装：`INSTALL_CLASH_CORE` / `CLASH_CORE_REPO` / `CLASH_CORE_TAG` / `CLASH_CORE_VARIANT` / `CLASH_CORE_FALLBACK_HASH` / `CLASH_MODEL`（全部带默认兜底，不填即可用）。
 
 ### 5.8 单独收口 LAN 公网 IPv6（`ipv6` 子命令）
 

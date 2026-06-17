@@ -77,10 +77,10 @@ flowchart TD
 🔧 路由器 SSH 里一行搞定（设备联网即可）：
 
 ```sh
-wget -O gl-inet.sh https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/gl-inet.sh && chmod +x gl-inet.sh && ./gl-inet.sh
+wget -O gl-inet.sh https://ghfast.top/https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/gl-inet.sh && chmod +x gl-inet.sh && ./gl-inet.sh
 ```
 
-🔧 中国大陆访问 `raw.githubusercontent.com` 不稳时，换 jsDelivr CDN 镜像（同一文件）：
+🔧 上面已默认走 `ghfast.top` 镜像；该镜像失效时，换 jsDelivr CDN 镜像（同一文件）：
 
 ```sh
 wget -O gl-inet.sh https://cdn.jsdelivr.net/gh/currycan/sb-xray@main/sources/openwrt/gl-inet.sh && chmod +x gl-inet.sh && ./gl-inet.sh

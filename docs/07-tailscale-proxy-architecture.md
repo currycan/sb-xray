@@ -340,7 +340,7 @@ flowchart LR
 # 路由器上直接下载：
 mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
 for f in openwrt-init.sh config.env.example; do
-  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
+  wget -O "$f" "https://ghfast.top/https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
 done
 cp config.env.example config.env
 vi config.env          # CN_EXIT_MODE=socks5；填 VPS_DOMAIN / PEER_TS_IP / TS_HOSTNAME / TS_VERSION

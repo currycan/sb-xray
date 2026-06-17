@@ -121,25 +121,34 @@ backup_file() {
 
 download_verify() {
     # download_verify <url> <dest> <kind: tgz|zip|json|raw>
+    # GitHub 域名（github.com / githubusercontent.com）经 GH_PROXY 镜像优先、直连兜底，
+    # 适配国内可达性；非 GitHub 源（如 pkgs.tailscale.com）保持直连。
     _url=$1
     _dest=$2
     _kind=$3
+    _dv_bases="$_url"
+    case "$_url" in
+        *github.com*|*githubusercontent.com*)
+            [ -n "$GH_PROXY" ] && _dv_bases="${GH_PROXY}${_url} $_url" ;;
+    esac
     _n=0
     while [ "$_n" -lt "$DOWNLOAD_RETRIES" ]; do
         _n=$((_n + 1))
-        log "下载($_n/$DOWNLOAD_RETRIES): $_url"
-        if wget -q -O "$_dest" "$_url"; then
-            [ -s "$_dest" ] || { warn "下载为空，重试"; continue; }
-            case "$_kind" in
-                tgz)  gzip -t "$_dest" 2>/dev/null && return 0 ;;
-                zip)  unzip -t "$_dest" >/dev/null 2>&1 && return 0 ;;
-                json) grep -q '{' "$_dest" && return 0 ;;
-                *)    return 0 ;;
-            esac
-            warn "完整性校验失败，重试"
-        else
-            warn "wget 失败，重试"
-        fi
+        for _dv_u in $_dv_bases; do
+            log "下载($_n/$DOWNLOAD_RETRIES): $_dv_u"
+            if wget -q -O "$_dest" "$_dv_u"; then
+                [ -s "$_dest" ] || { warn "下载为空，重试"; continue; }
+                case "$_kind" in
+                    tgz)  gzip -t "$_dest" 2>/dev/null && return 0 ;;
+                    zip)  unzip -t "$_dest" >/dev/null 2>&1 && return 0 ;;
+                    json) grep -q '{' "$_dest" && return 0 ;;
+                    *)    return 0 ;;
+                esac
+                warn "完整性校验失败，重试"
+            else
+                warn "wget 失败，重试"
+            fi
+        done
         sleep 2
     done
     die "下载失败（已重试 $DOWNLOAD_RETRIES 次）: $_url"
@@ -194,6 +203,14 @@ load_config() {
     CRFB_FALLBACK_TAG="${CRFB_FALLBACK_TAG:-2026-06-14}"   # API 全不可达时的硬兜底 tag
     GH_PROXY="${GH_PROXY:-https://ghfast.top/}"            # GitHub 镜像前缀（含末尾/）；空=纯直连
     CRFB_RESTART="${CRFB_RESTART:-1}"                      # 装/更新后是否只重启目标插件自身服务
+    # Clash 核（mihomo Smart）安装：openclash 子命令与全装默认装核心，自动判 CPU 微架构，
+    # 经 gh_download(GH_PROXY) 下载。全部带默认兜底，旧 config.env / watchtower 旧 env 集不受影响。
+    INSTALL_CLASH_CORE="${INSTALL_CLASH_CORE:-1}"          # 0=跳过核心安装（保留旧行为）
+    CLASH_CORE_REPO="${CLASH_CORE_REPO:-vernesong/mihomo}" # Smart 核仓库（可换 fork）
+    CLASH_CORE_TAG="${CLASH_CORE_TAG:-Prerelease-Alpha}"   # Smart 核 release tag
+    CLASH_CORE_VARIANT="${CLASH_CORE_VARIANT:-}"           # 空=自动检测；覆盖填 amd64-v2/amd64-v3/arm64 等
+    CLASH_CORE_FALLBACK_HASH="${CLASH_CORE_FALLBACK_HASH:-5c165b4}"  # 资产清单抓取失败时兜底拼 URL
+    CLASH_MODEL="${CLASH_MODEL-__AUTO__}"                  # __AUTO__=按架构(amd→large/arm→lite)；空=跳过(靠 lgbm_auto_update 兜底)
     # OpenClash 配置纳管默认开（检测到 OpenClash 才实际执行）；CDN 优选默认关（CDN_DOMAIN 非空启用）
     OPENCLASH_MANAGE="${OPENCLASH_MANAGE:-1}"
     # Tailscale 身份自恢复（OAuth admin API）：全部可选，不设维持交互式登录与后台手动操作
@@ -286,6 +303,28 @@ detect_arch() {
             die "不支持的架构: ${_m}（可用 config 的 ARCH_OVERRIDE=arm64|amd64 覆盖）" ;;
     esac
     log "架构: $_m -> tailscale=$TS_ARCH xray=$XRAY_ZIP"
+}
+
+detect_clash_variant() {
+    # 由 detect_arch 的 TS_ARCH 出发，定 Smart 核微架构变体 CLASH_VARIANT + OpenClash
+    # core_version。amd64 按 /proc/cpuinfo flags 选 v3(avx2)/v2(sse4_2)/v1(基线)；arm64 无微
+    # 架构分档。CLASH_CORE_VARIANT 非空则覆盖自动检测（逃生阀，如核启动报非法指令时手动降级）。
+    [ -n "$TS_ARCH" ] || detect_arch
+    if [ -n "$CLASH_CORE_VARIANT" ]; then
+        CLASH_VARIANT="$CLASH_CORE_VARIANT"
+    else
+        case "$TS_ARCH" in
+            arm64) CLASH_VARIANT=arm64 ;;
+            amd64)
+                if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then CLASH_VARIANT=amd64-v3
+                elif grep -qw sse4_2 /proc/cpuinfo 2>/dev/null; then CLASH_VARIANT=amd64-v2
+                else CLASH_VARIANT=amd64-v1
+                fi ;;
+            *) die "detect_clash_variant: 未知 TS_ARCH=$TS_ARCH" ;;
+        esac
+    fi
+    CLASH_CORE_VERSION="linux-${CLASH_VARIANT}"
+    log "Clash 核变体: $CLASH_VARIANT -> core_version=$CLASH_CORE_VERSION"
 }
 
 # ── TUN 前置 ──────────────────────────────────────────────────────
@@ -948,11 +987,13 @@ openclash_cfg_same() {
 
 render_openclash_config() {
     # render_openclash_config <模板> <输出>
-    # ① 占位符注入：<OPENCLASH_DASHBOARD_PASSWORD> ← 同名变量
+    # ① 占位符注入：<OPENCLASH_DASHBOARD_PASSWORD> 与 <CLASH_CORE_VERSION> ← 同名变量
+    #    （CLASH_CORE_VERSION 由 detect_clash_variant 按 CPU 微架构定，main 在此前已调用）
     # ② 订阅块处理：OPENCLASH_SUBS（"名=URL 名=URL" 空格分隔）按 option name 匹配，
     #    命中的 config_subscribe 块在 name 行后注入 option address；未命中的订阅块
     #    （模板里的 AllOne / 占位示例）整块裁剪 —— 模板保留示例，路由器产物只含实配。
-    sed "s|<OPENCLASH_DASHBOARD_PASSWORD>|${OPENCLASH_DASHBOARD_PASSWORD}|" "$1" | \
+    sed -e "s|<OPENCLASH_DASHBOARD_PASSWORD>|${OPENCLASH_DASHBOARD_PASSWORD}|" \
+        -e "s|<CLASH_CORE_VERSION>|${CLASH_CORE_VERSION}|" "$1" | \
     awk -v subs="$OPENCLASH_SUBS" -v q="'" '
         BEGIN {
             n = split(subs, a, " ")
@@ -1598,7 +1639,16 @@ install_crfb_pkg() {
         passwall2) _luci=luci-app-passwall2; _prefix=passwall2_; _svc=passwall2 ;;
         *) die "未知包: $_pkg（支持 openclash|passwall2）" ;;
     esac
-    command -v opkg >/dev/null 2>&1 || die "未找到 opkg，这不是 OpenWrt？"
+    # OpenWrt 24.10+/ImmortalWrt 25.x 用 apk、无 opkg：本脚本的 .run 本体安装依赖 opkg，
+    # 此时若本体已就位（apk 装或镜像预置）则跳过本体步骤、继续后续（如装 clash 核），
+    # 本体也缺才硬失败（交 apk 装本体）。
+    if ! command -v opkg >/dev/null 2>&1; then
+        if [ -x "/etc/init.d/$_svc" ]; then
+            warn "未找到 opkg（apk 系统/OpenWrt 24.10+）：$_pkg 本体安装/更新交 apk；本体已就位，跳过本体步骤"
+            return 0
+        fi
+        die "未找到 opkg 且 $_pkg 本体未安装——apk 系统请先 apk add $_luci（本脚本 .run 安装依赖 opkg）"
+    fi
 
     _assets=/tmp/crfb-$_pkg-assets.txt
     : > "$_assets"
@@ -1658,11 +1708,82 @@ install_crfb_pkg() {
     fi
 }
 
+install_clash_core() {
+    # 装 OpenClash 的 mihomo Smart 核（/etc/openclash/core/clash_meta）。幂等、默认开。
+    # 经 gh_download(GH_PROXY 镜像优先) 从 CLASH_CORE_REPO@CLASH_CORE_TAG 取匹配本机微架构的
+    # Smart 核；SIGILL 自检；写 core_version + enable=1。修历史坑：本体装了但核心从未下载/
+    # 备份 v3 核与新机 CPU 不兼容 → 核心起不来。INSTALL_CLASH_CORE=0 整体跳过保留旧行为。
+    [ "$INSTALL_CLASH_CORE" = "1" ] || { log "INSTALL_CLASH_CORE=$INSTALL_CLASH_CORE，跳过 clash 核安装"; return 0; }
+    [ -x /etc/init.d/openclash ] || { log "未检测到 OpenClash 本体，跳过 clash 核安装"; return 0; }
+    command -v uci >/dev/null 2>&1 || die "install_clash_core: 缺 uci"
+    [ -n "$CLASH_VARIANT" ] || detect_clash_variant
+
+    _core=/etc/openclash/core/clash_meta
+    # 幂等：核在、能在本机执行、core_version 已对 → 仅确保 enable=1 后跳过
+    if [ -x "$_core" ] && "$_core" -v >/dev/null 2>&1 \
+        && [ "$(uci -q get openclash.config.core_version)" = "$CLASH_CORE_VERSION" ]; then
+        log "clash 核已就位且可执行（$CLASH_CORE_VERSION），跳过下载"
+        [ "$(uci -q get openclash.config.enable)" = "1" ] || { uci set openclash.config.enable='1'; uci commit openclash; }
+        return 0
+    fi
+
+    # 解析 Smart 核资产 URL：复用 crfb_assets_from_tag 抓 expanded_assets，挑本机变体、排除 -go12x-
+    _assets=/tmp/clash-core-assets.txt; : > "$_assets"
+    _url=""
+    if crfb_assets_from_tag "$CLASH_CORE_TAG" "$_assets"; then
+        _url=$(grep -E "/mihomo-linux-${CLASH_VARIANT}-alpha-smart-[0-9a-f]+\.gz$" "$_assets" | head -1)
+    fi
+    if [ -z "$_url" ] && [ -n "$CLASH_CORE_FALLBACK_HASH" ]; then
+        _url="https://github.com/${CLASH_CORE_REPO}/releases/download/${CLASH_CORE_TAG}/mihomo-linux-${CLASH_VARIANT}-alpha-smart-${CLASH_CORE_FALLBACK_HASH}.gz"
+        warn "资产清单未匹配 $CLASH_VARIANT，回退 pin hash: ${_url##*/}"
+    fi
+    [ -n "$_url" ] || die "未找到匹配 $CLASH_VARIANT 的 Smart 核（检查网络/GH_PROXY/CLASH_CORE_VARIANT）"
+
+    _gz=/tmp/clash_meta.gz
+    gh_download "$_url" "$_gz" raw || die "clash 核下载失败: $_url（检查网络/GH_PROXY）"
+    mkdir -p "$(dirname "$_core")"
+    gunzip -c "$_gz" > "$_core" || die "clash 核解压失败: $_gz"
+    chmod +x "$_core"; rm -f "$_gz"
+    # SIGILL 自检：核必须能在本机执行（CPU 微架构不匹配会拒绝执行）
+    "$_core" -v >/dev/null 2>&1 || die "clash 核无法在本机执行（CPU 不支持 $CLASH_VARIANT？用 CLASH_CORE_VARIANT 降级如 amd64-v1 重试）"
+    log "clash 核已装: $("$_core" -v 2>/dev/null | head -1)"
+
+    # Smart 模型（CLASH_MODEL=__AUTO__ 按架构选；空=跳过靠 OpenClash lgbm_auto_update 兜底）
+    case "$CLASH_MODEL" in
+        __AUTO__) case "$TS_ARCH" in amd64) _model_name=Model-large.bin ;; *) _model_name=Model-lite.bin ;; esac ;;
+        "") _model_name="" ;;
+        *) _model_name="$CLASH_MODEL" ;;
+    esac
+    if [ -n "$_model_name" ] && [ ! -s /etc/openclash/Model.bin ]; then
+        gh_download "https://github.com/${CLASH_CORE_REPO}/releases/download/LightGBM-Model/${_model_name}" \
+            /etc/openclash/Model.bin raw \
+            && log "已装 Smart 模型: $_model_name" \
+            || warn "Smart 模型下载失败（OpenClash lgbm_auto_update 会兜底自更新）"
+    fi
+
+    uci set openclash.config.core_version="$CLASH_CORE_VERSION"
+    uci set openclash.config.enable='1'
+    uci commit openclash
+    mkdir -p /etc/sb-xray && printf '%s %s\n' "$CLASH_VARIANT" "${_url##*/}" > /etc/sb-xray/clash-core.ver
+    log "clash 核完成: core_version=$CLASH_CORE_VERSION enable=1"
+    # 仅在确有装/换核时重启使新核生效（幂等跳过路径已 return，不到这里 → 不重启）
+    if [ "$CRFB_RESTART" = "1" ] && [ -x /etc/init.d/openclash ]; then
+        log "重启 openclash 使新核生效"
+        /etc/init.d/openclash restart >/dev/null 2>&1 || warn "openclash restart 返回非 0，请手动检查"
+    fi
+}
+
 main_crfb() {
     # openclash/passwall2 子命令入口：只需 load_config + detect_arch，不跑全装校验
     load_config
     detect_arch
     install_crfb_pkg "$1"
+    # openclash：本体装完后按 CPU 微架构补装 mihomo Smart 核（固化，免手动救场）；
+    # install_clash_core 仅在确有装/换核时自重启，幂等空跑不重启（非破坏）
+    if [ "$1" = openclash ]; then
+        detect_clash_variant
+        install_clash_core
+    fi
 }
 
 main_backup() {
@@ -1717,6 +1838,7 @@ main() {
     load_config
     validate_config
     detect_arch
+    detect_clash_variant         # 定 Smart 核微架构变体 + core_version（供模板渲染与核心安装）
     generate_nodes_list          # 所有模式：清单供解耦遍历 + cn-bridge 拨号
     if mode_uses_tailscale; then
         ensure_tun
@@ -1735,6 +1857,9 @@ main() {
     # OpenClash 配置纳管：模板渲染 + 幂等应用（自身按 OPENCLASH_MANAGE 与 OpenClash
     # 存在性决定跑不跑）；放在解耦/重排前，统一由解耦末尾的 restart 生效
     setup_openclash_config
+    # Clash 核安装：配置应用后补装/校验 mihomo Smart 核（自身按 INSTALL_CLASH_CORE 与
+    # OpenClash 本体存在性决定跑不跑），堵住"本体+配置就位但核心缺失→7891不监听"的洞
+    install_clash_core
     # 解耦对两套方案都适用（自身按是否存在 OpenClash 决定跑不跑）
     setup_openclash_decouple
     # GLOBAL 组重排同样对两套方案适用（自身按 overwrite 钩子是否存在决定跑不跑）

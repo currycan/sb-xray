@@ -12,6 +12,9 @@
 |----------------|-----------------|------|
 | `<OPENCLASH_DASHBOARD_PASSWORD>` | `OPENCLASH_DASHBOARD_PASSWORD` | dashboard 登录密码（必填） |
 | `config_subscribe` 块的 `option address` | `OPENCLASH_SUBS`（`名=URL` 空格分隔） | 按 `option name` 匹配注入订阅地址 |
+| `<CLASH_CORE_VERSION>` | （自动，按 CPU 微架构） | `core_version` 由 `openwrt-init.sh` 的 `detect_clash_variant` 按设备 CPU 渲染：x86_64 选 `linux-amd64-v3/v2/v1`，arm64 用 `linux-arm64`。模板不再硬编码版本。 |
+
+> **Smart 核自动安装**：`sh openwrt-init.sh openclash` 装完本体后，按 CPU 微架构经 `GH_PROXY` 镜像从 `vernesong/mihomo`（`Prerelease-Alpha`）拉对应 Smart 核到 `/etc/openclash/core/clash_meta`，装后 `-v` 自检后写 `core_version` + `enable=1`。变体 / 仓库 / 镜像可经 `CLASH_CORE_VARIANT` / `CLASH_CORE_REPO` / `GH_PROXY` 等 env 调整（见 `../openwrt/config.env.example`）。无需再手动下表下方那些核心 tar。
 
 渲染规则：注入后仍含占位地址（如 `<YOUR_SUBSCRIBE_LINK`、`【订阅地址`）或未提供地址的 `config_subscribe` 块会被**整块裁剪**——模板里的 AllOne / 示例块仅作填写示范，不会落到路由器上。应用前自动备份 `.bak.<时间戳>`，无差异时跳过。
 
