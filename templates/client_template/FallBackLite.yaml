@@ -76,8 +76,8 @@ proxy-groups:
   - {name: 媒体-手动,   type: select,    filter: *FilterMedia, include-all: true, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Clubhouse_1.png}
   - {name: 媒体-自动,   <<: *MediaUT,    filter: *FilterMedia, include-all: true, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Clubhouse_1.png}
   # ==================== AI 服务 ====================
-  - {name: Claude,     <<: *SelectISP,   icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/ClaudeCode.png}
-  - {name: Gemini,     <<: *SelectISP,   icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/gemini.png}
+  - {name: Claude,     <<: *SelectAI,   icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/ClaudeCode.png}
+  - {name: Gemini,     <<: *SelectAI,   icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/gemini.png}
   - {name: 人工智能,    <<: *SelectAI,    icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/AI.png}
   # ==================== 媒体服务 ====================
   - {name: TikTok,     <<: *SelectISP,   icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/TikTok.png}
