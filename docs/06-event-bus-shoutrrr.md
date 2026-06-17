@@ -533,7 +533,7 @@ HTTP 头 **`X-Event`** 标示事件类型——取值为 `ban_bt` / `ban_geoip_c
 
 ### 9.1 watchtower 自动更新通知（host 侧 canary）
 
-📘 除 Xray webhook 外，还有一类事件来自**主机侧**:每台节点的 `sbx-canary-check.sh`（cron 周期跑，详见 [`../sources/vps/README.md`](../sources/vps/README.md)）在镜像自动更新后做业务自检，经**同一个 forwarder** 推中文卡片。它们不走 Xray PR #5722 的 payload，字段由脚本自定义。
+📘 除 Xray webhook 外，还有一类事件来自**主机侧**:每台节点的 `sbx-canary-check` 命令（装在 `/usr/local/bin`，cron 周期跑，详见 [`../sources/vps/README.md`](../sources/vps/README.md)）在镜像自动更新后做业务自检，经**同一个 forwarder** 推中文卡片。它们不走 Xray PR #5722 的 payload，字段由脚本自定义。
 
 | 事件（`X-Event`） | 触发 | 卡片字段 |
 |---|---|---|

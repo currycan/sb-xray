@@ -10,9 +10,11 @@
 
 ```mermaid
 flowchart LR
-    I["~/initial<br/>vps-init.sh + initial.env<br/>（初始化，跑一次）"] -->|生成 + 启动| R["~/sb-xray<br/>.env + docker-compose.yml<br/>+ 运行时脚本<br/>（运行容器）"]
+    I["~/initial<br/>vps-init.sh + initial.env<br/>（初始化，跑一次）"] -->|生成 + 启动| R["~/sb-xray<br/>.env + .envs/ + docker-compose.yml<br/>+ 数据卷（运行容器）"]
+    I -.->|装命令| B["/usr/local/bin<br/>sbx-redeploy / sbx-update<br/>sbx-canary-check / cn-exit-watchdog"]
     style I fill:#e3f2fd,stroke:#1565c0
     style R fill:#e8f5e9,stroke:#2e7d32
+    style B fill:#fff3e0,stroke:#e65100
 ```
 
 **init 与 runtime 是两个解耦的工作流、两个目录**：
@@ -20,7 +22,8 @@ flowchart LR
 | 目录 | 是什么 | 内容 |
 |------|--------|------|
 | **`~/initial`** | **初始化工作流**（一次性） | `vps-init.sh` + 你填的 `initial.env` |
-| **`~/sb-xray`** | **运行 sb-xray 工作流**（持续） | `.env`（**只给容器**）+ `docker-compose.yml` + 运行时脚本（`sbx-redeploy.sh`、回国节点的 `sbx-canary-check.sh`/`cn-exit-watchdog.sh`） |
+| **`~/sb-xray`** | **运行 sb-xray 工作流**（持续） | `.env`（**只给容器**，compose 插值源）+ `.envs/`（容器运行时生成的 secret/UUID/账户持久化目录）+ `docker-compose.yml` + 数据卷目录（`pki/`/`x-ui/`/`geo/`…） |
+| **`/usr/local/bin`** | **运维命令**（集中管理） | `sbx-redeploy`、`sbx-update`、回国节点的 `sbx-canary-check`/`cn-exit-watchdog`——均由 `vps-init.sh` 装成一等命令（去 `.sh` 后缀），不混进 `~/sb-xray` |
 
 **三个不变量**（理解了就不会用错）：
 
@@ -51,7 +54,7 @@ chmod +x vps-init.sh
 
 > 💡 必须带 `-O <文件名>`：裸 `wget <URL>` 在文件已存在时会另存为 `vps-init.sh.1`，重跑就拿到旧文件。`-O` 强制覆盖到确定文件名（`curl -fsSL -o <文件名> <URL>` 同效）。
 >
-> 🧭 **放 `~/initial`**：这是 init 工作流的专属目录，与容器运行目录 `~/sb-xray` 分开。`vps-init.sh` 读同目录的 `initial.env`，并把容器部署到 `~/sb-xray`、运行时脚本也拉到那里。
+> 🧭 **放 `~/initial`**：这是 init 工作流的专属目录，与容器运行目录 `~/sb-xray` 分开。`vps-init.sh` 读同目录的 `initial.env`，把容器部署到 `~/sb-xray`、运维脚本装到 `/usr/local/bin` 作命令。
 >
 > 🌏 CN 境内拉 `raw.githubusercontent.com` 慢/不通时，把 URL 换成你的镜像/代理地址即可（脚本内部下载源也都能用 `*_URL` 变量改写，见 §4）。
 
@@ -83,7 +86,7 @@ vi initial.env
 sudo ./vps-init.sh           # -h/--help 看用法
 ```
 
-一次跑完：系统调优 + Docker、写 `~/sb-xray/.env` + 落 compose、把运行时脚本拉到 `~/sb-xray`、**`docker compose up -d` 启动容器**；**回国节点**额外装 Tailscale 入网 + keepalive + 自检护栏 + 反向探活，并在末尾自检（4 项，硬失败非 0 退出）。
+一次跑完：系统调优 + Docker、写 `~/sb-xray/.env` + 落 compose、把运维脚本装到 `/usr/local/bin` 作命令、**`docker compose up -d` 启动容器**；**回国节点**额外装 Tailscale 入网 + keepalive + 自检护栏 + 反向探活，并在末尾自检（4 项，硬失败非 0 退出）。
 
 > ✅ **幂等**：系统配置写成专属 drop-in（`/etc/sysctl.d/`、`/etc/ssh/sshd_config.d/`、`/etc/sudoers.d/` 等），全量重写不漂移。重跑安全。
 >
@@ -181,7 +184,7 @@ flowchart LR
 | 变量 | 默认拉取 |
 |------|----------|
 | `SBX_COMPOSE_URL` | `docker-compose.yml`（init 首次落盘） |
-| `REDEPLOY_URL` | `sbx-redeploy.sh`（运行时更新脚本，拉到 `~/sb-xray`） |
+| `REDEPLOY_URL` | `sbx-redeploy.sh`（运行时更新脚本，装到 `/usr/local/bin` 作 `sbx-redeploy` 命令） |
 | `CANARY_URL` | `sbx-canary-check.sh`（回国节点护栏） |
 | `WATCHDOG_URL` | `cn-exit-watchdog.sh`（回国节点护栏） |
 | `SSRPOLIPO_COMPOSE_URL` | ssr-polipo compose（`INSTALL_SSRPOLIPO=1` 时必给） |
@@ -193,7 +196,7 @@ flowchart LR
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `SBXRAY_DIR` | `~/sb-xray` | sb-xray 运行目录（`.env`/compose/运行时脚本所在；与 init 目录 `~/initial` 分开） |
+| `SBXRAY_DIR` | `~/sb-xray` | sb-xray 运行目录（`.env`/`.envs/`/compose/数据卷所在；与 init 目录 `~/initial`、命令目录 `/usr/local/bin` 分开） |
 | `INSTALL_SSRPOLIPO` | `1`（开） | 启用须给 `SSRPOLIPO_COMPOSE_URL`，否则 warn 跳过。设 `0` 关 |
 | `INSTALL_TCP_BRUTAL` | `1`（开） | 装 `tcp-brutal` DKMS 内核模块。**仅令诊断位 `IS_BRUTAL=true`；Hy2 实际用 bbr，不装不影响代理功能。** 自动补 `build-essential` + 运行内核头；运行内核被仓库淘汰时无法编译（需先升级内核 + 重启）。设 `0` 关 |
 | `SKIP_PULL` | `0` | 设 `1` 启动只 `up -d` 不 `pull`（不升级镜像） |
@@ -215,30 +218,30 @@ flowchart LR
 
 ---
 
-## 6. 运行时操作（`~/sb-xray`）
+## 6. 运行时操作（命令在 `/usr/local/bin`）
 
-init 跑完后，日常运维都在容器运行目录 `~/sb-xray`，与 init 解耦。
+init 跑完后，日常运维用 `/usr/local/bin` 下的命令操作容器（数据仍在 `~/sb-xray`，命令经 `SBXRAY_DIR` 解析，默认 `~/sb-xray`）。
 
-### 更新容器到最新：`sbx-redeploy.sh`
+### 更新容器到最新：`sbx-redeploy`
 
-`vps-init.sh` 已把它拉到 `~/sb-xray`。它重拉 `docker-compose.yml` → `down` → `pull` → 清**可重生成目录**（`sb-xray/`、`logs/`、`nginx/`）→ `up -d` → 清悬空镜像。持久状态（`pki/`、`acmecerts/`、`x-ui/`、`sub-store/`、`data/`、`geo/` 等）**不动**。
+`vps-init.sh` 已把它装成 `/usr/local/bin/sbx-redeploy` 命令。它重拉 `docker-compose.yml` → `down` → `pull` → 清**可重生成目录**（`sb-xray/`、`logs/`、`nginx/`）→ `up -d` → 清悬空镜像。持久状态（`pki/`、`acmecerts/`、`x-ui/`、`sub-store/`、`data/`、`geo/`、`.envs/` 等）**不动**。
 
 ```sh
-~/sb-xray/sbx-redeploy.sh        # -h/--help 看用法
+sbx-redeploy        # -h/--help 看用法
 ```
 
 ### watchtower 自检护栏（回国节点自动装）
 
 watchtower 在 compose 里凌晨自动更新 `:latest`；init 在回国节点装两件护栏（`SKIP_CANARY_WIRING=1` 跳过）：
 
-- **`sbx-canary-check.sh`**（→ `~/sb-xray`）+ cron `/etc/cron.d/sbx-canary-check`：更新后业务自检（容器健康 / 443 tcp+udp / 回国链路 / 镜像 digest），经容器内 shoutrrr 推中文 Telegram 通知。自检过且 digest 跳变才推「已更新」；任一失败推失败 runbook。通知格式见 [docs/06 §9.1](../../docs/06-event-bus-shoutrrr.md)。
+- **`sbx-canary-check`**（→ `/usr/local/bin`）+ cron `/etc/cron.d/sbx-canary-check`：更新后业务自检（容器健康 / 443 tcp+udp / 回国链路 / 镜像 digest），经容器内 shoutrrr 推中文 Telegram 通知。自检过且 digest 跳变才推「已更新」；任一失败推失败 runbook。通知格式见 [docs/06 §9.1](../../docs/06-event-bus-shoutrrr.md)。
 - **`/usr/local/bin/sbx-update`**：`watchtower --run-once sb-xray`，手动灰度更新本台镜像。
 
 **角色 `SBX_CANARY_ROLE`** 只决定 watchtower/自检时段与失败 runbook 文案：`canary`（一台错峰先行，03:00 更新 / 03:05 自检，失败叫停其余节点）、`worker`（其余各台，04:00 / 04:05）。
 
-### CN 出口反向探活：`cn-exit-watchdog.sh`（可选，回国节点）
+### CN 出口反向探活：`cn-exit-watchdog`（可选，回国节点）
 
-补一个监控盲区：CN 出口设备整机宕机时设备侧监控随之失联，而 balance 探活只做静默 failover。`initial.env` 同时给 `WD_TG_TOKEN` + `WD_TG_CHAT` 时，init 装 `cn-exit-watchdog.sh`（→ `~/sb-xray`）+ cron `/etc/cron.d/cn-exit-watchdog`，每分钟经 socks5 腿反向探活，连续失败发 Telegram 告警、恢复发解除。建议只在 1-2 台启用互为冗余。通道验证：`~/sb-xray/cn-exit-watchdog.sh --test`。
+补一个监控盲区：CN 出口设备整机宕机时设备侧监控随之失联，而 balance 探活只做静默 failover。`initial.env` 同时给 `WD_TG_TOKEN` + `WD_TG_CHAT` 时，init 装 `cn-exit-watchdog`（→ `/usr/local/bin`）+ cron `/etc/cron.d/cn-exit-watchdog`（cron 注入 `OPENWRT_TS_IP` 作探活目标），每分钟经 socks5 腿反向探活，连续失败发 Telegram 告警、恢复发解除。建议只在 1-2 台启用互为冗余。通道验证：`OPENWRT_TS_IP=<100.x> cn-exit-watchdog --test`。
 
 ---
 
@@ -254,7 +257,7 @@ watchtower 在 compose 里凌晨自动更新 `:latest`；init 在回国节点装
 | `tailscale up 未成功` | authkey 过期/用尽——管理后台生成新 reusable key 重跑 |
 | 持续 ping 不通 OpenWrt | ① OpenWrt 侧 Tailscale 是否在线（`tailscale status`）；② 管理后台两台设备是否都未过期；③ OpenWrt 侧 keepalive 是否在跑（它才是打洞主力） |
 | 回国流量黑洞 / 走偏 | OpenWrt 侧 OpenClash 的 skip-auth（`100.64.0.0/10`）与 `IN-PORT,7891,DIRECT` 规则是否在——重跑一次 `openwrt-init.sh` 即补全 |
-| 容器内 env 是旧值 | `.env` 改了但容器没重建：`docker compose up -d --force-recreate`，或跑 `~/sb-xray/sbx-redeploy.sh` |
+| 容器内 env 是旧值 | `.env` 改了但容器没重建：`docker compose up -d --force-recreate`，或跑 `sbx-redeploy` |
 
 ---
 

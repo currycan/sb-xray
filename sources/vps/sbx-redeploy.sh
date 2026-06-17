@@ -3,7 +3,8 @@ set -euo pipefail
 
 # sbx-redeploy.sh —— sb-xray 运行时更新（重拉 compose + 重建容器 + 清理）
 #
-# 属「运行 sb-xray」工作流（与 init 解耦），随 vps-init.sh 安装时拉到 ~/sb-xray。
+# 属「运行 sb-xray」工作流（与 init 解耦），随 vps-init.sh 安装到 /usr/local/bin
+# 作 `sbx-redeploy` 命令（数据仍在 ~/sb-xray，由 SBXRAY_DIR 解析）。
 # 用途：把运行中的容器更新到最新 compose + 最新镜像，并清掉可重生成的运行目录
 # （让 nginx 等配置按模板重新渲染），保留持久状态（证书 / 面板 DB / sub-store / data）。
 #
@@ -26,7 +27,7 @@ die()  { printf '[sbx-redeploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-用法: ./sbx-redeploy.sh [-h|--help]
+用法: sbx-redeploy [-h|--help]
 
 sb-xray 运行时更新：重拉 docker-compose.yml → down → pull → 清可重生成目录
 （sb-xray/ logs/ nginx/）→ up -d → 镜像 prune。持久状态（pki/ acmecerts/ x-ui/

@@ -19,7 +19,8 @@
 #   SBX_CANARY_ROLE     canary | worker（默认 worker）
 #   SBX_FORWARDER       shoutrrr-forwarder 地址（默认 127.0.0.1:18085）
 #   SBX_PROBE_URL       回国链路探测目标（默认与 compose CN_EXIT_PROBE_URL 同源）
-#   SBX_DIGEST_STATE    digest 落盘文件（默认 /root/sb-xray/.sbx-canary-last-digest）
+#   SBXRAY_DIR          sb-xray 运行时目录（默认 $HOME/sb-xray；供派生 digest 路径）
+#   SBX_DIGEST_STATE    digest 落盘文件（默认 $SBXRAY_DIR/.sbx-canary-last-digest）
 #   SBX_RETRIES         每项重试次数（默认 3）
 #   SBX_RETRY_INTERVAL  重试间隔秒（默认 10）
 #
@@ -31,7 +32,7 @@ CONTAINER="${SBX_CONTAINER:-sb-xray}"
 ROLE="${SBX_CANARY_ROLE:-worker}"
 FORWARDER="${SBX_FORWARDER:-127.0.0.1:18085}"
 PROBE_URL="${SBX_PROBE_URL:-http://connect.rom.miui.com/generate_204}"
-DIGEST_STATE="${SBX_DIGEST_STATE:-/root/sb-xray/.sbx-canary-last-digest}"
+DIGEST_STATE="${SBX_DIGEST_STATE:-${SBXRAY_DIR:-$HOME/sb-xray}/.sbx-canary-last-digest}"
 RETRIES="${SBX_RETRIES:-3}"
 RETRY_INTERVAL="${SBX_RETRY_INTERVAL:-10}"
 

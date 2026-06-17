@@ -7,7 +7,7 @@
 # 次失败发 TG 告警，恢复时发解除；状态文件去重，告警期内不重复刷屏。
 #
 # 配置（/etc/cn-exit-watchdog.conf 或环境变量，后者优先）：
-#   WD_SOCKS5_HOST   CN 出口 socks5 地址（默认从 /root/sb-xray/.env 读 tsip）
+#   WD_SOCKS5_HOST   CN 出口 socks5 地址（默认取 OPENWRT_TS_IP env，由 cron 注入）
 #   WD_SOCKS5_PORT   socks5 端口（默认 7891）
 #   WD_PROBE_URL     探活 URL（默认 http://connect.rom.miui.com/generate_204）
 #   WD_THRESHOLD     连续失败阈值（默认 3）
@@ -16,18 +16,18 @@
 #   WD_STATE         状态文件（默认 /var/tmp/cn-exit-watchdog.state）
 #   WD_TAG           消息前缀标签（默认空；演练时可设 "[演练]"）
 #
-# 用法：
-#   cn-exit-watchdog.sh          # 单次探活（cron 每分钟调一次）
-#   cn-exit-watchdog.sh --test   # 发一条 TG 测试消息验证告警通道
+# 用法（vps-init.sh 已装到 /usr/local/bin，作命令直接调用）：
+#   cn-exit-watchdog          # 单次探活（cron 每分钟调一次）
+#   cn-exit-watchdog --test   # 发一条 TG 测试消息验证告警通道
 #
-# 安装（任一 VPS，幂等）：
-#   scp 本脚本到 /root/sb-xray/ && chmod +x
+# 安装（vps-init.sh 在回国节点自动完成，幂等；手动同效）：
+#   装本脚本到 /usr/local/bin/cn-exit-watchdog && chmod 755
 #   写 /etc/cn-exit-watchdog.conf（含 WD_TG_TOKEN/WD_TG_CHAT，chmod 600）
-#   crontab 加：* * * * * /root/sb-xray/cn-exit-watchdog.sh >/dev/null 2>&1
+#   cron 加：* * * * * root OPENWRT_TS_IP=<100.x.x.x> /usr/local/bin/cn-exit-watchdog >/dev/null 2>&1
 
 [ -f /etc/cn-exit-watchdog.conf ] && . /etc/cn-exit-watchdog.conf
 
-WD_SOCKS5_HOST="${WD_SOCKS5_HOST:-$(grep '^tsip=' /root/sb-xray/.env 2>/dev/null | cut -d= -f2)}"
+WD_SOCKS5_HOST="${WD_SOCKS5_HOST:-${OPENWRT_TS_IP:-}}"
 WD_SOCKS5_PORT="${WD_SOCKS5_PORT:-7891}"
 WD_PROBE_URL="${WD_PROBE_URL:-http://connect.rom.miui.com/generate_204}"
 WD_THRESHOLD="${WD_THRESHOLD:-3}"
