@@ -250,7 +250,7 @@ docker compose logs sb-xray | grep -E "CN-exit|r-tunnel"
 # balance 预期：CN-exit(balance): selector=['cn-exit', 'r-tunnel'] leastPing
 ```
 
-🔧 **多 VPS 批量初始化**：每台 VPS 用 `sources/vps/vps-cn-exit-init.sh`（用法详见 [sources/vps/README.md](../sources/vps/README.md)）一键写 `.env`（回国项以 `${VAR}` 注入 docker-compose）、装 Tailscale 入网、配 VPS 侧 keepalive、拉起容器，嵌进你的 provisioning 即可。各台 `XRAY_REVERSE_UUID` 自动生成持久化、互不冲突；socks5 腿命脉是 Tailscale 链路，务必每台都入 tailnet。配一次永不改 env，回国拨号切换全在 OpenWrt 侧 `cn-bridge` 完成。
+🔧 **多 VPS 批量初始化**：每台 VPS 跑两步（用法详见 [sources/vps/README.md](../sources/vps/README.md)）——`sources/vps/vps-init.sh` 写全 `.env`（回国项以 `${VAR}` 注入 docker-compose），再 `sources/vps/vps-cn-exit-init.sh` 校验 `.env` 后装 Tailscale 入网、配 VPS 侧 keepalive、拉起容器，嵌进你的 provisioning 即可。各台 `XRAY_REVERSE_UUID` 自动生成持久化、互不冲突；socks5 腿命脉是 Tailscale 链路，务必每台都入 tailnet。配一次永不改 env，回国拨号切换全在 OpenWrt 侧 `cn-bridge` 完成。
 
 ### 4.2 balance 降级守卫：缺变量时会发生什么
 

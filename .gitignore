@@ -34,3 +34,7 @@ __pycache__/
 htmlcov/
 
 references/
+
+# VPS init real config / runtime logs (template .example is committed)
+sources/vps/initial.env
+sources/vps/.init.log
