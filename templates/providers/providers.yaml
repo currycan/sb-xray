@@ -17,3 +17,5 @@ proxy-providers:
   多宝:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/DuoBao", override: {additional-prefix: "[多宝] ", additional-suffix: " good"}}
 
   火麒麟:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/HuoQiLin", override: {additional-prefix: "[火麒麟] "}}
+
+  星链:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/XingLian", override: {additional-prefix: "[星链] "}}
