@@ -176,7 +176,7 @@ flowchart LR
 | `CN_EXIT_MODE` | 可选 | 回国模式，默认 `balance` | 写 `.env` |
 | `REVERSE_DOMAINS` | 可选 | 经 bridge 出的内网域名（逗号分隔），多台建议统一 | 写 `.env` |
 | `VPS_DOMAIN` | 可选 | 本节点对外域名（覆盖 hostname 派生的 `domain`） | 写 `.env` |
-| `SHOUTRRR_URLS` | 可选 | 事件总线告警 URL，见 [docs/06](../../docs/06-event-bus-shoutrrr.md) | 写 `.env` |
+| `SHOUTRRR_URLS` | 建议填 ✅ | 事件总线告警 URL，见 [docs/06](../../docs/06-event-bus-shoutrrr.md)。**canary 自动更新自检告警依赖它**：留空 = watchtower 自动更新失败时无任何通知，护栏哑火（容器本身仍可空跑 dry-run） | 写 `.env` |
 | `WD_TG_TOKEN` / `WD_TG_CHAT` | 可选 | CN 出口反向探活的 Telegram bot token / chat id；**两者同时有值才装 watchdog**（见 §6） | init 装护栏 |
 
 ### 下载源覆盖（`*_URL`，默认都是仓库 `main` 的 raw）
