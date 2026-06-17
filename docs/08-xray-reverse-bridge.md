@@ -282,7 +282,7 @@ docker exec sb-xray show
 # 路由器上直接下载（持久，可反复重跑）：
 mkdir -p /root/sb-xray-openwrt && cd /root/sb-xray-openwrt
 for f in openwrt-init.sh config.env.example; do
-  wget -O "$f" "https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
+  wget -O "$f" "https://ghfast.top/https://raw.githubusercontent.com/currycan/sb-xray/main/sources/openwrt/$f"
 done
 cp config.env.example config.env
 vi config.env          # CN_EXIT_MODE=reverse；填 VPS_DOMAIN / SUBSCRIBE_TOKEN / XRAY_VERSION
