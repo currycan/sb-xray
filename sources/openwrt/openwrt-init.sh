@@ -1671,6 +1671,27 @@ update_hosts() {
     log "已更新 ${count} 个域名 → ${ip}"
 }
 
+# /etc/hosts 终态对齐：should_update 决定「保持缓存 IP、不重测换机」时，仍须保证缓存 IP 真的
+# 写进了 /etc/hosts。触发场景：last_best.txt 在、但 /etc/hosts 优选条目缺——sysupgrade/cn-backup
+# 把 last_best.txt 纳入备份恢复、可再生的 hosts 条目却未落（新机/重刷），或被 cdn clean、被其它进程
+# 重置。不回填则陷死结：测速因 IP 未变跳过 update_hosts → hosts 空 → install 的 verify_cdn_outcome
+# 硬查 /etc/hosts 必死，而每次重测又仍判 IP 未变。返回 0（幂等，无缺失则 no-op）。
+ensure_hosts_present() {
+    [ -f "$LAST_RESULT_FILE" ] || return 0
+    local cached_ip missing=0
+    cached_ip=$(cut -d'|' -f1 "$LAST_RESULT_FILE")
+    [ -n "$cached_ip" ] || return 0
+    for domain in $CDN_DOMAINS; do
+        [ -z "$domain" ] && continue
+        grep -qE "^[0-9.]+ ${domain}\$" /etc/hosts 2>/dev/null || missing=1
+    done
+    if [ "$missing" = "1" ]; then
+        log "缓存优选 IP ${cached_ip} 存在但 /etc/hosts 条目缺失，回填自愈..."
+        update_hosts "$cached_ip"
+        restart_dns
+    fi
+}
+
 restart_dns() {
     if [ -f /etc/init.d/dnsmasq ]; then
         log "重启 dnsmasq 使 hosts 生效..."
@@ -1778,6 +1799,9 @@ main() {
                 update_hosts "$best_ip"
                 restart_dns
                 save_result "$best_ip" "$best_speed" "$best_latency"
+            else
+                # 保持缓存 IP，但 /etc/hosts 必须真有条目（缓存在、条目缺 → 回填自愈）
+                ensure_hosts_present
             fi
             show_status
             ;;
@@ -1890,7 +1914,10 @@ install_cdn_tooling() {
 cdn_first_fqdn() {
     # 输出首个完整 CDN 域名（/etc/subdomains.txt 首个非注释非空前缀 + CDN_DOMAIN）；无则输出空。
     # cdn_optimize_firstrun 的幂等门禁与 verify_cdn_outcome 的真相源硬检查共用，避免两处逻辑漂移。
-    _p=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' /etc/subdomains.txt 2>/dev/null | head -n1 | tr -d '[:space:]')
+    # 去空白用 awk 取首字段：busybox 的 tr 删除字符类时把 [:space:] 当字面字符集
+    # （[ : s p a c e ]）处理，会吃掉前缀里的 s/p/a/c/e 等字母（"jp"→"j"），导致 fqdn 错误、
+    # 门禁永不命中 + verify 硬查永远失败（真机实测，2026-06-17），故此处禁用 tr 字符类。
+    _p=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' /etc/subdomains.txt 2>/dev/null | head -n1 | awk '{print $1}')
     [ -n "$_p" ] && printf '%s.%s' "$_p" "$CDN_DOMAIN"
 }
 

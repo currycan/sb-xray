@@ -402,12 +402,27 @@ def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None
         "run_speedtest",
         "should_update",
         "update_hosts",
+        "ensure_hosts_present",
         "clean_hosts",
     ):
         assert f"{fn}()" in src, f"内嵌 cdn-speedtest 缺少函数: {fn}"
     assert 'main "$@"' in src
     proc = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_cdn_run_self_heals_hosts_when_update_skipped(tmp_path: Path) -> None:
+    """should_update 决定保持缓存 IP 时，run 仍须保证 /etc/hosts 真有条目。
+
+    回归防护：last_best.txt 在但 /etc/hosts CDN 条目缺（sysupgrade/cn-backup 恢复后
+    可再生的优选条目未落、被 cdn clean、被其它进程重置）时，测速因 IP 未变跳过 update_hosts，
+    若不回填则 install 的 verify_cdn_outcome 硬查 /etc/hosts 必死。run 必须在 should_update
+    跳过分支调用 ensure_hosts_present 自愈，否则 install↔测速 陷入死结。"""
+    embedded = _extract_embedded_cdn(tmp_path).read_text(encoding="utf-8")
+    assert "ensure_hosts_present()" in embedded
+    # run 主流程：should_update 为假的 else 分支必须回填 hosts
+    run_case = embedded[embedded.index("        run)"):embedded.index("        install)")]
+    assert "ensure_hosts_present" in run_case, "run 缺少 should_update 跳过时的 hosts 自愈回填"
 
 
 def test_cdn_install_step_guards_and_cron(tmp_path: Path) -> None:
@@ -435,6 +450,17 @@ def test_cdn_install_step_guards_and_cron(tmp_path: Path) -> None:
     main_cdn = src[main_cdn_start:src.index("\nmain()", main_cdn_start)]
     assert main_cdn.index("install_cdn_tooling") < main_cdn.index("verify_cdn_outcome")
     assert "CDN 优选缓存就位（last_best.txt）" in src, "verify_cdn_outcome 缺少 CDN 首跑软自检"
+
+
+def test_no_busybox_broken_tr_space_class() -> None:
+    """禁用 `tr -d '[:space:]'`：busybox tr 把 [:space:] 当字面字符集（[ : s p a c e ]）处理，
+    会吃掉数据里的 s/p/a/c/e 等字母（真机实测 "jp"→"j"），导致 cdn_first_fqdn 产出错误 fqdn、
+    首跑门禁永不命中 + verify 硬查永远失败。去空白须用 awk 取字段或 sed POSIX 类，不用 tr 字符类。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "tr -d '[:space:]'" not in src, "busybox tr 误解 [:space:] 字符类，改用 awk '{print $1}'"
+    assert 'tr -d "[:space:]"' not in src
+    fqdn = src[src.index("cdn_first_fqdn()"):src.index("\n}\n", src.index("cdn_first_fqdn()"))]
+    assert "awk '{print $1}'" in fqdn, "cdn_first_fqdn 须用 awk 取首字段去空白"
 
 
 def test_embedded_cfst_extract_via_gnu_tar() -> None:

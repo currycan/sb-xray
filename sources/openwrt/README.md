@@ -403,7 +403,7 @@ flowchart TD
 
 ### 5.4 cdn-speedtest CDN IP 优选（原 `hack/cdn-speedtest.sh`，已内嵌进主脚本）
 
-所有 CDN 域名都经 Cloudflare，Cloudflare 按 TLS SNI / Host 头路由到正确源站，因此**一个优选 IP 即可覆盖全部域名**。`CDN_DOMAIN` 为**必填硬契约**（缺则 `validate_config` die）。主脚本先写出 `/usr/bin/cdn-speedtest`、生成 `/etc/subdomains.txt`、配好每日 cron（这步无服务依赖，cron 始终先在位）。优选**首跑**需 OpenClash/Tailscale 正常运行（首跑会临时停 OpenClash 跑 CloudflareST 再恢复），故主脚本把它**锁在服务自检通过之后**才做：服务全绿且 `/etc/hosts` 尚无优选条目（幂等门禁绑定真实终态——正常重启/重跑跳过、不重复扫描；条目被 `cdn clean`/清掉则自愈重跑）→ 前台同步首跑一次（约几分钟，Top10 结果直接可见），**失败即 init 硬失败**（不再静默 warn）；做完硬验「优选 IP 已写入 `/etc/hosts`」。此后由每日 cron 维持新鲜度，日常无需手动干预。服务自检未过则跳过首跑（优选需服务正常）——服务修好重跑、或用 `sh openwrt-init.sh cdn` 单独补做。
+所有 CDN 域名都经 Cloudflare，Cloudflare 按 TLS SNI / Host 头路由到正确源站，因此**一个优选 IP 即可覆盖全部域名**。`CDN_DOMAIN` 为**必填硬契约**（缺则 `validate_config` die）。主脚本先写出 `/usr/bin/cdn-speedtest`、生成 `/etc/subdomains.txt`、配好每日 cron（这步无服务依赖，cron 始终先在位）。优选**首跑**需 OpenClash/Tailscale 正常运行（首跑会临时停 OpenClash 跑 CloudflareST 再恢复），故主脚本把它**锁在服务自检通过之后**才做：服务全绿且 `/etc/hosts` 尚无优选条目（幂等门禁绑定真实终态——正常重启/重跑跳过、不重复扫描；条目缺失——被 `cdn clean`、被重置、或 `last_best.txt` 缓存还在而 `/etc/hosts` 条目丢失——则首跑自愈）→ 前台同步首跑一次（约几分钟，Top10 结果直接可见），**失败即 init 硬失败**（不再静默 warn）；做完硬验「优选 IP 已写入 `/etc/hosts`」。**终态回填保证**：`cdn-speedtest run` 即便测得 IP 与缓存相同、判定无需换机（跳过 `update_hosts`），也会用缓存 IP 把缺失的 `/etc/hosts` 条目补回（`ensure_hosts_present`，幂等）——否则「缓存在、hosts 条目缺」会陷入死结：每次重测都判 IP 未变而不写 hosts，硬验 `/etc/hosts` 永远失败。此后由每日 cron 维持新鲜度，日常无需手动干预。服务自检未过则跳过首跑（优选需服务正常）——服务修好重跑、或用 `sh openwrt-init.sh cdn` 单独补做。
 
 `cdn` 子命令单独操作本段（只需 `CDN_DOMAIN`，不依赖 nodes.list，不碰其余配置）：
 
