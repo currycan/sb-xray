@@ -43,6 +43,16 @@ with_timeout() {
     if command -v timeout >/dev/null 2>&1; then timeout "$_t" "$@"; else "$@"; fi
 }
 
+# 可选：读取同目录 initial.env 作为节点唯一输入配置（Stage 1 也 source 同一文件）。
+# 无此文件则行为与改前完全一致（命令行传参照常），向后兼容生产节点。
+# source 后接各变量的 ${VAR:-default}：文件定义的项以文件为准，没写的项可用环境变量补。
+_sbx_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || _sbx_dir=""
+if [ -n "$_sbx_dir" ] && [ -f "$_sbx_dir/initial.env" ]; then
+    log "读取同目录 initial.env"
+    # shellcheck source=/dev/null
+    . "$_sbx_dir/initial.env"
+fi
+
 SBXRAY_DIR="${SBXRAY_DIR:-/root/sb-xray}"
 CN_EXIT_MODE="${CN_EXIT_MODE:-balance}"
 TS_HOSTNAME="${TS_HOSTNAME:-$(hostname)}"

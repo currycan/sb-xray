@@ -2,6 +2,60 @@
 
 在每台公网 VPS 上跑一次 `vps-cn-exit-init.sh`，完成回国双腿（balance）所需的全部 VPS 侧配置：写 `.env`、装 Tailscale 入网、配链路保活、拉起容器、自检。**配一次永不改**——之后的回国拨号切换全部在 OpenWrt 侧用 `cn-bridge` 完成（见 [../openwrt/README.md](../openwrt/README.md)）。
 
+## 0. 两阶段：先 `vps-init.sh`（Stage 1），再 `vps-cn-exit-init.sh`（Stage 2）
+
+拿到一台全新装好系统的 VPS，按两步走：
+
+```mermaid
+flowchart LR
+    S1["Stage 1<br/>vps-init.sh<br/>基础置备"] --> S2["Stage 2<br/>vps-cn-exit-init.sh<br/>回国角色配置"]
+    style S1 fill:#e3f2fd,stroke:#1565c0
+    style S2 fill:#e8f5e9,stroke:#2e7d32
+```
+
+| 阶段 | 脚本 | 做什么 | 跑几次 |
+|------|------|--------|--------|
+| **Stage 1** | `vps-init.sh` | 系统调优 + BBR、建 sudo 用户、SSH 加固（仅密钥）、装 Docker（官方源）、落盘 `sb-xray/.env` + compose 模板 | 新机一次 |
+| **Stage 2** | `vps-cn-exit-init.sh` | Tailscale 入网、写回国 env、保活/自检护栏、拉起容器 | 回国节点一次（见 §1 起） |
+
+`vps-init.sh` 跑完正好满足 Stage 2 的前置（docker 已装、`/root/sb-xray/docker-compose.yml` 存在）。**只做基础置备、不绑回国角色**——非回国节点跑完 Stage 1 即可。
+
+### Stage 1 用法
+
+```sh
+cd sources/vps
+cp initial.env.example initial.env   # 填值（见下方契约）
+vi initial.env
+sudo bash vps-init.sh
+```
+
+配置从同目录 `initial.env` 读取——它是**整套 `vps/` 脚本共用的「节点唯一输入配置」**：Stage 1 与 Stage 2（`vps-cn-exit-init.sh`）都 source 同一个文件，**操作者每台只编辑这一个文件**。语义是「**文件为准，文件没写的项可用命令行环境变量补**」。真实 `initial.env` 含凭据，已被 `.gitignore` 排除，**不入库**。
+
+> 🧭 **输入 vs 生成产物**：`initial.env` 是人填的*输入*；sb-xray 的 `SBXRAY_DIR/.env`（docker-compose 读）、`/etc/cn-exit-watchdog.conf`、canary 的 cron env 是脚本从输入*派生*的产物，**不手改**。两个 cron 脚本（canary/watchdog）由 Stage 2 provision，无需直接 source——人始终只碰 `initial.env` 一个文件。
+>
+> 📝 `initial.env` 按 shell 语法 `source`：**值含空格/特殊字符（尤其 SSH 公钥、带符号的密码/code）必须加引号**，否则解析报错。公钥永远含空格——推荐用 `SSH_PUBKEY_FILE` 指向 `.pub` 文件免去引号，它还能一次装入文件里的多把公钥（多管理机/密钥轮换）。密钥类型推荐 **ed25519** 而非 RSA：更短、更快、更安全。
+
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `SSH_PUBKEY_FILE` / `SSH_PUBKEY` | ✅ | 公钥登录所需公钥（二选一，`SSH_PUBKEY_FILE` 优先且支持多公钥）。**脚本会关闭密码登录、仅留公钥**——无有效公钥时在动 SSH 前中止（防锁机）。推荐 **ed25519**（`ssh-keygen -t ed25519`）而非 RSA |
+| `SBX_USER` | 可选 | 要创建的 sudo 用户名（默认 `sbx`） |
+| `SBX_USER_PASSWORD` / `ROOT_PASSWORD` | 可选 | 空=不设/不改密码（仅密钥登录推荐留空，泄露面最小） |
+| `SSH_PORT` | 可选 | SSH 端口（默认 `38666`） |
+| `TIMEZONE` | 可选 | 默认 `Asia/Shanghai` |
+| `SBX_DOMAIN` / `SBX_CDN_DOMAIN` / `SBX_CODE` | 可选 | 写入 `sb-xray/.env` 的 `domain`（空=`hostname`）/ `cdndomain` / `code` |
+| `SBX_COMPOSE_URL` | 可选 | `docker-compose.yml` 下载源（默认仓库 `main` 的 raw） |
+| `INSTALL_SSRPOLIPO` / `SSRPOLIPO_COMPOSE_URL` | 可选 | **默认 `1`（开启）**；启用时必须给 `SSRPOLIPO_COMPOSE_URL`，否则 warn 跳过。设 `0` 关闭 |
+| `BASHRC_URL` / `VIMRC_URL` | 可选 | 给定则拉取 `.bashrc`/`.vimrc` 到 root 与 sudo 用户家目录（留空跳过）；地址写在 `initial.env`，不入库 |
+| `INSTALL_TCP_BRUTAL` / `TCP_BRUTAL_URL` | 可选 | **默认 `1`（开启，sb-xray 必需）**：安装 `tcp-brutal` DKMS 内核模块（Hysteria 2 brutal 拥塞控制，apernet 官方）。DKMS 模块针对当前内核编译，不换内核/不需重启；装完打印 `dkms status`。设 `0` 关闭 |
+
+> ⚠️ **锁机警告**：本脚本设 `PasswordAuthentication no` + `PermitRootLogin prohibit-password` 并改端口。运行前务必确认 `SSH_PUBKEY` 正确、且你手上的私钥能用。脚本会在写 SSH 配置后 `sshd -t` 校验，失败即删除 drop-in 并中止；但仍建议**保留一个当前已连接的会话**直到用新端口+公钥验证能登录。
+>
+> ✅ **幂等**：所有系统配置写成专属 drop-in（`/etc/sysctl.d/`、`/etc/security/limits.d/`、`/etc/profile.d/`、`/etc/ssh/sshd_config.d/`、`/etc/sudoers.d/`），每次运行全量重写——可重复跑不产生重复行、不漂移。`仅 Debian/Ubuntu`。
+>
+> 🔒 **凭据安全**：脚本不向任何世界可读日志写密码/`code`（设密码步骤日志显示「（隐藏）」）；产物 `sb-xray/.env` 600、`authorized_keys` 600、`sudoers.d/*` 0440。运行输出如需留存，请自行重定向到受限文件。
+
+---
+
 ## 1. 它做什么
 
 ```mermaid
@@ -32,7 +86,7 @@ flowchart LR
 
 ## 3. 参数参考
 
-全部通过环境变量传入：
+这些变量可写进同目录 `initial.env`（与 Stage 1 共用的节点唯一输入配置，脚本会自动 source），也可在命令行通过环境变量传入：
 
 | 变量 | 必填 | 说明 | 在哪拿 |
 |------|------|------|--------|
