@@ -23,6 +23,7 @@ set -euo pipefail
 #   TIMEZONE                时区（默认 Asia/Shanghai）
 #   SBX_DOMAIN(空=hostname,须.com) / SBX_CDN_DOMAIN(空=hostname .com→.top) / SBX_CODE
 #   SBX_COMPOSE_URL         sb-xray docker-compose.yml 下载地址
+#   CN_EXIT_INIT_URL        Stage 2 脚本(vps-cn-exit-init.sh)下载源(收尾拉到 $SBXRAY_DIR)
 #   INSTALL_SSRPOLIPO / SSRPOLIPO_COMPOSE_URL
 #   BASHRC_URL / VIMRC_URL  可选 .bashrc/.vimrc 下载地址（空则跳过）
 #   INSTALL_TCP_BRUTAL / TCP_BRUTAL_URL  tcp-brutal DKMS 模块（默认开）；仅诊断位 IS_BRUTAL，Hy2 用 bbr
@@ -64,7 +65,8 @@ usage() {
 
 sb-xray VPS Stage 1 基础初始化（Debian/Ubuntu）。幂等可重跑：系统调优 + BBR、建 sudo
 用户、SSH 加固（仅公钥）、装 Docker（官方源）、写全 sb-xray/.env + compose 模板。
-跑完接着跑同目录 vps-cn-exit-init.sh（Stage 2，回国节点）。
+跑完接着跑 $SBXRAY_DIR/vps-cn-exit-init.sh（Stage 2，回国节点）——本脚本收尾会自动
+把 Stage 2 拉到该目录（URL 走 CN_EXIT_INIT_URL 可覆盖，失败仅 warn）。
 
 配置来源：同目录 initial.env（存在则 source；文件为准，缺项可用环境变量补）。
   模板见 initial.env.example；真实 initial.env 含凭据、不入库。
@@ -190,6 +192,8 @@ load_config() {
     REVERSE_DOMAINS="${REVERSE_DOMAINS:-}"
     SHOUTRRR_URLS="${SHOUTRRR_URLS:-}"
     VPS_DOMAIN="${VPS_DOMAIN:-}"
+    # Stage 2 脚本下载源(收尾拉到 $SBXRAY_DIR,省手动 wget;CN 节点可指镜像/代理)。
+    CN_EXIT_INIT_URL="${CN_EXIT_INIT_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/vps-cn-exit-init.sh}"
     ENV_FILE="${SBXRAY_DIR}/.env"
 
 }
@@ -539,6 +543,23 @@ deploy_sbx() {
     fi
 }
 
+fetch_stage2() {
+    # 把 Stage 2 脚本(vps-cn-exit-init.sh)拉到 sb-xray 目录,省去操作者手动 wget。
+    # 与 helper 脚本同套路:下载→校验 shebang→替换;失败仅 warn(有本地副本则保留)。
+    # URL 走 CN_EXIT_INIT_URL 可覆盖。注意:钉 main HEAD,可能与本脚本版本错位——
+    # 要严格原子部署请改钉 tag/commit,或两脚本一起手动同放。
+    local stage2
+    stage2="$SBXRAY_DIR/vps-cn-exit-init.sh"
+    if curl -fsSL "$CN_EXIT_INIT_URL" -o "$stage2.new" && [ -s "$stage2.new" ] && head -1 "$stage2.new" | grep -q '#!/bin/sh'; then
+        mv "$stage2.new" "$stage2"; chmod 755 "$stage2"
+        log "Stage 2 脚本已就位 ← $CN_EXIT_INIT_URL"
+    elif [ -f "$stage2" ]; then
+        rm -f "$stage2.new"; warn "Stage 2 脚本下载失败,保留现有 $stage2"
+    else
+        rm -f "$stage2.new"; warn "Stage 2 脚本下载失败且本地缺失($CN_EXIT_INIT_URL);回国节点需手动放置 vps-cn-exit-init.sh 后再跑"
+    fi
+}
+
 setup_dotfiles() {
     # 可选：从 env 给定 URL 拉取 .bashrc/.vimrc 到 root 与 sudo 用户家目录。
     # URL 留空则跳过——不在入库脚本里硬编码任何个人 repo（保持可移植，符合项目约定）。
@@ -652,6 +673,7 @@ main() {
     setup_dotfiles
     install_docker
     deploy_sbx
+    fetch_stage2
     deploy_ssrpolipo
     install_tcp_brutal
     log "Stage 1 完成,回国节点接着跑 vps-cn-exit-init.sh"

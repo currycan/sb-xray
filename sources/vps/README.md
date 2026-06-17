@@ -18,7 +18,7 @@ flowchart LR
 | **Stage 1** | `vps-init.sh` | 系统调优 + BBR、建 sudo 用户、SSH 加固（仅密钥）、装 Docker（官方源）、**写全 `sb-xray/.env`**（域名/code +（CN-exit 节点）回国项）+ compose 模板 | 新机一次 |
 | **Stage 2** | `vps-cn-exit-init.sh` | Tailscale 入网、保活/自检护栏、拉起容器（**校验 `.env`，不写 `.env`**） | 回国节点一次（见 §1 起） |
 
-`vps-init.sh` 跑完正好满足 Stage 2 的前置（docker 已装、`/root/sb-xray/docker-compose.yml` 存在、`.env` 已写全）。它是 `.env` 的**单一所有者**：当 `initial.env` 含 `OPENWRT_TS_IP`（即本机是 CN-exit 节点）时，Stage 1 一并写全回国项（`CN_EXIT_MODE`/`ENABLE_REVERSE`/`ENABLE_SOCKS5_PROXY`/`tsip`/按角色的 `WATCHTOWER_SCHEDULE`）；否则只写域名/code 保持通用——非回国节点跑完 Stage 1 即可。这样初始化即产出**完整 `.env`**，避免容器在两阶段之间以半完整配置启动被 watchtower 固化（见 CLAUDE.md §2）。
+`vps-init.sh` 跑完正好满足 Stage 2 的前置（docker 已装、`/root/sb-xray/docker-compose.yml` 存在、`.env` 已写全）。它是 `.env` 的**单一所有者**：当 `initial.env` 含 `OPENWRT_TS_IP`（即本机是 CN-exit 节点）时，Stage 1 一并写全回国项（`CN_EXIT_MODE`/`ENABLE_REVERSE`/`ENABLE_SOCKS5_PROXY`/`tsip`/按角色的 `WATCHTOWER_SCHEDULE`）；否则只写域名/code 保持通用——非回国节点跑完 Stage 1 即可。这样初始化即产出**完整 `.env`**，避免容器在两阶段之间以半完整配置启动被 watchtower 固化（见 CLAUDE.md §2）。Stage 1 收尾还会自动把 **Stage 2 脚本拉到 `$SBXRAY_DIR/`**（`CN_EXIT_INIT_URL` 可覆盖，失败仅 warn）——所以**操作者每台只需放 `vps-init.sh` + `initial.env` 两个文件**,Stage 2 会就位。
 
 ### Stage 1 用法
 
@@ -45,6 +45,7 @@ sudo bash vps-init.sh
 | `SBX_DOMAIN` / `SBX_CDN_DOMAIN` / `SBX_CODE` | 可选 | 写入 `sb-xray/.env` 的 `domain`（空=`hostname`）/ `cdndomain` / `code` |
 | `OPENWRT_TS_IP` 及回国项 | 可选 | 给定 `OPENWRT_TS_IP` 即判定本机为 **CN-exit 节点**，Stage 1 一并写全回国 `.env`（`CN_EXIT_MODE` / `ENABLE_REVERSE` / `ENABLE_SOCKS5_PROXY` / `tsip` / 按 `SBX_CANARY_ROLE` 的 `WATCHTOWER_SCHEDULE`，及 `REVERSE_DOMAINS`/`VPS_DOMAIN`/`SHOUTRRR_URLS`）。各项含义见 [§3 参数参考](#3-参数参考)。留空=非回国节点，只写域名/code |
 | `SBX_COMPOSE_URL` | 可选 | `docker-compose.yml` 下载源（默认仓库 `main` 的 raw） |
+| `CN_EXIT_INIT_URL` | 可选 | Stage 2 脚本下载源（默认仓库 `main` 的 raw）。Stage 1 收尾自动把 `vps-cn-exit-init.sh` 拉到 `$SBXRAY_DIR/`，省去手动 wget；失败仅 warn（有本地副本则保留）。CN 节点拉 raw 慢可指镜像/代理 |
 | `INSTALL_SSRPOLIPO` / `SSRPOLIPO_COMPOSE_URL` | 可选 | **默认 `1`（开启）**；启用时必须给 `SSRPOLIPO_COMPOSE_URL`，否则 warn 跳过。设 `0` 关闭 |
 | `BASHRC_URL` / `VIMRC_URL` | 可选 | 给定则拉取 `.bashrc`/`.vimrc` 到 root 与 sudo 用户家目录（留空跳过）；地址写在 `initial.env`，不入库 |
 | `INSTALL_TCP_BRUTAL` / `TCP_BRUTAL_URL` | 可选 | **默认 `1`（开启）**：安装 `tcp-brutal` DKMS 内核模块（Hysteria 2 brutal 拥塞控制，apernet 官方）。**仅令诊断位 `IS_BRUTAL=true`；Hy2 实际用 bbr，不装不影响代理功能。** 自动补 `build-essential`+运行内核头;运行内核被仓库淘汰时无法编译（需先升级内核+重启）。设 `0` 关闭 |
