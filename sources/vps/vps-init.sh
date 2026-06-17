@@ -39,7 +39,10 @@ set -euo pipefail
 # Stage 1 -> Stage 2 交接条件：
 #   1. docker 已安装并可用
 #   2. $SBXRAY_DIR/docker-compose.yml 已存在
-#   3. $SBXRAY_DIR/.env 已写入 domain / cdndomain / code
+#   3. $SBXRAY_DIR/.env 已写【完整】：domain / cdndomain / code；且当 initial.env
+#      含 OPENWRT_TS_IP（CN-exit 节点）时，回国项也一并写全——CN_EXIT_MODE /
+#      ENABLE_REVERSE / ENABLE_SOCKS5_PROXY / tsip /（按角色）WATCHTOWER_SCHEDULE。
+#      Stage 1 是 .env 的单一所有者；Stage 2 不再写 .env（只校验 + 运行时动作）。
 #   4. 可继续运行同目录 vps-cn-exit-init.sh
 
 log() {
@@ -154,6 +157,15 @@ load_config() {
     VIMRC_URL="${VIMRC_URL:-}"
     INSTALL_TCP_BRUTAL="${INSTALL_TCP_BRUTAL:-1}"
     TCP_BRUTAL_URL="${TCP_BRUTAL_URL:-https://tcp.hy2.sh/}"
+    # CN-exit 回国项：Stage 1 在此一次写全 .env（不留给 Stage 2 后补），消除
+    # 「.env 半完整时容器先 up → 空 tsip 降级 off → watchtower 固化」的窗口。
+    # 仅在本节点是 CN-exit 节点（OPENWRT_TS_IP 非空）时写入，保持 Stage 1 通用性。
+    OPENWRT_TS_IP="${OPENWRT_TS_IP:-}"
+    CN_EXIT_MODE="${CN_EXIT_MODE:-balance}"
+    SBX_CANARY_ROLE="${SBX_CANARY_ROLE:-worker}"
+    REVERSE_DOMAINS="${REVERSE_DOMAINS:-}"
+    SHOUTRRR_URLS="${SHOUTRRR_URLS:-}"
+    VPS_DOMAIN="${VPS_DOMAIN:-}"
     ENV_FILE="${SBXRAY_DIR}/.env"
 
 }
@@ -456,6 +468,27 @@ deploy_sbx() {
     upsert_env domain "$SBX_DOMAIN"
     upsert_env cdndomain "$SBX_CDN_DOMAIN"
     upsert_env code "$SBX_CODE"
+
+    # CN-exit 节点：初始化即写全回国 env（OPENWRT_TS_IP 是 CN-exit 节点的标志输入）。
+    # 非 CN-exit 节点（OPENWRT_TS_IP 空）跳过，compose 默认值生效，Stage 1 保持通用。
+    if [ -n "$OPENWRT_TS_IP" ]; then
+        log "CN-exit 节点：写全回国 env（mode=$CN_EXIT_MODE role=$SBX_CANARY_ROLE）"
+        upsert_env CN_EXIT_MODE "$CN_EXIT_MODE"
+        upsert_env ENABLE_REVERSE true
+        upsert_env ENABLE_SOCKS5_PROXY true
+        upsert_env tsip "$OPENWRT_TS_IP"          # docker-compose: CN_EXIT_SOCKS5_HOST=${tsip}
+        [ -n "$REVERSE_DOMAINS" ] && upsert_env REVERSE_DOMAINS "$REVERSE_DOMAINS"
+        [ -n "$SHOUTRRR_URLS" ]   && upsert_env shoutrrr_urls "$SHOUTRRR_URLS"
+        [ -n "$VPS_DOMAIN" ]      && upsert_env domain "$VPS_DOMAIN"   # 覆盖 hostname 派生值（可选）
+        # 角色派生 WATCHTOWER_SCHEDULE：canary 提前 1h（北京 03:00）留人工叫停窗口；
+        # worker 不写，走 compose 默认 04:00。错峰逻辑见 vps-cn-exit-init.sh 自检 cron。
+        if [ "$SBX_CANARY_ROLE" = "canary" ]; then
+            upsert_env WATCHTOWER_SCHEDULE "0 0 3 * * *"
+        else
+            # 幂等：worker 显式删除可能残留的旧行，避免 canary→worker 改角色后固化 03:00。
+            grep -v '^WATCHTOWER_SCHEDULE=' "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null && mv "$ENV_FILE.tmp" "$ENV_FILE" || true
+        fi
+    fi
     chmod 600 "$ENV_FILE"
 
     compose_file="$SBXRAY_DIR/docker-compose.yml"

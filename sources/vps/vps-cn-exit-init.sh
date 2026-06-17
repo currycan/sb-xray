@@ -1,9 +1,14 @@
 #!/bin/sh
 # vps-cn-exit-init.sh —— sb-xray VPS 侧回国（balance 双腿）一键初始化
 #
-# 在每台公网 VPS 上跑（标准 Linux + Docker）。把回国所需 env 写进 sb-xray 的 .env
-# （docker-compose.yml 以 ${VAR} 引用），安装 Tailscale 并入 tailnet，装 VPS 侧
-# keepalive，最后 docker compose up。配一次即可，拨号切换全在 OpenWrt 侧 cn-bridge。
+# 在每台公网 VPS 上跑（标准 Linux + Docker）。Stage 2 是回国功能的【运行时】阶段：
+# 安装 Tailscale 并入 tailnet、装 VPS 侧 keepalive / 自检 cron / watchdog，最后
+# docker compose up。配一次即可，拨号切换全在 OpenWrt 侧 cn-bridge。
+#
+# 注意：回国 env（CN_EXIT_MODE / ENABLE_REVERSE / ENABLE_SOCKS5_PROXY / tsip /
+# 按角色的 WATCHTOWER_SCHEDULE）已由 Stage 1 (vps-init.sh) 写全 .env——Stage 1 是
+# .env 的单一所有者。本脚本不写 .env，只校验其完整性后执行运行时动作。
+# 重配 .env 请编辑 .env 后 `docker compose up -d`，或带新 initial.env 重跑 Stage 1。
 #
 # 供嵌进你已有的 VPS provisioning。通过环境变量传参：
 #   SBXRAY_DIR      sb-xray 部署目录（默认 /root/sb-xray）
@@ -11,11 +16,10 @@
 #   TS_AUTHKEY      Tailscale reusable auth key（首次装 tailscale 必填；已在网可省）
 #   TS_AUTHKEY_FILE 改从文件读 authkey（TS_AUTHKEY 为空时生效，避免 key 进程表/历史泄露）
 #   TS_HOSTNAME     本机在 tailnet 的设备名（默认取 hostname）
-#   CN_EXIT_MODE    回国模式（默认 balance）
-#   REVERSE_DOMAINS 经 bridge 出的内网域名，逗号分隔（可选，各节点建议统一）
-#   VPS_DOMAIN      本节点对外域名（可选，写进 .env domain）
-#   SHOUTRRR_URLS   事件总线告警 URL（可选）
+#   CN_EXIT_MODE    回国模式（默认 balance）；仅用于末尾容器内自检比对，写 .env 在 Stage 1
 #   COMPOSE_URL     docker-compose.yml 下载源（默认仓库 main 的 raw）
+#   （REVERSE_DOMAINS / VPS_DOMAIN / SHOUTRRR_URLS 等回国 .env 项现由 Stage 1 写入，
+#    见 vps-init.sh 与 initial.env；本脚本不再消费它们。）
 #   SKIP_COMPOSE_UPDATE  设 1 跳过 compose 同步（默认 0，会拉最新覆盖）
 #   SKIP_PULL       设 1 跳过 docker compose pull（只 up -d，不升级镜像；默认 0）
 #   SBX_CANARY_ROLE 本节点 watchtower 角色 canary|worker（默认 worker；指定一台金丝雀节点设 canary）
@@ -76,23 +80,13 @@ command -v docker >/dev/null 2>&1 || die "未找到 docker"
 ENV_FILE="$SBXRAY_DIR/.env"
 touch "$ENV_FILE"
 
-# upsert_env <key> <value>：删旧行再追加（避免 sed 对含 :/@/& 的值转义出错）
-upsert_env() {
-    _k=$1; _v=$2
-    grep -v "^${_k}=" "$ENV_FILE" > "$ENV_FILE.tmp" 2>/dev/null || true
-    mv "$ENV_FILE.tmp" "$ENV_FILE"
-    printf '%s=%s\n' "$_k" "$_v" >> "$ENV_FILE"
-}
-
-# ── 1. 写 .env 回国项 ─────────────────────────────────────────────
-log "写入回国 env 到 $ENV_FILE"
-upsert_env CN_EXIT_MODE "$CN_EXIT_MODE"
-upsert_env ENABLE_REVERSE true
-upsert_env ENABLE_SOCKS5_PROXY true
-upsert_env tsip "$OPENWRT_TS_IP"           # docker-compose: CN_EXIT_SOCKS5_HOST=${tsip}
-[ -n "$REVERSE_DOMAINS" ] && upsert_env REVERSE_DOMAINS "$REVERSE_DOMAINS"
-[ -n "$VPS_DOMAIN" ]      && upsert_env domain "$VPS_DOMAIN"
-[ -n "$SHOUTRRR_URLS" ]   && upsert_env shoutrrr_urls "$SHOUTRRR_URLS"
+# ── 1. 校验 .env 完整性（不写 .env：Stage 1 vps-init.sh 是 .env 单一所有者）──
+# Stage 1 应已用完整 initial.env（含 OPENWRT_TS_IP）写全回国 env。此处只校验、不
+# 补写，防「.env 半完整 → 容器以空 tsip 降级 off 启动 → watchtower 固化」窗口。
+_tsip_val=$(grep '^tsip=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+[ -n "$_tsip_val" ] || die ".env 缺 tsip —— 请先用完整 initial.env（含 OPENWRT_TS_IP）跑 Stage 1 (vps-init.sh) 写全 .env，再跑本脚本"
+grep -q '^CN_EXIT_MODE=' "$ENV_FILE" || die ".env 缺 CN_EXIT_MODE —— 同上，先跑 Stage 1 (vps-init.sh)"
+log "校验通过：.env 已含 tsip / CN_EXIT_MODE（由 Stage 1 写入）"
 chmod 600 "$ENV_FILE"
 
 # ── 2. 安装 Tailscale 并入网（socks5 腿命脉）──────────────────────
@@ -152,10 +146,11 @@ EOF
 
     # (c) 角色：canary（指定的金丝雀节点）让 watchtower 提前 1h（北京 03:00），自检 03:05；
     #     worker 走 compose 默认 04:00，自检 04:05。错峰留出 1h 人工叫停窗口。
+    #     注：WATCHTOWER_SCHEDULE 已由 Stage 1 (vps-init.sh) 按角色写入 .env；本段
+    #     只按角色决定自检 cron 的运行时段（_check_min），不再写 .env。
     if [ "$SBX_CANARY_ROLE" = "canary" ]; then
-        upsert_env WATCHTOWER_SCHEDULE "0 0 3 * * *"
         _check_min="5 3"
-        log "  角色=canary：watchtower 03:00 先行，自检 03:05"
+        log "  角色=canary：watchtower 03:00 先行（Stage 1 已写 .env），自检 03:05"
     else
         _check_min="5 4"
         log "  角色=worker：watchtower 04:00（compose 默认），自检 04:05"

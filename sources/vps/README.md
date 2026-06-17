@@ -1,6 +1,6 @@
 # sb-xray VPS 侧回国出口（CN exit）一键初始化
 
-在每台公网 VPS 上跑一次 `vps-cn-exit-init.sh`，完成回国双腿（balance）所需的全部 VPS 侧配置：写 `.env`、装 Tailscale 入网、配链路保活、拉起容器、自检。**配一次永不改**——之后的回国拨号切换全部在 OpenWrt 侧用 `cn-bridge` 完成（见 [../openwrt/README.md](../openwrt/README.md)）。
+在每台公网 VPS 上跑一次 `vps-cn-exit-init.sh`，完成回国双腿（balance）所需的 VPS 侧【运行时】动作：装 Tailscale 入网、配链路保活、拉起容器、自检。回国 `.env` 由 Stage 1 (`vps-init.sh`) 一次写全（见 §0）——Stage 2 只校验后执行运行时动作，不写 `.env`。**配一次永不改**——之后的回国拨号切换全部在 OpenWrt 侧用 `cn-bridge` 完成（见 [../openwrt/README.md](../openwrt/README.md)）。
 
 ## 0. 两阶段：先 `vps-init.sh`（Stage 1），再 `vps-cn-exit-init.sh`（Stage 2）
 
@@ -15,10 +15,10 @@ flowchart LR
 
 | 阶段 | 脚本 | 做什么 | 跑几次 |
 |------|------|--------|--------|
-| **Stage 1** | `vps-init.sh` | 系统调优 + BBR、建 sudo 用户、SSH 加固（仅密钥）、装 Docker（官方源）、落盘 `sb-xray/.env` + compose 模板 | 新机一次 |
-| **Stage 2** | `vps-cn-exit-init.sh` | Tailscale 入网、写回国 env、保活/自检护栏、拉起容器 | 回国节点一次（见 §1 起） |
+| **Stage 1** | `vps-init.sh` | 系统调优 + BBR、建 sudo 用户、SSH 加固（仅密钥）、装 Docker（官方源）、**写全 `sb-xray/.env`**（域名/code +（CN-exit 节点）回国项）+ compose 模板 | 新机一次 |
+| **Stage 2** | `vps-cn-exit-init.sh` | Tailscale 入网、保活/自检护栏、拉起容器（**校验 `.env`，不写 `.env`**） | 回国节点一次（见 §1 起） |
 
-`vps-init.sh` 跑完正好满足 Stage 2 的前置（docker 已装、`/root/sb-xray/docker-compose.yml` 存在）。**只做基础置备、不绑回国角色**——非回国节点跑完 Stage 1 即可。
+`vps-init.sh` 跑完正好满足 Stage 2 的前置（docker 已装、`/root/sb-xray/docker-compose.yml` 存在、`.env` 已写全）。它是 `.env` 的**单一所有者**：当 `initial.env` 含 `OPENWRT_TS_IP`（即本机是 CN-exit 节点）时，Stage 1 一并写全回国项（`CN_EXIT_MODE`/`ENABLE_REVERSE`/`ENABLE_SOCKS5_PROXY`/`tsip`/按角色的 `WATCHTOWER_SCHEDULE`）；否则只写域名/code 保持通用——非回国节点跑完 Stage 1 即可。这样初始化即产出**完整 `.env`**，避免容器在两阶段之间以半完整配置启动被 watchtower 固化（见 CLAUDE.md §2）。
 
 ### Stage 1 用法
 
@@ -43,6 +43,7 @@ sudo bash vps-init.sh
 | `SSH_PORT` | 可选 | SSH 端口（默认 `38666`） |
 | `TIMEZONE` | 可选 | 默认 `Asia/Shanghai` |
 | `SBX_DOMAIN` / `SBX_CDN_DOMAIN` / `SBX_CODE` | 可选 | 写入 `sb-xray/.env` 的 `domain`（空=`hostname`）/ `cdndomain` / `code` |
+| `OPENWRT_TS_IP` 及回国项 | 可选 | 给定 `OPENWRT_TS_IP` 即判定本机为 **CN-exit 节点**，Stage 1 一并写全回国 `.env`（`CN_EXIT_MODE` / `ENABLE_REVERSE` / `ENABLE_SOCKS5_PROXY` / `tsip` / 按 `SBX_CANARY_ROLE` 的 `WATCHTOWER_SCHEDULE`，及 `REVERSE_DOMAINS`/`VPS_DOMAIN`/`SHOUTRRR_URLS`）。各项含义见 [§3 参数参考](#3-参数参考)。留空=非回国节点，只写域名/code |
 | `SBX_COMPOSE_URL` | 可选 | `docker-compose.yml` 下载源（默认仓库 `main` 的 raw） |
 | `INSTALL_SSRPOLIPO` / `SSRPOLIPO_COMPOSE_URL` | 可选 | **默认 `1`（开启）**；启用时必须给 `SSRPOLIPO_COMPOSE_URL`，否则 warn 跳过。设 `0` 关闭 |
 | `BASHRC_URL` / `VIMRC_URL` | 可选 | 给定则拉取 `.bashrc`/`.vimrc` 到 root 与 sudo 用户家目录（留空跳过）；地址写在 `initial.env`，不入库 |
@@ -60,7 +61,7 @@ sudo bash vps-init.sh
 
 ```mermaid
 flowchart LR
-    A["① 写 .env<br/>CN_EXIT_MODE=balance<br/>等回国项"] --> B["② 装 Tailscale<br/>并入 tailnet<br/>(已装则跳过)"] --> C["③ 装 keepalive<br/>cron 每分钟<br/>ping OpenWrt"] --> D["④ 同步<br/>docker-compose.yml<br/>(拉最新+备份)"] --> E["⑤ docker compose<br/>pull + up -d<br/>(顺带升级镜像)"] --> F["⑥ 自检<br/>容器/env/链路"]
+    A["① 校验 .env<br/>含 tsip/CN_EXIT_MODE<br/>(Stage 1 已写,缺则中止)"] --> B["② 装 Tailscale<br/>并入 tailnet<br/>(已装则跳过)"] --> C["③ 装 keepalive<br/>cron 每分钟<br/>ping OpenWrt"] --> D["④ 同步<br/>docker-compose.yml<br/>(拉最新+备份)"] --> E["⑤ docker compose<br/>pull + up -d<br/>(顺带升级镜像)"] --> F["⑥ 自检<br/>容器/env/链路"]
 ```
 
 跑完后这台 VPS 具备**两条回国腿**，由容器内 xray 自动择优与故障转移：
@@ -86,19 +87,21 @@ flowchart LR
 
 ## 3. 参数参考
 
-这些变量可写进同目录 `initial.env`（与 Stage 1 共用的节点唯一输入配置，脚本会自动 source），也可在命令行通过环境变量传入：
+这些变量都写进同目录 `initial.env`（与 Stage 1 共用的节点唯一输入配置，两个脚本都自动 source）。
+
+> 🧭 **谁消费哪些变量**：回国 `.env` 项（`CN_EXIT_MODE` / `REVERSE_DOMAINS` / `VPS_DOMAIN` / `SHOUTRRR_URLS`，连同 `tsip`/`ENABLE_*`/`WATCHTOWER_SCHEDULE`）由 **Stage 1** 写入 `.env`；下表中标「Stage 1 写」的即属此类，Stage 2 只在自检时读 `CN_EXIT_MODE` 比对。`OPENWRT_TS_IP` / `TS_*` / `SBXRAY_DIR` / `COMPOSE_URL` 是 **Stage 2 运行时**仍直接读取的。
 
 | 变量 | 必填 | 说明 | 在哪拿 |
 |------|------|------|--------|
-| `OPENWRT_TS_IP` | ✅ | 家里 OpenWrt 的 Tailscale IP（socks5 腿回国出口） | OpenWrt 上 `tailscale ip -4` |
+| `OPENWRT_TS_IP` | ✅ | 家里 OpenWrt 的 Tailscale IP（socks5 腿回国出口）；**也是 Stage 1 判定本机为 CN-exit 节点、写全回国 `.env` 的开关** | OpenWrt 上 `tailscale ip -4` |
 | `TS_AUTHKEY` | 首次装 tailscale 时 | Tailscale reusable auth key；本机已在网可省 | Tailscale 管理后台 Keys 页 |
 | `TS_AUTHKEY_FILE` | 可选 | 改从文件读 authkey（`TS_AUTHKEY` 为空时生效），避免 key 进远端进程表/历史 | — |
 | `TS_HOSTNAME` | 可选 | 本机在 tailnet 的设备名，默认取 `hostname` | 建议用节点裸名（如 `dc99`） |
 | `SBXRAY_DIR` | 可选 | sb-xray 部署目录，默认 `/root/sb-xray` | — |
-| `CN_EXIT_MODE` | 可选 | 回国模式，默认 `balance` | — |
-| `REVERSE_DOMAINS` | 可选 | 经 bridge 出的内网域名（逗号分隔），多台建议统一 | — |
-| `VPS_DOMAIN` | 可选 | 本节点对外域名（写进 `.env` 的 `domain`） | — |
-| `SHOUTRRR_URLS` | 可选 | 事件总线告警 URL | 见 [docs/06](../../docs/06-event-bus-shoutrrr.md) |
+| `CN_EXIT_MODE` | 可选（Stage 1 写） | 回国模式，默认 `balance` | — |
+| `REVERSE_DOMAINS` | 可选（Stage 1 写） | 经 bridge 出的内网域名（逗号分隔），多台建议统一 | — |
+| `VPS_DOMAIN` | 可选（Stage 1 写） | 本节点对外域名（写进 `.env` 的 `domain`，覆盖 hostname 派生值） | — |
+| `SHOUTRRR_URLS` | 可选（Stage 1 写） | 事件总线告警 URL | 见 [docs/06](../../docs/06-event-bus-shoutrrr.md) |
 | `COMPOSE_URL` | 可选 | `docker-compose.yml` 下载源，默认仓库 `main` 的 raw | — |
 | `SKIP_COMPOSE_UPDATE` | 可选 | 设 `1` 跳过 compose 同步；默认 `0`（拉最新覆盖，原始 compose 留存 `.bak`） | — |
 | `SKIP_PULL` | 可选 | 设 `1` 只 `up -d` 不 `pull`（不升级镜像）；默认 `0` | — |
@@ -151,7 +154,7 @@ for h in dc99 jp dc99-3 cn2; do
 done
 ```
 
-脚本幂等（`.env` 按 key 覆盖写入、tailscale 已装则跳过、cron 直接覆盖），重复跑安全；改了某个参数重跑一次即生效。
+脚本幂等（校验 `.env` 只读不写、tailscale 已装则跳过、cron 直接覆盖），重复跑安全。改回国 `.env` 参数：带新 `initial.env` 重跑 **Stage 1**（`.env` 单一所有者），或直接编辑 `.env` 后 `docker compose up -d`。
 
 ### 跑完之后
 
@@ -169,7 +172,7 @@ docker exec sb-xray sh -c 'grep -E "r-tunnel|cn-exit" /var/log/xray/access.log |
 | 自检项 | 通过含义 | FAIL 时 |
 |--------|----------|---------|
 | `sb-xray 容器运行中` | compose 已拉起 | `docker compose logs` 看启动错误 |
-| `容器内 CN_EXIT_MODE=... 生效` | `.env` 注入成功 | `docker compose up -d --force-recreate` 强制重建 |
+| `容器内 CN_EXIT_MODE=... 生效` | Stage 1 写的 `.env` 已被容器读入 | `docker compose up -d --force-recreate` 强制重建 |
 | `Tailscale 在网` | 守护已登录 | `tailscale status` 看状态；authkey 失效则换新 key 重跑 |
 | `到 OpenWrt ... 链路通` | socks5 腿物理链路就绪 | 刚入网打洞需 1-2 分钟，keepalive 会自愈；持续不通见下节 |
 
@@ -178,6 +181,7 @@ docker exec sb-xray sh -c 'grep -E "r-tunnel|cn-exit" /var/log/xray/access.log |
 | 报错 / 现象 | 原因与解决 |
 |------|------------|
 | `未找到 sb-xray 目录` | 先部署 sb-xray，或 `SBXRAY_DIR=/实际/路径` 指定 |
+| `.env 缺 tsip` / `.env 缺 CN_EXIT_MODE` | Stage 1 未写全 `.env`——用含 `OPENWRT_TS_IP` 的完整 `initial.env` 重跑 `vps-init.sh` 再跑本脚本 |
 | `必填 OPENWRT_TS_IP` | 去 OpenWrt 跑 `tailscale ip -4` 拿 IP 传入 |
 | `WARN: ... 不像 Tailscale IP（应为 100.x 段）` | 传成公网 IP 了；Tailscale IP 一定是 `100.x.y.z` |
 | `未装 tailscale 且未提供 TS_AUTHKEY` | 补 `TS_AUTHKEY=tskey-auth-...` |
@@ -191,7 +195,7 @@ docker exec sb-xray sh -c 'grep -E "r-tunnel|cn-exit" /var/log/xray/access.log |
 
 | 位置 | 内容 |
 |------|------|
-| `$SBXRAY_DIR/.env` | 回国相关 key 覆盖写入（`CN_EXIT_MODE` / `ENABLE_REVERSE` / `ENABLE_SOCKS5_PROXY` / `tsip` 等），权限收紧 600 |
+| `$SBXRAY_DIR/.env` | **只校验不写**（回国项由 Stage 1 写入；缺 `tsip`/`CN_EXIT_MODE` 则在动 docker 前中止） |
 | 系统 | 安装 tailscale（官方源），`tailscale up --accept-dns=false`（不改本机 DNS，避免影响容器） |
 | `/etc/cron.d/cn-exit-keepalive` | 每分钟 `tailscale ping` OpenWrt 一次（辅助保活；主力在 OpenWrt 侧） |
 | Docker | `docker compose pull && up -d`（镜像升级到最新） |
