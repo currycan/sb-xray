@@ -1,0 +1,505 @@
+#!/bin/sh
+# cdn-speedtest - Cloudflare CDN IP 优选脚本
+# 由 openwrt-init.sh 安装到 /usr/bin/cdn-speedtest（同目录 cp 优先，否则 raw 下载）。
+# 适用于 OpenWrt (amd64/arm64)，自动测速并将最优 IP 写入 /etc/hosts。
+# 子域名前缀经 CDN_SUBDOMAINS 环境变量传入（逗号分隔），不再用文件中介。
+
+set -eu
+
+# ======================== 配置区 ========================
+
+# CDN 根域名（从环境变量读取）
+CDNDOMAIN="${CDNDOMAIN:-}"
+
+# 子域名前缀（逗号分隔，从环境变量读取，如 CDN_SUBDOMAINS=jp,big,cn2）。
+# 与 CDNDOMAIN 拼成完整域名池供测速；由 openwrt-init.sh 的 build_cdn_env 经 cron/env 注入。
+CDN_SUBDOMAINS="${CDN_SUBDOMAINS:-}"
+
+# CloudflareST 参数
+SPEED_TEST_THREADS="${SPEED_TEST_THREADS:-500}"        # 延迟测速线程数
+SPEED_TEST_TIME="${SPEED_TEST_TIME:-4}"             # 下载测速时间(秒)
+SPEED_TEST_COUNT="${SPEED_TEST_COUNT:-5}"             # 下载测速数量
+SPEED_TEST_LATENCY_MAX="${SPEED_TEST_LATENCY_MAX:-200}"   # 延迟上限(ms)
+SPEED_TEST_MIN_SPEED="${SPEED_TEST_MIN_SPEED:-5}"        # 最低下载速度(MB/s)，低于此值视为失败
+
+# 安装目录
+INSTALL_DIR="/etc/CloudflareST"
+LOG_FILE="/var/log/cdn-speedtest.log"
+# 上次优选结果记录（IP|速度|延迟）
+LAST_RESULT_FILE="${INSTALL_DIR}/last_best.txt"
+
+# ======================== 函数 ========================
+
+log() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    # 诊断写 stderr（不写 stdout）：run_speedtest 经 best_ip=$(run_speedtest) 命令替换
+    # 调用，若 log 写 stdout 会被 $() 捕获——前台看不到 OpenClash 停/启与测速进度，
+    # 且污染返回值（靠 tail -1 捞 IP）。改 stderr 后 $() 只收 run_speedtest 末尾的
+    # echo "$BEST_IP"，前台诊断照常可见，日志文件不受影响。
+    echo "$msg" >&2
+    echo "$msg" >> "$LOG_FILE"
+}
+
+# 根据 CDN_SUBDOMAINS（逗号分隔前缀）+ CDNDOMAIN 拼接完整域名
+build_cdn_domains() {
+    if [ -z "$CDNDOMAIN" ]; then
+        log "ERROR: 未设置 CDNDOMAIN 环境变量，用法: CDNDOMAIN=example.com CDN_SUBDOMAINS=jp,big $0"
+        exit 1
+    fi
+    if [ -z "$CDN_SUBDOMAINS" ]; then
+        log "ERROR: 未设置 CDN_SUBDOMAINS 环境变量（逗号分隔前缀，如 jp,big,cn2）"
+        exit 1
+    fi
+
+    CDN_DOMAINS=""
+    # POSIX 安全拆逗号：临时把 IFS 设为逗号，无引号 for 按 IFS 分词；事后恢复 IFS。
+    # 不用 `tr ',' '\n'`（子进程）也不用 bash 数组/read -a；空段（连续逗号/首尾逗号）跳过。
+    # 去前后空白用 awk（容忍 "jp, big" 写法），不碰 busybox 误解的 tr 字符类。
+    _oldifs=$IFS
+    IFS=,
+    for prefix in $CDN_SUBDOMAINS; do
+        IFS=$_oldifs
+        prefix=$(printf '%s' "$prefix" | awk '{$1=$1};1')
+        if [ -z "$prefix" ]; then
+            IFS=,
+            continue
+        fi
+        CDN_DOMAINS="${CDN_DOMAINS}${prefix}.${CDNDOMAIN}
+"
+        IFS=,
+    done
+    IFS=$_oldifs
+
+    local count
+    count=$(echo "$CDN_DOMAINS" | grep -c '\S')
+    if [ "$count" -eq 0 ]; then
+        log "ERROR: CDN_SUBDOMAINS 中无有效前缀"
+        exit 1
+    fi
+
+    log "共 ${count} 个 CDN 域名 (*.${CDNDOMAIN}):"
+    echo "$CDN_DOMAINS" | while read -r d; do
+        [ -z "$d" ] && continue
+        log "  - ${d}"
+    done
+}
+
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)   echo "amd64" ;;
+        aarch64|arm64)   echo "arm64" ;;
+        armv7*)          echo "armv7" ;;
+        *)
+            log "ERROR: 不支持的架构: $(uname -m)"
+            exit 1
+            ;;
+    esac
+}
+
+# 安装 GNU tar：上游 cfst tar.gz 是无 ustar 魔数的老式 tar，busybox tar（-z 与流式
+# 管道皆然）报 invalid tar magic 解不开。装上 GNU tar 后 `tar -xzf` 一次解出全部条目
+# （cfst + ip.txt/ipv6.txt 测速输入清单），消除「按文件枚举漏抽 ip.txt 致测速白跑」的
+# bug 面。优先 apk（新 OpenWrt/ImmortalWrt 基），回退 opkg；二者皆无则失败。
+ensure_gnu_tar() {
+    if command -v apk > /dev/null 2>&1; then
+        apk add tar > /dev/null 2>&1 || { apk update > /dev/null 2>&1 && apk add tar > /dev/null 2>&1; }
+    elif command -v opkg > /dev/null 2>&1; then
+        opkg update > /dev/null 2>&1
+        opkg install tar > /dev/null 2>&1
+    else
+        return 1
+    fi
+}
+
+install_cloudflarest() {
+    local arch="$1"
+    local tarball="cfst_linux_${arch}.tar.gz"
+    local github_url="https://github.com/XIU2/CloudflareSpeedTest/releases/latest/download/${tarball}"
+    local proxy_url="https://gh-proxy.com/${github_url}"
+
+    mkdir -p "$INSTALL_DIR"
+
+    # 幂等门同时校验 ip.txt：cfst 默认读 cwd 的 ip.txt 作测速输入，缺它则每轮白跑。
+    # 存量设备（已装 cfst 但缺 ip.txt，如早期未解全量者）借此在下次 init 走重装路径、
+    # 由 tar -xzf 解全量自愈补回 ip.txt。
+    if [ -x "${INSTALL_DIR}/cfst" ] && [ -s "${INSTALL_DIR}/ip.txt" ]; then
+        log "CloudflareST 已安装"
+        return 0
+    fi
+
+    local download_cmd
+    if command -v wget > /dev/null 2>&1; then
+        download_cmd="wget -q -O"
+    elif command -v curl > /dev/null 2>&1; then
+        download_cmd="curl -sL -o"
+    else
+        log "ERROR: 需要 wget 或 curl"
+        exit 1
+    fi
+
+    log "下载 CloudflareST (${arch})..."
+    if ! $download_cmd "${INSTALL_DIR}/${tarball}" "$github_url" 2>/dev/null; then
+        log "GitHub 直连失败，尝试代理镜像..."
+        if ! $download_cmd "${INSTALL_DIR}/${tarball}" "$proxy_url" 2>/dev/null; then
+            log "ERROR: 下载失败，请手动下载 ${tarball} 到 ${INSTALL_DIR}/"
+            exit 1
+        fi
+    fi
+
+    if ! tar -xzf "${INSTALL_DIR}/${tarball}" -C "$INSTALL_DIR" 2>/dev/null; then
+        log "busybox tar 解包失败（归档无 ustar 魔数），安装 GNU tar 后重试..."
+        if ! ensure_gnu_tar || ! tar -xzf "${INSTALL_DIR}/${tarball}" -C "$INSTALL_DIR" 2>/dev/null; then
+            log "ERROR: 解包失败，请手动 'apk add tar' 或 'opkg install tar' 后重跑"
+            exit 1
+        fi
+        log "GNU tar 安装并解包成功"
+    fi
+    chmod +x "${INSTALL_DIR}/cfst"
+    rm -f "${INSTALL_DIR}/${tarball}"
+    log "CloudflareST 安装完成: ${INSTALL_DIR}/cfst"
+}
+
+# 恢复代理环境（trap 兜底与正常路径共用，幂等：备份在才恢复 DNS，停过才启 OpenClash）
+restore_proxy_env() {
+    if [ -f /etc/resolv.conf.bak.cdn-speedtest ]; then
+        log "恢复 /etc/resolv.conf"
+        cp /etc/resolv.conf.bak.cdn-speedtest /etc/resolv.conf
+        rm -f /etc/resolv.conf.bak.cdn-speedtest
+    fi
+    # run_speedtest 经 $() 在子 shell 执行，shell 变量 flag 父进程不可见——父子两道
+    # trap 都要能独立完成恢复。进程探测方案不可行（真机实测两类假象：rc stop 返回
+    # 后 core 拖尾退出，pgrep 命中将死进程导致跳过后无人再拉起；旁观进程 argv 含
+    # 关键字会假性命中）。改为原子 mkdir 抢锁串行化 + 无条件 restart：restart 对
+    # 在跑/已停/停止中三态均收敛，锁防并发双 start/restart 的 rc 竞态（真机实测
+    # 并发会把服务打成 inactive）。
+    [ -f /etc/init.d/openclash ] || return 0
+    if mkdir /tmp/.cdn-speedtest-oc-restore.lock 2>/dev/null; then
+        log "恢复 OpenClash（restart）..."
+        /etc/init.d/openclash restart > /dev/null 2>&1
+        log "OpenClash 已恢复"
+        rmdir /tmp/.cdn-speedtest-oc-restore.lock 2>/dev/null
+    else
+        log "另一恢复进程持锁，跳过 OpenClash 重启"
+    fi
+}
+
+run_speedtest() {
+    log "开始 Cloudflare IP 优选测速..."
+    log "参数: 线程=${SPEED_TEST_THREADS} 测速时间=${SPEED_TEST_TIME}s 数量=${SPEED_TEST_COUNT} 延迟上限=${SPEED_TEST_LATENCY_MAX}ms 最低速度=${SPEED_TEST_MIN_SPEED}MB/s"
+
+    if [ -f /etc/init.d/openclash ]; then
+        log "检测到 OpenClash，停止服务以确保测速直连..."
+        # 中断兜底先于 stop 安装：SSH 断线(HUP)/Ctrl-C(INT)/kill(TERM) 连停机过程中
+        # 被打断也恢复 DNS 与 OpenClash（kill -9 与断电无法 trap，属物理极限）。
+        # EXIT 覆盖意外退出路径。注意本函数经 $() 在子 shell 运行，此处 trap 只护
+        # 子 shell；父进程的同款 trap 在 main() 的 run 分支安装。
+        trap 'log "测速被中断，恢复代理环境..."; restore_proxy_env; trap - HUP INT TERM EXIT; exit 130' HUP INT TERM
+        trap 'restore_proxy_env' EXIT
+        /etc/init.d/openclash stop > /dev/null 2>&1
+        log "OpenClash 已停止"
+        # OpenClash 停止后 DNS 失效，临时使用公共 DNS
+        # 已有备份不覆盖：kill -9 残局后重跑时，避免把上次未还原的公共 DNS 写进备份
+        if [ -f /etc/resolv.conf.bak.cdn-speedtest ]; then
+            log "检测到上次未还原的 resolv.conf 备份，保留原始备份不覆盖"
+        else
+            log "备份 /etc/resolv.conf"
+            cp /etc/resolv.conf /etc/resolv.conf.bak.cdn-speedtest
+        fi
+        printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
+        log "已临时切换至公共 DNS (1.1.1.1, 8.8.8.8)"
+        # 验证 DNS 是否可用
+        if nslookup speed.cloudflare.com > /dev/null 2>&1; then
+            log "DNS 验证通过"
+        else
+            log "WARN: DNS 验证失败，测速可能受影响"
+        fi
+    else
+        log "未检测到 OpenClash，直接测速"
+    fi
+
+    cd "$INSTALL_DIR"
+
+    # 先清旧结果：cfst 在严苛参数下可能产不出任何合格 IP（不写 csv），残留旧榜会被
+    # 静默当作本轮结果（真机实测：延迟上限收紧后整轮白测、对比的还是上轮数据）
+    rm -f result.csv
+
+    ./cfst \
+        -n "$SPEED_TEST_THREADS" \
+        -t "$SPEED_TEST_TIME" \
+        -dn "$SPEED_TEST_COUNT" \
+        -tl "$SPEED_TEST_LATENCY_MAX" \
+        -sl "$SPEED_TEST_MIN_SPEED" \
+        -o result.csv
+
+    restore_proxy_env
+    trap - HUP INT TERM EXIT
+
+    log "测速完成"
+
+    if [ ! -f result.csv ]; then
+        log "ERROR: 测速结果文件不存在"
+        return 1
+    fi
+
+    # 取最优 IP（第二行第一列）
+    BEST_IP=$(sed -n '2p' result.csv | cut -d',' -f1)
+
+    if [ -z "$BEST_IP" ]; then
+        log "ERROR: 未找到满足条件的优选 IP"
+        return 1
+    fi
+
+    # 打印 Top 10 结果
+    log "测速结果 Top 10:"
+    log "  IP 地址          | 延迟(ms) | 速度(MB/s)"
+    sed -n '2,11p' result.csv | while IFS=',' read -r ip _ _ _ latency speed; do
+        log "  ${ip} | ${latency} | ${speed}"
+    done
+
+    BEST_LATENCY=$(sed -n '2p' result.csv | cut -d',' -f5)
+    BEST_SPEED=$(sed -n '2p' result.csv | cut -d',' -f6)
+    log "最优 IP: ${BEST_IP} (延迟: ${BEST_LATENCY}ms, 速度: ${BEST_SPEED}MB/s)"
+
+    echo "$BEST_IP"
+}
+
+# 保存本次优选结果
+save_result() {
+    local ip="$1" speed="$2" latency="$3"
+    echo "${ip}|${speed}|${latency}" > "$LAST_RESULT_FILE"
+    log "已保存优选记录: IP=${ip}, 速度=${speed}MB/s, 延迟=${latency}ms"
+}
+
+# 比较新旧 IP，判断是否需要更新
+# 返回 0 = 需要更新，返回 1 = 跳过
+should_update() {
+    local new_ip="$1" new_speed="$2" new_latency="$3"
+
+    # 无历史记录，首次运行
+    if [ ! -f "$LAST_RESULT_FILE" ]; then
+        log "首次运行，无历史记录，直接更新"
+        return 0
+    fi
+
+    local old_ip old_speed old_latency
+    old_ip=$(cut -d'|' -f1 "$LAST_RESULT_FILE")
+    old_speed=$(cut -d'|' -f2 "$LAST_RESULT_FILE")
+    old_latency=$(cut -d'|' -f3 "$LAST_RESULT_FILE")
+
+    log "对比: 新 IP ${new_ip} (速度: ${new_speed}MB/s, 延迟: ${new_latency}ms) vs 上次 IP ${old_ip} (速度: ${old_speed}MB/s, 延迟: ${old_latency}ms)"
+
+    # IP 相同
+    if [ "$new_ip" = "$old_ip" ]; then
+        log "优选 IP 未变化 (${new_ip})，跳过更新"
+        return 1
+    fi
+
+    # 新 IP 速度超过上次 10% 则更新
+    local speed_better
+    speed_better=$(echo "$new_speed $old_speed" | awk '{if ($1 > $2 * 1.1) print "1"; else print "0"}')
+    if [ "$speed_better" = "1" ]; then
+        log "新 IP 速度提升超过 10% (${new_speed} vs ${old_speed})，更新"
+        return 0
+    fi
+
+    # 速度相当（差距在 10% 以内），比较延迟
+    local speed_similar
+    speed_similar=$(echo "$new_speed $old_speed" | awk '{if ($1 >= $2 * 0.9) print "1"; else print "0"}')
+    if [ "$speed_similar" = "1" ]; then
+        local latency_better
+        latency_better=$(echo "$new_latency $old_latency" | awk '{if ($1 < $2) print "1"; else print "0"}')
+        if [ "$latency_better" = "1" ]; then
+            log "速度相当但新 IP 延迟更低 (${new_latency}ms < ${old_latency}ms)，更新"
+            return 0
+        fi
+    fi
+
+    # 新 IP 速度明显更差
+    local speed_worse
+    speed_worse=$(echo "$new_speed $old_speed" | awk '{if ($1 < $2 * 0.9) print "1"; else print "0"}')
+    if [ "$speed_worse" = "1" ]; then
+        log "新 IP 速度更差 (${new_speed} vs ${old_speed})，保持当前 IP ${old_ip}"
+        return 1
+    fi
+
+    log "新旧 IP 质量相当，保持当前 IP ${old_ip} 不变"
+    return 1
+}
+
+update_hosts() {
+    local ip="$1"
+    local count=0
+    local backup="/etc/hosts.bak.cdn-speedtest"
+
+    log "备份 /etc/hosts → ${backup}"
+    cp /etc/hosts "$backup"
+
+    log "写入优选 IP 到 /etc/hosts..."
+    for domain in $CDN_DOMAINS; do
+        [ -z "$domain" ] && continue
+        sed -i "/ ${domain}$/d" /etc/hosts
+        echo "${ip} ${domain}" >> /etc/hosts
+        count=$((count + 1))
+    done
+
+    log "已更新 ${count} 个域名 → ${ip}"
+}
+
+# /etc/hosts 终态对齐：should_update 决定「保持缓存 IP、不重测换机」时，仍须保证缓存 IP 真的
+# 写进了 /etc/hosts。触发场景：last_best.txt 在、但 /etc/hosts 优选条目缺——sysupgrade/cn-backup
+# 把 last_best.txt 纳入备份恢复、可再生的 hosts 条目却未落（新机/重刷），或被 cdn clean、被其它进程
+# 重置。不回填则陷死结：测速因 IP 未变跳过 update_hosts → hosts 空 → install 的 verify_cdn_outcome
+# 硬查 /etc/hosts 必死，而每次重测又仍判 IP 未变。返回 0（幂等，无缺失则 no-op）。
+ensure_hosts_present() {
+    [ -f "$LAST_RESULT_FILE" ] || return 0
+    local cached_ip missing=0
+    cached_ip=$(cut -d'|' -f1 "$LAST_RESULT_FILE")
+    [ -n "$cached_ip" ] || return 0
+    for domain in $CDN_DOMAINS; do
+        [ -z "$domain" ] && continue
+        grep -qE "^[0-9.]+ ${domain}\$" /etc/hosts 2>/dev/null || missing=1
+    done
+    if [ "$missing" = "1" ]; then
+        log "缓存优选 IP ${cached_ip} 存在但 /etc/hosts 条目缺失，回填自愈..."
+        update_hosts "$cached_ip"
+        restart_dns
+    fi
+}
+
+restart_dns() {
+    if [ -f /etc/init.d/dnsmasq ]; then
+        log "重启 dnsmasq 使 hosts 生效..."
+        /etc/init.d/dnsmasq restart > /dev/null 2>&1
+        log "dnsmasq 已重启"
+    else
+        log "WARN: 未检测到 dnsmasq，hosts 可能不会立即生效"
+    fi
+}
+
+show_status() {
+    echo "=============================="
+    echo " CDN 优选 IP 当前状态"
+    echo "=============================="
+    echo ""
+
+    local first_domain
+    first_domain=$(echo "$CDN_DOMAINS" | grep -m1 '\S')
+
+    local current_ip
+    current_ip=$(grep " ${first_domain}$" /etc/hosts 2>/dev/null | awk '{print $1}' | tail -1)
+
+    if [ -n "$current_ip" ]; then
+        echo "当前优选 IP: ${current_ip}"
+        echo ""
+        echo "已覆盖域名:"
+        echo "$CDN_DOMAINS" | while read -r d; do
+            [ -z "$d" ] && continue
+            echo "  - ${d}"
+        done
+    else
+        echo "未配置优选 IP（域名走 DNS 正常解析）"
+    fi
+
+    echo ""
+    if [ -f "${INSTALL_DIR}/result.csv" ]; then
+        echo "上次测速 Top 5:"
+        echo "  IP | 延迟(ms) | 速度(MB/s)"
+        sed -n '2,6p' "${INSTALL_DIR}/result.csv" | while IFS=',' read -r ip _ _ _ latency speed; do
+            echo "  ${ip} | ${latency} | ${speed}"
+        done
+    fi
+}
+
+clean_hosts() {
+    for domain in $CDN_DOMAINS; do
+        [ -z "$domain" ] && continue
+        sed -i "/ ${domain}$/d" /etc/hosts
+    done
+    restart_dns
+    log "已清除所有 CDN 优选记录，恢复 DNS 正常解析"
+}
+
+usage() {
+    cat <<'EOF'
+用法: CDNDOMAIN=example.com CDN_SUBDOMAINS=jp,big cdn-speedtest [命令]
+
+环境变量:
+  CDNDOMAIN        CDN 根域名（必须）
+  CDN_SUBDOMAINS   子域名前缀，逗号分隔（必须），与 CDNDOMAIN 拼成完整域名池
+
+  前缀来源说明：经 openwrt-init.sh cdn 子命令调用时，CDN_SUBDOMAINS 由 build_cdn_env
+  从 config.env 自动注入到 cron/env；手动直接运行须自行在命令前导出，例如：
+    CDNDOMAIN=example.com CDN_SUBDOMAINS=jp,big,cn2 cdn-speedtest run
+
+命令:
+  run       执行测速并更新 /etc/hosts (默认)
+  install   仅安装 CloudflareST
+  status    查看当前优选状态
+  clean     清除优选记录，恢复 DNS 正常解析
+  help      显示此帮助
+
+示例:
+  CDNDOMAIN=example.com CDN_SUBDOMAINS=jp,big cdn-speedtest          # 执行测速
+  CDNDOMAIN=example.com CDN_SUBDOMAINS=jp,big cdn-speedtest status   # 查看状态
+  CDNDOMAIN=example.com CDN_SUBDOMAINS=jp,big cdn-speedtest clean    # 清除优选
+EOF
+}
+
+# ======================== 主流程 ========================
+
+main() {
+    local cmd="${1:-run}"
+
+    case "$cmd" in
+        run)
+            build_cdn_domains
+            local arch
+            arch=$(detect_arch)
+            install_cloudflarest "$arch"
+            local best_ip
+            # 父进程 trap：run_speedtest 经 $() 在子 shell 跑，单独 TERM 父进程时子
+            # shell 的 trap 收不到信号（且子 shell 事后向已死父进程管道写日志会
+            # SIGPIPE 猝死）——父进程必须自带恢复：杀残留 cfst，再按磁盘状态恢复。
+            trap 'log "测速父进程被中断，恢复代理环境..."; pkill -x cfst 2>/dev/null; sleep 1; restore_proxy_env; trap - HUP INT TERM; exit 130' HUP INT TERM
+            best_ip=$(run_speedtest) || exit 1
+            trap - HUP INT TERM
+            best_ip=$(echo "$best_ip" | tail -1)
+            local best_speed best_latency
+            best_speed=$(sed -n '2p' "${INSTALL_DIR}/result.csv" | cut -d',' -f6)
+            best_latency=$(sed -n '2p' "${INSTALL_DIR}/result.csv" | cut -d',' -f5)
+            if should_update "$best_ip" "$best_speed" "$best_latency"; then
+                update_hosts "$best_ip"
+                restart_dns
+                save_result "$best_ip" "$best_speed" "$best_latency"
+            else
+                # 保持缓存 IP，但 /etc/hosts 必须真有条目（缓存在、条目缺 → 回填自愈）
+                ensure_hosts_present
+            fi
+            show_status
+            ;;
+        install)
+            local arch
+            arch=$(detect_arch)
+            install_cloudflarest "$arch"
+            ;;
+        status)
+            build_cdn_domains
+            show_status
+            ;;
+        clean)
+            build_cdn_domains
+            clean_hosts
+            restart_dns
+            ;;
+        help|--help|-h)
+            usage
+            ;;
+        *)
+            echo "未知命令: $cmd"
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

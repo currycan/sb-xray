@@ -5,7 +5,7 @@
 2. -h/--help 用法说明——必须在做任何环境检查/副作用之前短路退出；
 3. openwrt-init.sh 持久 tailscale bypass 的静态契约（nftables.d include）；
 4. OpenClash 配置纳管：模板占位符契约 + 渲染函数行为（注入/裁剪）；
-5. 内嵌 cdn-speedtest：heredoc 完整性与可解析性。
+5. 独立 cdn-speedtest（sources/openwrt/cdn-speedtest）：完整性、可解析性、CDN_SUBDOMAINS 纯 env 解析。
 """
 
 from __future__ import annotations
@@ -21,7 +21,8 @@ _SETUP = _OPENWRT / "openwrt-init.sh"
 _BRIDGE = _OPENWRT / "cn-bridge"
 _MONITOR = _OPENWRT / "cn-bridge-monitor"
 _BACKUP = _OPENWRT / "cn-backup"
-_ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR, _BACKUP]
+_CDN = _OPENWRT / "cdn-speedtest"
+_ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR, _BACKUP, _CDN]
 
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -163,7 +164,7 @@ def test_setup_main_wires_new_steps_in_order() -> None:
     """main() 必须接入新步骤：配置纳管在解耦之前（共用解耦末尾的 restart），
     CDN 优选在监控之后、自检之前。"""
     src = _SETUP.read_text(encoding="utf-8")
-    # rindex：内嵌 cdn-speedtest heredoc 里也有自己的 main()，外层 main() 是最后一个
+    # rindex：main_cdn() 等子命令入口在前，外层 main() 是最后一个
     main_body = src[src.rindex("main() {"):]
     for fn in ("setup_openclash_config", "install_cdn_tooling"):
         assert fn in main_body, f"main() 未调用 {fn}"
@@ -379,22 +380,12 @@ def test_find_device_by_ip_miss_and_empty(tmp_path: Path) -> None:
     assert _run_find_device(tmp_path, "100.91.115.115", '{"devices": []}') == ""
 
 
-# ---- 内嵌 cdn-speedtest -------------------------------------------------------
+# ---- 独立 cdn-speedtest -------------------------------------------------------
 
 
-def _extract_embedded_cdn(tmp_path: Path) -> Path:
-    src = _SETUP.read_text(encoding="utf-8")
-    start = src.index("<<'CDNEOF'") + len("<<'CDNEOF'") + 1
-    end = src.index("\nCDNEOF\n", start) + 1
-    out = tmp_path / "cdn-speedtest"
-    out.write_text(src[start:end], encoding="utf-8")
-    return out
-
-
-def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None:
-    """heredoc 内嵌的 cdn-speedtest 必须是完整、可解析的 POSIX 脚本。"""
-    script = _extract_embedded_cdn(tmp_path)
-    src = script.read_text(encoding="utf-8")
+def test_cdn_speedtest_is_complete_and_parsable() -> None:
+    """独立 cdn-speedtest 必须是完整、可解析的 POSIX 脚本。"""
+    src = _CDN.read_text(encoding="utf-8")
     for fn in (
         "restore_proxy_env",
         "build_cdn_domains",
@@ -405,39 +396,55 @@ def test_embedded_cdn_speedtest_is_complete_and_parsable(tmp_path: Path) -> None
         "ensure_hosts_present",
         "clean_hosts",
     ):
-        assert f"{fn}()" in src, f"内嵌 cdn-speedtest 缺少函数: {fn}"
+        assert f"{fn}()" in src, f"cdn-speedtest 缺少函数: {fn}"
     assert 'main "$@"' in src
-    proc = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True, timeout=30)
+    proc = subprocess.run(["sh", "-n", str(_CDN)], capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stderr
 
 
-def test_cdn_run_self_heals_hosts_when_update_skipped(tmp_path: Path) -> None:
+def test_cdn_speedtest_reads_subdomains_from_env() -> None:
+    """子域名前缀改为纯 env：cdn-speedtest 从 CDN_SUBDOMAINS（逗号分隔）读取，
+    不再依赖 /etc/subdomains.txt 文件，且用 POSIX 安全的 IFS=, 拆分（非 bashism、非 tr 字符类）。"""
+    src = _CDN.read_text(encoding="utf-8")
+    assert "CDN_SUBDOMAINS_FILE" not in src, "应彻底移除 /etc/subdomains.txt 文件中介"
+    assert "/etc/subdomains.txt" not in src, "cdn-speedtest 不应再引用 subdomains 文件"
+    assert 'CDN_SUBDOMAINS="${CDN_SUBDOMAINS:-}"' in src, "缺少 CDN_SUBDOMAINS env 读取"
+    assert "IFS=," in src, "应用 IFS=, 拆逗号（POSIX，非 bashism）"
+    # build_cdn_domains 空 env 必须明确报错（胜过静默白测）
+    bcd = src[src.index("build_cdn_domains()"):src.index("\n}\n", src.index("build_cdn_domains()"))]
+    assert '[ -z "$CDN_SUBDOMAINS" ]' in bcd, "build_cdn_domains 须在 CDN_SUBDOMAINS 空时报错"
+
+
+def test_cdn_run_self_heals_hosts_when_update_skipped() -> None:
     """should_update 决定保持缓存 IP 时，run 仍须保证 /etc/hosts 真有条目。
 
     回归防护：last_best.txt 在但 /etc/hosts CDN 条目缺（sysupgrade/cn-backup 恢复后
     可再生的优选条目未落、被 cdn clean、被其它进程重置）时，测速因 IP 未变跳过 update_hosts，
     若不回填则 install 的 verify_cdn_outcome 硬查 /etc/hosts 必死。run 必须在 should_update
     跳过分支调用 ensure_hosts_present 自愈，否则 install↔测速 陷入死结。"""
-    embedded = _extract_embedded_cdn(tmp_path).read_text(encoding="utf-8")
+    embedded = _CDN.read_text(encoding="utf-8")
     assert "ensure_hosts_present()" in embedded
     # run 主流程：should_update 为假的 else 分支必须回填 hosts
     run_case = embedded[embedded.index("        run)"):embedded.index("        install)")]
     assert "ensure_hosts_present" in run_case, "run 缺少 should_update 跳过时的 hosts 自愈回填"
 
 
-def test_cdn_install_step_guards_and_cron(tmp_path: Path) -> None:
-    """install_cdn_speedtest 契约：CDN_DOMAIN 空则跳过；清理旧版 cdn-speedtest.sh
-    cron 行；cron 注入带 grep 守卫。"""
+def test_cdn_install_step_guards_and_cron() -> None:
+    """install_cdn_tooling 契约：CDN_DOMAIN 空则跳过；清理旧版 cdn-speedtest.sh
+    cron 行；cron 注入带 grep 守卫；前缀经 env 注入而非落盘文件。"""
     src = _SETUP.read_text(encoding="utf-8")
     assert "install_cdn_tooling()" in src
     body = src[src.index("install_cdn_tooling()"):src.index("# ── 端到端自检")]
     assert '"$CDN_DOMAIN"' in body
+    assert "install_cdn_speedtest" in body, "install_cdn_tooling 应调用 install_cdn_speedtest"
     assert "/usr/bin/cdn-speedtest run" in body
     assert "cdn-speedtest\\.sh" in body  # 旧路径 cron 清理
-    assert "last_best.txt" in body, "install_cdn_speedtest 缺少首跑结果门禁"
-    assert "env $_cdn_env /usr/bin/cdn-speedtest run" in body, "install_cdn_speedtest 缺少前台首跑"
+    assert "last_best.txt" in body, "install_cdn_tooling 缺少首跑结果门禁"
+    assert "env $_cdn_env /usr/bin/cdn-speedtest run" in body, "缺少前台首跑"
     assert "nohup" not in body
-    embedded = _extract_embedded_cdn(tmp_path).read_text(encoding="utf-8")
+    # 不再物化 /etc/subdomains.txt，且对存量残留做幂等清理
+    assert "rm -f /etc/subdomains.txt" in body, "缺少旧版 /etc/subdomains.txt 存量清理"
+    embedded = _CDN.read_text(encoding="utf-8")
     assert "${SPEED_TEST_THREADS:-500}" in embedded
     assert "${SPEED_TEST_TIME:-4}" in embedded
     assert "${SPEED_TEST_COUNT:-5}" in embedded
@@ -452,28 +459,60 @@ def test_cdn_install_step_guards_and_cron(tmp_path: Path) -> None:
     assert "CDN 优选缓存就位（last_best.txt）" in src, "verify_cdn_outcome 缺少 CDN 首跑软自检"
 
 
+def test_build_cdn_env_includes_subdomains() -> None:
+    """build_cdn_env 是纯 env 化枢纽：必须把 CDN_SUBDOMAINS 注入 _cdn_env（随 cron 行/env 传递）。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    body = src[src.index("build_cdn_env()"):src.index("\n}", src.index("build_cdn_env()"))]
+    assert "CDN_SUBDOMAINS=$CDN_SUBDOMAINS" in body, "build_cdn_env 未注入 CDN_SUBDOMAINS"
+
+
+def test_subdomains_file_fully_removed() -> None:
+    """彻底纯 env：主脚本无内嵌 heredoc；validate_config 不再查 /etc/subdomains.txt 文件；
+    cdn_first_fqdn 用参数展开从 CDN_SUBDOMAINS 取首段。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "CDNEOF" not in src, "cdn-speedtest 应已拆为独立文件，主脚本无内嵌 heredoc"
+    assert "write_cdn_speedtest" not in src, "write_cdn_speedtest 应已删除"
+    vc = src[src.index("validate_config()"):src.index("detect_arch()")]
+    assert "/etc/subdomains.txt" not in vc, "validate_config 不应再查 subdomains 文件"
+    assert '[ -n "$CDN_SUBDOMAINS" ]' in vc, "validate_config 应校验 CDN_SUBDOMAINS 非空"
+    fqdn = src[src.index("cdn_first_fqdn()"):src.index("\n}\n", src.index("cdn_first_fqdn()"))]
+    assert "${CDN_SUBDOMAINS%%,*}" in fqdn, "cdn_first_fqdn 须从 CDN_SUBDOMAINS env 取首前缀"
+    assert "/etc/subdomains.txt" not in fqdn, "cdn_first_fqdn 不应再读文件"
+
+
+def test_install_local_or_fetch_helper_shared() -> None:
+    """四个随包工具脚本共用 install_local_or_fetch（cp 本地优先 / raw 下载兜底），消除复制粘贴漂移。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "install_local_or_fetch()" in src, "缺少 install_local_or_fetch helper"
+    assert "sources/openwrt/$_name" in src, "helper 应按名拼 raw 下载 URL"
+    for name in ("cn-bridge", "cn-bridge-monitor", "cn-backup", "cdn-speedtest"):
+        assert f"install_local_or_fetch {name}" in src, f"{name} 未委托 install_local_or_fetch"
+
+
 def test_no_busybox_broken_tr_space_class() -> None:
     """禁用 `tr -d '[:space:]'`：busybox tr 把 [:space:] 当字面字符集（[ : s p a c e ]）处理，
-    会吃掉数据里的 s/p/a/c/e 等字母（真机实测 "jp"→"j"），导致 cdn_first_fqdn 产出错误 fqdn、
-    首跑门禁永不命中 + verify 硬查永远失败。去空白须用 awk 取字段或 sed POSIX 类，不用 tr 字符类。"""
+    会吃掉数据里的 s/p/a/c/e 等字母（真机实测 "jp"→"j"）。主脚本与 cdn-speedtest 都不得出现。"""
+    for path in (_SETUP, _CDN):
+        src = path.read_text(encoding="utf-8")
+        assert "tr -d '[:space:]'" not in src, f"{path.name}: busybox tr 误解 [:space:] 字符类"
+        assert 'tr -d "[:space:]"' not in src, f"{path.name}: busybox tr 误解 [:space:] 字符类"
+    # cdn_first_fqdn 改用参数展开取首段（无 tr、无子进程）
     src = _SETUP.read_text(encoding="utf-8")
-    assert "tr -d '[:space:]'" not in src, "busybox tr 误解 [:space:] 字符类，改用 awk '{print $1}'"
-    assert 'tr -d "[:space:]"' not in src
     fqdn = src[src.index("cdn_first_fqdn()"):src.index("\n}\n", src.index("cdn_first_fqdn()"))]
-    assert "awk '{print $1}'" in fqdn, "cdn_first_fqdn 须用 awk 取首字段去空白"
+    assert "${CDN_SUBDOMAINS%%,*}" in fqdn, "cdn_first_fqdn 须用参数展开取首段"
 
 
 def test_embedded_cfst_extract_via_gnu_tar() -> None:
     """busybox tar 不识别上游无 ustar 魔数归档：失败时自动装 GNU tar 解全量
     （cfst + ip.txt + ipv6.txt 一并解出），结构上消除「漏抽某文件」类 bug。"""
-    src = _SETUP.read_text(encoding="utf-8")
+    src = _CDN.read_text(encoding="utf-8")
     assert "ensure_gnu_tar()" in src, "缺少 GNU tar 自动安装器"
     assert "if ! ensure_gnu_tar || ! tar -xzf" in src, "tar 失败路径未接 ensure_gnu_tar"
 
 
-def test_embedded_speedtest_trap_recovery(tmp_path: Path) -> None:
+def test_embedded_speedtest_trap_recovery() -> None:
     """测速窗口必须有 trap 兜底：HUP/INT/TERM/EXIT 都恢复 DNS 与 OpenClash。"""
-    embedded = _extract_embedded_cdn(tmp_path).read_text(encoding="utf-8")
+    embedded = _CDN.read_text(encoding="utf-8")
     assert "restore_proxy_env()" in embedded, "缺少恢复函数"
     assert "trap " in embedded and "HUP INT TERM" in embedded, "缺少信号 trap"
     assert "trap 'restore_proxy_env' EXIT" in embedded, "缺少 EXIT 兜底"
@@ -622,7 +661,7 @@ def test_setup_sysupgrade_conf_portable_and_excludes_identity() -> None:
         "/root/sb-xray-openwrt/",
         "/usr/bin/cn-bridge",
         "/root/.ssh/",
-        "/etc/subdomains.txt",            # CDN 优选输入
+        "/etc/crontabs/root",             # 所有 sb-xray cron（CDN 前缀随优选 cron 行携带）
         "/etc/CloudflareST/last_best.txt",  # CDN 优选门禁/结果
         "/etc/hotplug.d/iface/99-tailscale-udp-gro",  # UDP GRO hotplug 钩子
         "/etc/init.d/tailscale",          # 被改的 Tailscale 启动脚本

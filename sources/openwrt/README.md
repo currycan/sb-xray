@@ -4,7 +4,7 @@
 
 1. **回国出口（CN exit）**：「海外 VPS 流量回到中国大陆家宽出口」所需的 Tailscale / xray bridge 全部配置；
 2. **OpenClash 配置纳管**：按架构选 [`../openclash/op-amd|op-arm`](../openclash/) 模板，注入私有值后幂等应用到 `/etc/config/openclash`（不安装 OpenClash 本体）；
-3. **CDN IP 优选**：内嵌 `cdn-speedtest` 工具，Cloudflare 测速优选 IP 写入 `/etc/hosts`。`CDN_DOMAIN` 必填；工具+每日 cron 先装好，优选**首跑锁在服务自检通过后**才做（首跑需 OpenClash/Tailscale 正常运行），做完硬验 `/etc/hosts`、缺则 init 硬失败；`cdn` 子命令可在服务就绪后单独补做/重跑/透传。
+3. **CDN IP 优选**：独立 `cdn-speedtest` 工具，Cloudflare 测速优选 IP 写入 `/etc/hosts`。`CDN_DOMAIN`、`CDN_SUBDOMAINS` 必填（子域名前缀经 env 传递，不落盘成文件）；工具+每日 cron 先装好，优选**首跑锁在服务自检通过后**才做（首跑需 OpenClash/Tailscale 正常运行），做完硬验 `/etc/hosts`、缺则 init 硬失败；`cdn` 子命令可在服务就绪后单独补做/重跑/透传。
 
 服务端（VPS）由 `docker-compose` 单独部署（多台 VPS 可用 [`../vps/vps-cn-exit-init.sh`](../vps/vps-cn-exit-init.sh) 一键初始化，用法见 [../vps/README.md](../vps/README.md)），不在本目录范围内。
 
@@ -18,9 +18,10 @@
 | `cn-bridge` | 拨号工具：随时拨通 / 断开任意 VPS 的回国隧道 | 脚本自动装到 `/usr/bin/cn-bridge` |
 | `cn-bridge-monitor` | 双腿探活 + telegram 告警 | 脚本自动装到 `/usr/bin/cn-bridge-monitor` |
 | `cn-backup` | 配置备份 / 一键恢复（官方 sysupgrade 机制 + 加密离机留存），见 §5.9 | 脚本自动装到 `/usr/bin/cn-backup` |
+| `cdn-speedtest` | CDN IP 优选工具（Cloudflare 测速），子域名前缀经 `CDN_SUBDOMAINS` env 传入，见 §5.4 | 脚本自动装到 `/usr/bin/cdn-speedtest` |
 | `gl-inet.sh` | GL.iNet 设备一键工具箱（BE3600/BE6500/MT-3000），独立于 cn-exit，用法见 [gl-inet.md](gl-inet.md) | 设备 SSH 里 wget 自取，跑完即可删 |
 
-另有两类产物不在本目录，由主脚本自动取用/生成：OpenClash 配置模板在 [`../openclash/`](../openclash/)（同目录文件优先，否则按架构自动下载）；`cdn-speedtest` 工具内嵌在主脚本里（启用 CDN 优选时写出到 `/usr/bin/cdn-speedtest`）。
+`cn-bridge` / `cn-bridge-monitor` / `cn-backup` / `cdn-speedtest` 都走统一安装机制：主脚本同目录有同名文件则 `cp`，否则从 `main` 分支 raw 下载（详见各脚本对应小节）。另有 OpenClash 配置模板在 [`../openclash/`](../openclash/)（同目录文件优先，否则按架构自动下载），不在本目录。
 
 ---
 
@@ -330,7 +331,7 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | `OPENCLASH_DASHBOARD_PASSWORD` | 纳管开启时 | dashboard 登录密码，注入模板占位符 `<OPENCLASH_DASHBOARD_PASSWORD>` |
 | `OPENCLASH_SUBS` | 纳管开启时 | 订阅地址注入：`"名=URL 名=URL"` 空格分隔，按模板订阅块 `option name` 匹配；未命中的订阅块整块裁剪 |
 | `CDN_DOMAIN` | **必填** | CDN 根域名，启用 CDN IP 优选。缺失则 `validate_config` 直接 `die`——优选漏做无告警、曾致灾备换机反复踩坑，故升为硬契约 |
-| `CDN_SUBDOMAINS` | 必填\* | 子域名前缀（逗号分隔），写入 `/etc/subdomains.txt`。\*已存在非空 `/etc/subdomains.txt` 时可省；二者全无则 `die`（优选无域名可用） |
+| `CDN_SUBDOMAINS` | **必填** | 子域名前缀（逗号分隔，如 `jp,dc99`）。经 env 传给 `cdn-speedtest` 与 `CDN_DOMAIN` 拼成完整域名池（不落盘成文件）。空则 `validate_config` 直接 `die`（优选无域名可用） |
 | `CDN_CRON_SCHEDULE` | 可选 | CDN 测速 cron 时间表，默认 `0 4 * * *`（每天 04:00） |
 | `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` | 可选（灾备建议） | Tailscale OAuth client（永不过期），启用免交互登录 + 固定 IP 自恢复 + routes 自动批准，见 §2.3 |
 | `TS_OAUTH_TAGS` | 可选 | OAuth 铸 key 所带 tag，默认 `tag:openwrt`，须与 tailnet policy 一致 |
@@ -351,7 +352,7 @@ docker exec sb-xray sh -c 'grep r-tunnel /var/log/xray/access.log | tail'
 | xray bridge | reverse / balance | 装 xray + `cn-bridge` + 生成节点清单；对热备各拨一条独立隧道 |
 | socks5 对齐 | socks5 / balance | OpenClash 加 `IN-PORT,7891,DIRECT`，socks5 腿强制纯直出 |
 | 监控 | 配了 TG 告警时 | 装 `cn-bridge-monitor` + cron 周期探活 |
-| CDN 优选（工具+cron） | 所有 | 内嵌脚本写出 `/usr/bin/cdn-speedtest` + `/etc/subdomains.txt` + 每日 cron + 预装 CloudflareST。**无服务依赖，cron 始终在位** |
+| CDN 优选（工具+cron） | 所有 | 安装 `/usr/bin/cdn-speedtest`（独立脚本）+ 每日 cron（前缀 `CDN_SUBDOMAINS` 随 cron 行经 env 携带）+ 预装 CloudflareST。**无服务依赖，cron 始终在位** |
 | CDN 优选首跑 | 所有，**服务自检通过后** | 服务全绿才做：无历史结果时前台同步首跑（临时停 OpenClash → CloudflareST → 恢复）。首跑或结果不生效则 init **硬失败** |
 | 自检 | 所有 | 按模式裁剪的端到端验证（OpenClash 无漂移等）；服务绿后硬验「优选 IP 已写入 `/etc/hosts` + cron 在位」 |
 
@@ -401,9 +402,9 @@ flowchart TD
 
 改 `config.env` 里的 `XRAY_VERSION` / `TS_VERSION` 后重跑 `sh openwrt-init.sh` 即可——幂等设计，只更新有变化的部分。
 
-### 5.4 cdn-speedtest CDN IP 优选（原 `hack/cdn-speedtest.sh`，已内嵌进主脚本）
+### 5.4 cdn-speedtest CDN IP 优选（独立脚本 `sources/openwrt/cdn-speedtest`）
 
-所有 CDN 域名都经 Cloudflare，Cloudflare 按 TLS SNI / Host 头路由到正确源站，因此**一个优选 IP 即可覆盖全部域名**。`CDN_DOMAIN` 为**必填硬契约**（缺则 `validate_config` die）。主脚本先写出 `/usr/bin/cdn-speedtest`、生成 `/etc/subdomains.txt`、配好每日 cron（这步无服务依赖，cron 始终先在位）。优选**首跑**需 OpenClash/Tailscale 正常运行（首跑会临时停 OpenClash 跑 CloudflareST 再恢复），故主脚本把它**锁在服务自检通过之后**才做：服务全绿且 `/etc/hosts` 尚无优选条目（幂等门禁绑定真实终态——正常重启/重跑跳过、不重复扫描；条目缺失——被 `cdn clean`、被重置、或 `last_best.txt` 缓存还在而 `/etc/hosts` 条目丢失——则首跑自愈）→ 前台同步首跑一次（约几分钟，Top10 结果直接可见），**失败即 init 硬失败**（不再静默 warn）；做完硬验「优选 IP 已写入 `/etc/hosts`」。**终态回填保证**：`cdn-speedtest run` 即便测得 IP 与缓存相同、判定无需换机（跳过 `update_hosts`），也会用缓存 IP 把缺失的 `/etc/hosts` 条目补回（`ensure_hosts_present`，幂等）——否则「缓存在、hosts 条目缺」会陷入死结：每次重测都判 IP 未变而不写 hosts，硬验 `/etc/hosts` 永远失败。此后由每日 cron 维持新鲜度，日常无需手动干预。服务自检未过则跳过首跑（优选需服务正常）——服务修好重跑、或用 `sh openwrt-init.sh cdn` 单独补做。
+所有 CDN 域名都经 Cloudflare，Cloudflare 按 TLS SNI / Host 头路由到正确源站，因此**一个优选 IP 即可覆盖全部域名**。`CDN_DOMAIN`、`CDN_SUBDOMAINS` 均为**必填硬契约**（任一缺失则 `validate_config` die）。子域名前缀经 `CDN_SUBDOMAINS`（逗号分隔）由 env 传给 `cdn-speedtest`（不再落盘成 `/etc/subdomains.txt` 文件）。主脚本先安装独立 `/usr/bin/cdn-speedtest`、配好每日 cron（cron 行经 env 携带前缀，这步无服务依赖，cron 始终先在位）。优选**首跑**需 OpenClash/Tailscale 正常运行（首跑会临时停 OpenClash 跑 CloudflareST 再恢复），故主脚本把它**锁在服务自检通过之后**才做：服务全绿且 `/etc/hosts` 尚无优选条目（幂等门禁绑定真实终态——正常重启/重跑跳过、不重复扫描；条目缺失——被 `cdn clean`、被重置、或 `last_best.txt` 缓存还在而 `/etc/hosts` 条目丢失——则首跑自愈）→ 前台同步首跑一次（约几分钟，Top10 结果直接可见），**失败即 init 硬失败**（不再静默 warn）；做完硬验「优选 IP 已写入 `/etc/hosts`」。**终态回填保证**：`cdn-speedtest run` 即便测得 IP 与缓存相同、判定无需换机（跳过 `update_hosts`），也会用缓存 IP 把缺失的 `/etc/hosts` 条目补回（`ensure_hosts_present`，幂等）——否则「缓存在、hosts 条目缺」会陷入死结：每次重测都判 IP 未变而不写 hosts，硬验 `/etc/hosts` 永远失败。此后由每日 cron 维持新鲜度，日常无需手动干预。服务自检未过则跳过首跑（优选需服务正常）——服务修好重跑、或用 `sh openwrt-init.sh cdn` 单独补做。
 
 `cdn` 子命令单独操作本段（只需 `CDN_DOMAIN`，不依赖 nodes.list，不碰其余配置）：
 
@@ -414,12 +415,12 @@ sh openwrt-init.sh cdn status   # 查看当前优选状态
 sh openwrt-init.sh cdn clean    # 清除优选记录，恢复 DNS 正常解析
 ```
 
-内嵌工具也可直接调用（等价的原始形式）：
+工具也可直接调用（等价的原始形式）。手动直接运行须自带 `CDNDOMAIN` 与 `CDN_SUBDOMAINS`（经 `openwrt-init.sh cdn` 调用时由 `build_cdn_env` 自动从 `config.env` 注入）：
 
 ```sh
-CDNDOMAIN=<根域名> cdn-speedtest run      # 立即测速并更新 /etc/hosts
-CDNDOMAIN=<根域名> cdn-speedtest status   # 查看当前优选状态
-CDNDOMAIN=<根域名> cdn-speedtest clean    # 清除优选记录，恢复 DNS 正常解析
+CDNDOMAIN=<根域名> CDN_SUBDOMAINS=<前缀,逗号分隔> cdn-speedtest run      # 立即测速并更新 /etc/hosts
+CDNDOMAIN=<根域名> CDN_SUBDOMAINS=<前缀,逗号分隔> cdn-speedtest status   # 查看当前优选状态
+CDNDOMAIN=<根域名> CDN_SUBDOMAINS=<前缀,逗号分隔> cdn-speedtest clean    # 清除优选记录，恢复 DNS 正常解析
 ```
 
 - 测速期间会临时停 OpenClash（测速直连）、切公共 DNS，完成后自动恢复；带双层 trap 兜底（父进程+子 shell 各一道，OpenClash 恢复经原子锁串行化 + 无条件 restart 收敛，幂等可交错）——SSH 断线/Ctrl-C 即时恢复 OpenClash 与 DNS，单杀父进程会在测速自然结束后恢复（kill -9/断电除外，需手动 `/etc/init.d/openclash start`）。
@@ -506,9 +507,9 @@ sh openwrt-init.sh ipv6         # 禁用 LAN 公网 IPv6（KEEP_IPV6=1 跳过）
 
 **面向场景**：同一台机器、固件不动，只是配置丢了或被改坏，回滚到已知正确状态。整机重建 / 灾备切换是另一条路径，见 `docs/11`。
 
-**机制**：完全复用 OpenWrt 官方 `sysupgrade`，不自造打包/解包。`openwrt-init.sh` 全装时（或单跑 `sh openwrt-init.sh backup`）会幂等补全 `/etc/sysupgrade.conf`，把官方备份默认漏掉但有用的路径纳入：`/etc/cn-exit/`、`/usr/bin/cn-bridge*`、`/usr/bin/cn-ts-keepalive`、`/etc/init.d/xray-bridge-*`、`/etc/init.d/tailscale`、`/etc/hotplug.d/iface/99-tailscale-udp-gro`、`/root/sb-xray-openwrt/`、`/root/.ssh/`、`/etc/subdomains.txt`（CDN 优选输入）、`/etc/CloudflareST/last_best.txt`（CDN 优选门禁）、`/etc/sb-xray/`（CRFB 插件版本 marker）。补全后连 LuCI「系统 → 备份与更新 → 生成备份」也已够全。
+**机制**：完全复用 OpenWrt 官方 `sysupgrade`，不自造打包/解包。`openwrt-init.sh` 全装时（或单跑 `sh openwrt-init.sh backup`）会幂等补全 `/etc/sysupgrade.conf`，把官方备份默认漏掉但有用的路径纳入：`/etc/cn-exit/`、`/usr/bin/cn-bridge*`、`/usr/bin/cn-ts-keepalive`、`/etc/init.d/xray-bridge-*`、`/etc/init.d/tailscale`、`/etc/hotplug.d/iface/99-tailscale-udp-gro`、`/root/sb-xray-openwrt/`、`/root/.ssh/`、`/etc/crontabs/root`（所有 sb-xray cron；CDN 子域名前缀随优选 cron 行携带）、`/etc/CloudflareST/last_best.txt`（CDN 优选门禁）、`/etc/sb-xray/`（CRFB 插件版本 marker）。补全后连 LuCI「系统 → 备份与更新 → 生成备份」也已够全。
 
-> CDN 优选的**实际结果**（优选 IP → 域名映射）写在 `/etc/hosts`，已被官方 keep.d 清单纳入备份；上面再补输入 `subdomains.txt` 与门禁 `last_best.txt`，使纯 `sysupgrade -r` 恢复（不重跑全装）后 CDN 优选 cron 也能直接续跑。`/etc/CloudflareST/` 的 cfst 二进制（~8MB）可再生，故不入备份。
+> CDN 优选的**实际结果**（优选 IP → 域名映射）写在 `/etc/hosts`，已被官方 keep.d 清单纳入备份；子域名前缀（`CDN_SUBDOMAINS`）随 CDN 优选 cron 行存于 `/etc/crontabs/root`，连同门禁 `last_best.txt` 一并纳入上面的清单，使纯 `sysupgrade -r` 恢复（不重跑全装）后 CDN 优选 cron 也能直接续跑。`/etc/CloudflareST/` 的 cfst 二进制（~8MB）可再生，故不入备份。
 
 **每次 `save` 产两份**：
 
