@@ -105,6 +105,9 @@ services:
     volumes:
       - ./pki:/pki
       - ./acmecerts:/acmecerts
+      # ⚠ 勿"修正"为 ./.env：宿主 .envs/ 是目录，挂成容器内 /.env/ 目录，持久化运行时
+      # 生成的随机 secret/UUID/账户（entrypoint 读 /.env/sb-xray、/.env/status、/.env/secret）。
+      # 与同目录的 .env 文件（compose 变量插值源）是两码事；删错会导致 UUID 每次重建。
       - ./.envs:/.env
       - ./sb-xray:/sb-xray
       - ./x-ui:/etc/x-ui/
