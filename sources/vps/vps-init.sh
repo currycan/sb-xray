@@ -58,6 +58,30 @@ die() {
     exit 1
 }
 
+usage() {
+    cat <<'USAGE'
+用法: sudo bash vps-init.sh [-h|--help]
+
+sb-xray VPS Stage 1 基础初始化（Debian/Ubuntu）。幂等可重跑：系统调优 + BBR、建 sudo
+用户、SSH 加固（仅公钥）、装 Docker（官方源）、写全 sb-xray/.env + compose 模板。
+跑完接着跑同目录 vps-cn-exit-init.sh（Stage 2，回国节点）。
+
+配置来源：同目录 initial.env（存在则 source；文件为准，缺项可用环境变量补）。
+  模板见 initial.env.example；真实 initial.env 含凭据、不入库。
+
+主要变量（全集见 initial.env.example 与本脚本头部注释）：
+  系统/SSH  SBX_USER / SBX_USER_PASSWORD / ROOT_PASSWORD / SSH_PORT(默认 38666)
+            SSH_PUBKEY / SSH_PUBKEY_FILE（仅公钥登录必需）/ TIMEZONE
+  sb-xray   SBX_DOMAIN(空=hostname,须 .com FQDN) / SBX_CDN_DOMAIN / SBX_CODE
+            SBX_COMPOSE_URL / INSTALL_SSRPOLIPO / INSTALL_TCP_BRUTAL(默认开)
+  CN-exit   给 OPENWRT_TS_IP 即判本机为回国节点，Stage 1 一并写全回国 .env：
+            CN_EXIT_MODE / SBX_CANARY_ROLE(canary|worker) / REVERSE_DOMAINS / VPS_DOMAIN
+
+⚠️ 本脚本关闭 SSH 密码登录、仅留公钥。务必先确保 SSH_PUBKEY / SSH_PUBKEY_FILE 可用，
+   否则会把自己锁在机外；建议保留一个已连接会话直到用新端口 + 公钥验证能登录。
+USAGE
+}
+
 is_valid_public_key_line() {
     local key_line key_type key_body rest
 
@@ -606,6 +630,11 @@ install_tcp_brutal() {
 }
 
 main() {
+    case "${1:-}" in
+        -h|--help) usage; exit 0 ;;
+        "") : ;;
+        *) die "未知参数: $1（-h|--help 查看用法）" ;;
+    esac
     require_root
     load_config
     detect_os
