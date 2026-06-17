@@ -47,7 +47,7 @@ sudo bash vps-init.sh
 | `SBX_COMPOSE_URL` | 可选 | `docker-compose.yml` 下载源（默认仓库 `main` 的 raw） |
 | `INSTALL_SSRPOLIPO` / `SSRPOLIPO_COMPOSE_URL` | 可选 | **默认 `1`（开启）**；启用时必须给 `SSRPOLIPO_COMPOSE_URL`，否则 warn 跳过。设 `0` 关闭 |
 | `BASHRC_URL` / `VIMRC_URL` | 可选 | 给定则拉取 `.bashrc`/`.vimrc` 到 root 与 sudo 用户家目录（留空跳过）；地址写在 `initial.env`，不入库 |
-| `INSTALL_TCP_BRUTAL` / `TCP_BRUTAL_URL` | 可选 | **默认 `1`（开启，sb-xray 必需）**：安装 `tcp-brutal` DKMS 内核模块（Hysteria 2 brutal 拥塞控制，apernet 官方）。DKMS 模块针对当前内核编译，不换内核/不需重启；装完打印 `dkms status`。设 `0` 关闭 |
+| `INSTALL_TCP_BRUTAL` / `TCP_BRUTAL_URL` | 可选 | **默认 `1`（开启）**：安装 `tcp-brutal` DKMS 内核模块（Hysteria 2 brutal 拥塞控制，apernet 官方）。**仅令诊断位 `IS_BRUTAL=true`；Hy2 实际用 bbr，不装不影响代理功能。** 自动补 `build-essential`+运行内核头;运行内核被仓库淘汰时无法编译（需先升级内核+重启）。设 `0` 关闭 |
 
 > ⚠️ **锁机警告**：本脚本设 `PasswordAuthentication no` + `PermitRootLogin prohibit-password` 并改端口。运行前务必确认 `SSH_PUBKEY` 正确、且你手上的私钥能用。脚本会在写 SSH 配置后 `sshd -t` 校验，失败即删除 drop-in 并中止；但仍建议**保留一个当前已连接的会话**直到用新端口+公钥验证能登录。
 >

@@ -25,7 +25,7 @@ set -euo pipefail
 #   SBX_COMPOSE_URL         sb-xray docker-compose.yml 下载地址
 #   INSTALL_SSRPOLIPO / SSRPOLIPO_COMPOSE_URL
 #   BASHRC_URL / VIMRC_URL  可选 .bashrc/.vimrc 下载地址（空则跳过）
-#   INSTALL_TCP_BRUTAL / TCP_BRUTAL_URL  可选 tcp-brutal DKMS 模块（默认关）
+#   INSTALL_TCP_BRUTAL / TCP_BRUTAL_URL  tcp-brutal DKMS 模块（默认开）；仅诊断位 IS_BRUTAL，Hy2 用 bbr
 #
 # 重要警告：
 #   本脚本会关闭 SSH 密码登录，仅保留公钥登录。
@@ -568,18 +568,32 @@ deploy_ssrpolipo() {
 
 install_tcp_brutal() {
     # 可选：安装 tcp-brutal DKMS 内核模块（Hysteria 2 brutal 拥塞控制，apernet 官方）。
-    # 这是 DKMS 模块（针对当前内核编译），不替换内核、不改 GRUB、不需重启换核——
-    # 比换内核安全得多。默认开启（sb-xray 必需）；如需关闭在 initial.env 设 INSTALL_TCP_BRUTAL=0。
-    # 先下载校验再执行，不裸 curl|bash；失败仅告警，不影响其余初始化。
+    # DKMS 模块（针对当前内核编译），不替换内核、不改 GRUB、不需重启换核。
+    # 注意：本模块仅令诊断位 IS_BRUTAL=true；Hy2 实际用 bbr，不装【不影响代理功能】。
+    # 默认开启；如需关闭在 initial.env 设 INSTALL_TCP_BRUTAL=0。
+    # 先下载再执行（不裸 curl|bash）；失败仅告警，不影响其余初始化。
     local tmp_file
     if [ "$INSTALL_TCP_BRUTAL" != "1" ]; then
         return
     fi
 
+    # DKMS 编译链：tcp.hy2.sh 会装内核头但【不装编译器】，且 Debian 上 linux-headers
+    # 只拉 gcc-<ver> 不建 /usr/bin/gcc 链接，故须显式 build-essential。匹配【运行内核】
+    # 的头也一并装（运行内核被仓库淘汰时此步失败→DKMS 本就无法编译，best-effort 不中止）。
+    log "准备 tcp-brutal 编译依赖（build-essential + 运行内核头）"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update >/dev/null 2>&1 || true
+    apt-get install -y build-essential || warn "build-essential 未装全，DKMS 可能无法编译"
+    apt-get install -y "linux-headers-$(uname -r)" \
+        || warn "运行内核头 linux-headers-$(uname -r) 不可用（运行内核或已被仓库淘汰；需先升级内核+重启再重试）"
+
     log "安装 tcp-brutal DKMS 模块 ← $TCP_BRUTAL_URL"
     tmp_file="$(mktemp)"
     if curl -fsSL "$TCP_BRUTAL_URL" -o "$tmp_file" && [ -s "$tmp_file" ]; then
-        bash "$tmp_file" || warn "tcp-brutal 安装失败（内核头/编译环境？），跳过"
+        # tcp.hy2.sh 带 set -e，顶部 `tred=$(tput setaf 1)` 在【无 TERM 的非交互环境】
+        # （cron / 管道 / 远程批量）下会因 tput 返非 0 而提前 abort（RC=1 且无报错）。
+        # 给 TERM 兜底让其正常跑到 DKMS 构建。
+        TERM="${TERM:-xterm}" bash "$tmp_file" || warn "tcp-brutal 安装失败（内核头/编译环境？），跳过"
     else
         warn "tcp-brutal 脚本下载失败（$TCP_BRUTAL_URL），跳过"
     fi
