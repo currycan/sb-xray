@@ -143,6 +143,7 @@ sh openwrt-init.sh openclash      # 幂等装/更新 OpenClash 本体，并按 C
 ```sh
 sh openwrt-init.sh                # 按 CN_EXIT_MODE 跑完整流水线(幂等可重跑)
 ```
+> 全装默认一并安装 **iStore 应用商店**（`luci-app-store`，装后 LuCI → 服务 → iStore 商店，图形化搜装插件，应用命名 `app-meta-<名>`）。官方脚本自动识别包管理器——`apk`（ImmortalWrt 25.x）或 `opkg`（≤24.10）。属便利设施、非回国关键路径：装失败只告警、不阻断全装与回国自检。`INSTALL_ISTORE=0` 可关闭；也可单独 `sh openwrt-init.sh istore` 安装（幂等，已装跳过）。详见 [`../sources/openwrt/README.md`](../sources/openwrt/README.md) §5.10。
 
 🔧 **⑤ Tailscale 授权**（仅首次、且未配 OAuth 时）
 脚本跑到 `tailscale up` 若未登录会**打印登录 URL 并停下**——浏览器授权一次即继续；随后到 Tailscale 后台 → 本机 → **Edit route settings** → 勾 subnet routes + **Use as exit node**。
