@@ -333,7 +333,7 @@ install_ssh_key() {
 }
 
 configure_ssh() {
-    local base_config include_line tmp_file drop_in sshd_bin
+    local base_config include_line tmp_file drop_in sshd_bin effective_pw
 
     base_config="/etc/ssh/sshd_config"
     include_line='Include /etc/ssh/sshd_config.d/*.conf'
@@ -343,11 +343,14 @@ configure_ssh() {
         die "未找到 SSH 主配置: $base_config"
     fi
 
+    # 缺 Include 时【前置】插入（不是追加到尾）：sshd 多数指令首次匹配生效，
+    # Include 放在最前才能让 drop-in 的 PasswordAuthentication no 等压过 base 里
+    # 可能存在的早出现的 PasswordAuthentication yes（追加到尾会被 base 抢先生效）。
     if ! grep -Fxq "$include_line" "$base_config"; then
         tmp_file="$(mktemp)"
         {
-            cat "$base_config"
             printf '%s\n' "$include_line"
+            cat "$base_config"
         } > "$tmp_file"
         cat "$tmp_file" > "$base_config"
         rm -f "$tmp_file"
@@ -376,6 +379,16 @@ EOF
     if ! "$sshd_bin" -t; then
         rm -f "$drop_in"
         die "sshd 配置校验失败，已删除 $drop_in"
+    fi
+
+    # 断言密码登录确已关闭：sshd -T 导出生效配置，若 passwordauthentication 仍为 yes，
+    # 说明 base 配置抢先生效（Include 前置未奏效或被其他 drop-in 覆盖）——回滚后中止，
+    # 避免「以为加固了、其实密码登录还开着」的静默削弱。sshd -T 跑不起来（如无 host
+    # key）则拿不到值，跳过断言（语法已由 -t 校验），不阻断 keepalive。
+    effective_pw="$("$sshd_bin" -T 2>/dev/null | awk '$1=="passwordauthentication"{print $2}')"
+    if [ "$effective_pw" = "yes" ]; then
+        rm -f "$drop_in"
+        die "密码登录仍为开启（base $base_config 抢先生效）——已回滚 $drop_in，请检查主配置中靠前的 PasswordAuthentication"
     fi
 
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
