@@ -242,6 +242,13 @@ ensure_prereqs() {
         apt-get update
         apt-get install -y ca-certificates curl linux-headers-generic
     fi
+    # 常用排障工具：jq（解析 JSON）、tree（看目录树）。缺任一则装（幂等）。
+    if ! command -v jq >/dev/null 2>&1 || ! command -v tree >/dev/null 2>&1; then
+        log "安装常用工具 jq/tree"
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y jq tree
+    fi
 }
 
 set_timezone() {
