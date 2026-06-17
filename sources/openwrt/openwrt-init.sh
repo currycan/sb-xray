@@ -1639,7 +1639,16 @@ install_crfb_pkg() {
         passwall2) _luci=luci-app-passwall2; _prefix=passwall2_; _svc=passwall2 ;;
         *) die "未知包: $_pkg（支持 openclash|passwall2）" ;;
     esac
-    command -v opkg >/dev/null 2>&1 || die "未找到 opkg，这不是 OpenWrt？"
+    # OpenWrt 24.10+/ImmortalWrt 25.x 用 apk、无 opkg：本脚本的 .run 本体安装依赖 opkg，
+    # 此时若本体已就位（apk 装或镜像预置）则跳过本体步骤、继续后续（如装 clash 核），
+    # 本体也缺才硬失败（交 apk 装本体）。
+    if ! command -v opkg >/dev/null 2>&1; then
+        if [ -x "/etc/init.d/$_svc" ]; then
+            warn "未找到 opkg（apk 系统/OpenWrt 24.10+）：$_pkg 本体安装/更新交 apk；本体已就位，跳过本体步骤"
+            return 0
+        fi
+        die "未找到 opkg 且 $_pkg 本体未安装——apk 系统请先 apk add $_luci（本脚本 .run 安装依赖 opkg）"
+    fi
 
     _assets=/tmp/crfb-$_pkg-assets.txt
     : > "$_assets"

@@ -471,6 +471,8 @@ sh openwrt-init.sh
 
 两个独立子命令，从上游每日构建 [CloudRunFilesBuilder](https://github.com/wkccd/CloudRunFilesBuilder) 拉对应架构的 `.run`（makeself 自解压，内含 `opkg install` 及依赖）安装/更新。**不进默认全装流程**（裸跑 `sh openwrt-init.sh` 不会碰这两个插件），按需单独执行：
 
+> **apk 系统 / OpenWrt 24.10+（如 ImmortalWrt 25.x，无 `opkg`）**：`.run` 本体安装依赖 `opkg`，此时若本体已就位（`apk` 装或镜像预置）则**自动跳过本体步骤、继续后续（如装 clash 核）**；本体也缺则提示先 `apk add luci-app-openclash`。
+
 ```sh
 sh openwrt-init.sh openclash    # 装/更新 OpenClash
 sh openwrt-init.sh passwall2    # 装/更新 PassWall2
