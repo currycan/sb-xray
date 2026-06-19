@@ -125,9 +125,21 @@ backup_file() {
     log "已备份 $1 -> $1.bak.<ts>"
 }
 
+gh_url_bases() {
+    # 输出 <url> 的候选下载地址（每行一条）：镜像优先 + 末尾直连兜底。
+    # GH_PROXY 显式非空 → 仅该镜像 + 直连（向后兼容旧 config.env）；否则遍历 GH_PROXIES 候选 + 直连。
+    _gub_url=$1
+    if [ -n "$GH_PROXY" ]; then
+        printf '%s\n%s\n' "${GH_PROXY}${_gub_url}" "$_gub_url"
+    else
+        for _gub_p in $GH_PROXIES; do printf '%s\n' "${_gub_p}${_gub_url}"; done
+        printf '%s\n' "$_gub_url"
+    fi
+}
+
 download_verify() {
     # download_verify <url> <dest> <kind: tgz|zip|json|raw>
-    # GitHub 域名（github.com / githubusercontent.com）经 GH_PROXY 镜像优先、直连兜底，
+    # GitHub 域名（github.com / githubusercontent.com）经 GH_PROXY/GH_PROXIES 镜像优先、直连兜底，
     # 适配国内可达性；非 GitHub 源（如 pkgs.tailscale.com）保持直连。
     _url=$1
     _dest=$2
@@ -135,7 +147,7 @@ download_verify() {
     _dv_bases="$_url"
     case "$_url" in
         *github.com*|*githubusercontent.com*)
-            [ -n "$GH_PROXY" ] && _dv_bases="${GH_PROXY}${_url} $_url" ;;
+            _dv_bases=$(gh_url_bases "$_url") ;;
     esac
     _n=0
     while [ "$_n" -lt "$DOWNLOAD_RETRIES" ]; do
@@ -207,7 +219,9 @@ load_config() {
     CRFB_REPO="${CRFB_REPO:-wkccd/CloudRunFilesBuilder}"   # 上游每日构建仓库（可换 fork）
     CRFB_TAG="${CRFB_TAG:-}"                               # 空=查 latest API；填日期 tag 则 pin 该版本
     CRFB_FALLBACK_TAG="${CRFB_FALLBACK_TAG:-2026-06-14}"   # API 全不可达时的硬兜底 tag
-    GH_PROXY="${GH_PROXY:-https://ghfast.top/}"            # GitHub 镜像前缀（含末尾/）；空=纯直连
+    GH_PROXY="${GH_PROXY:-}"                               # 显式镜像前缀（含末尾/）；设了=只用它+直连。空=走 GH_PROXIES 候选轮询
+    # GH_PROXY 为空时逐个尝试的候选镜像（空格分隔），最后直连兜底。镜像是基础设施兜底，性质不同于会过期的版本号。
+    GH_PROXIES="${GH_PROXIES:-https://ghfast.top/ https://gh-proxy.com/ https://ghproxy.net/ https://mirror.ghproxy.com/}"
     CRFB_RESTART="${CRFB_RESTART:-1}"                      # 装/更新后是否只重启目标插件自身服务
     # Clash 核（mihomo Smart）安装：openclash 子命令与全装默认装核心，自动判 CPU 微架构，
     # 经 gh_download(GH_PROXY) 下载。全部带默认兜底，旧 config.env / watchtower 旧 env 集不受影响。
@@ -215,7 +229,7 @@ load_config() {
     CLASH_CORE_REPO="${CLASH_CORE_REPO:-vernesong/mihomo}" # Smart 核仓库（可换 fork）
     CLASH_CORE_TAG="${CLASH_CORE_TAG:-Prerelease-Alpha}"   # Smart 核 release tag
     CLASH_CORE_VARIANT="${CLASH_CORE_VARIANT:-}"           # 空=自动检测；覆盖填 amd64-v2/amd64-v3/arm64 等
-    CLASH_CORE_FALLBACK_HASH="${CLASH_CORE_FALLBACK_HASH:-5c165b4}"  # 资产清单抓取失败时兜底拼 URL
+    CLASH_CORE_FALLBACK_HASH="${CLASH_CORE_FALLBACK_HASH:-}"  # 默认空=纯动态发现；显式设 <hash> 作动态发现失败时的逃生阀
     CLASH_MODEL="${CLASH_MODEL-__AUTO__}"                  # __AUTO__=按架构(amd→large/arm→lite)；空=跳过(靠 lgbm_auto_update 兜底)
     # iStore 应用商店（luci-app-store）安装：全装流程与 istore 子命令默认装。官方 reinstall.run
     # 同时支持 apk（ImmortalWrt 25.x，repo-apk/.adb 源）与 opkg（≤24.10，.ipk 源），自动识别。
@@ -1575,8 +1589,7 @@ verify() {
 gh_download() {
     # gh_download <url> <dest> <kind: json|raw>；镜像优先 + 直连兜底，非致命，失败返回 1
     _gd_url=$1; _gd_dest=$2; _gd_kind=$3
-    _gd_bases="$_gd_url"
-    [ -n "$GH_PROXY" ] && _gd_bases="${GH_PROXY}${_gd_url} $_gd_url"
+    _gd_bases=$(gh_url_bases "$_gd_url")
     for _gd_b in $_gd_bases; do
         log "下载尝试: $_gd_b"
         if wget -q -O "$_gd_dest" "$_gd_b"; then
@@ -1719,6 +1732,35 @@ install_crfb_pkg() {
     fi
 }
 
+clash_resolve_core_url() {
+    # 运行时纯动态解析 $CLASH_CORE_TAG 下匹配 $CLASH_VARIANT 的最新 Smart 核 .gz 下载 URL。
+    # 源1 GitHub API(releases/tags) → 源2 expanded_assets HTML → 可选逃生阀(显式 hash)。
+    # 不写死 hash：Prerelease-Alpha 是滚动预发布，hash 每次构建变、旧文件被删。
+    # 结果写全局 RESOLVED_CORE_URL（不经 stdout 返回——内部 gh_download 会 log 到 stdout，
+    # 用 $() 捕获会把日志混进返回值）；全失败 return 1。
+    _crc_match="/mihomo-linux-${CLASH_VARIANT}-alpha-smart-[0-9a-f]+\.gz$"
+    _crc_url=""
+    # 源1：tags API 的 assets[].browser_download_url（prerelease 不进 latest API，必须用 tags 端点）
+    _crc_json=/tmp/clash-core-rel.json
+    if gh_download "https://api.github.com/repos/${CLASH_CORE_REPO}/releases/tags/${CLASH_CORE_TAG}" "$_crc_json" json; then
+        _crc_url=$(grep -o '"browser_download_url"[ ]*:[ ]*"[^"]*"' "$_crc_json" \
+            | sed 's/.*"\(https[^"]*\)"$/\1/' | grep -E "$_crc_match" | head -1)
+    fi
+    # 源2：expanded_assets HTML（复用 crfb_assets_from_tag；镜像不代理 api.github.com 时退到这里）
+    if [ -z "$_crc_url" ]; then
+        _crc_assets=/tmp/clash-core-assets.txt; : > "$_crc_assets"
+        crfb_assets_from_tag "$CLASH_CORE_TAG" "$_crc_assets" \
+            && _crc_url=$(grep -E "$_crc_match" "$_crc_assets" | head -1)
+    fi
+    # 逃生阀：仅当用户显式设了 CLASH_CORE_FALLBACK_HASH 才用（默认空 → 跳过）
+    if [ -z "$_crc_url" ] && [ -n "$CLASH_CORE_FALLBACK_HASH" ]; then
+        _crc_url="https://github.com/${CLASH_CORE_REPO}/releases/download/${CLASH_CORE_TAG}/mihomo-linux-${CLASH_VARIANT}-alpha-smart-${CLASH_CORE_FALLBACK_HASH}.gz"
+        warn "动态发现失败，用显式 CLASH_CORE_FALLBACK_HASH 逃生: ${_crc_url##*/}"
+    fi
+    [ -n "$_crc_url" ] || return 1
+    RESOLVED_CORE_URL=$_crc_url
+}
+
 install_clash_core() {
     # 装 OpenClash 的 mihomo Smart 核（/etc/openclash/core/clash_meta）。幂等、默认开。
     # 经 gh_download(GH_PROXY 镜像优先) 从 CLASH_CORE_REPO@CLASH_CORE_TAG 取匹配本机微架构的
@@ -1738,23 +1780,21 @@ install_clash_core() {
         return 0
     fi
 
-    # 解析 Smart 核资产 URL：复用 crfb_assets_from_tag 抓 expanded_assets，挑本机变体、排除 -go12x-
-    _assets=/tmp/clash-core-assets.txt; : > "$_assets"
-    _url=""
-    if crfb_assets_from_tag "$CLASH_CORE_TAG" "$_assets"; then
-        _url=$(grep -E "/mihomo-linux-${CLASH_VARIANT}-alpha-smart-[0-9a-f]+\.gz$" "$_assets" | head -1)
-    fi
-    if [ -z "$_url" ] && [ -n "$CLASH_CORE_FALLBACK_HASH" ]; then
-        _url="https://github.com/${CLASH_CORE_REPO}/releases/download/${CLASH_CORE_TAG}/mihomo-linux-${CLASH_VARIANT}-alpha-smart-${CLASH_CORE_FALLBACK_HASH}.gz"
-        warn "资产清单未匹配 $CLASH_VARIANT，回退 pin hash: ${_url##*/}"
-    fi
-    [ -n "$_url" ] || die "未找到匹配 $CLASH_VARIANT 的 Smart 核（检查网络/GH_PROXY/CLASH_CORE_VARIANT）"
+    # 运行时动态解析最新 Smart 核 URL（API + HTML 双源，不写死 hash；逃生阀见 clash_resolve_core_url）
+    RESOLVED_CORE_URL=""
+    clash_resolve_core_url \
+        || die "无法解析匹配 $CLASH_VARIANT 的 Smart 核最新版本（检查网络/GH_PROXY/GH_PROXIES；或显式设 CLASH_CORE_FALLBACK_HASH 逃生）"
+    _url=$RESOLVED_CORE_URL
 
     _gz=/tmp/clash_meta.gz
     gh_download "$_url" "$_gz" raw || die "clash 核下载失败: $_url（检查网络/GH_PROXY）"
     mkdir -p "$(dirname "$_core")"
-    gunzip -c "$_gz" > "$_core" || die "clash 核解压失败: $_gz"
-    chmod +x "$_core"; rm -f "$_gz"
+    # 解压到 .new 再原子 mv 替换：核可能正在运行，直接覆写会 "Text file busy"。
+    # mv(rename) 同目录替换正在执行的二进制安全——旧进程续用旧 inode，新核就位待 restart 生效。
+    gunzip -c "$_gz" > "${_core}.new" || die "clash 核解压失败: $_gz"
+    chmod +x "${_core}.new"
+    mv -f "${_core}.new" "$_core" || die "clash 核替换失败（mv）: $_core"
+    rm -f "$_gz"
     # SIGILL 自检：核必须能在本机执行（CPU 微架构不匹配会拒绝执行）
     "$_core" -v >/dev/null 2>&1 || die "clash 核无法在本机执行（CPU 不支持 $CLASH_VARIANT？用 CLASH_CORE_VARIANT 降级如 amd64-v1 重试）"
     log "clash 核已装: $("$_core" -v 2>/dev/null | head -1)"

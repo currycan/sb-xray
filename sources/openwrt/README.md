@@ -197,7 +197,7 @@ for f in openwrt-init.sh config.env.example cn-bridge cn-bridge-monitor nodes.li
 done
 ```
 
-> 上面已默认走 `ghfast.top` 镜像适配国内可达性；镜像失效时换其它 GitHub 代理前缀、或去掉前缀走直连，或换一台能访问 GitHub 的机器下载后传入。`cn-bridge` / `cn-bridge-monitor` 缺失也不要紧——主脚本运行时会自动经 `GH_PROXY` 镜像补下载。
+> 上面已默认走 `ghfast.top` 镜像适配国内可达性；镜像失效时换其它 GitHub 代理前缀、或去掉前缀走直连，或换一台能访问 GitHub 的机器下载后传入。`cn-bridge` / `cn-bridge-monitor` 缺失也不要紧——主脚本运行时会自动经 `GH_PROXY`/`GH_PROXIES` 镜像候选补下载。
 
 ### 步骤 2：填配置
 
@@ -482,11 +482,11 @@ sh openwrt-init.sh passwall2    # 装/更新 PassWall2
 - **架构匹配**：按 `opkg print-architecture` 的精确子目标令牌（如 `aarch64_cortex-a53`）优先匹配资产，退化到粗粒度关键字（`aarch64` / `x86`，兼容 `x86_64`/`x86-64` 命名差异）。
 - **幂等（双锚点）**：marker 文件 `/etc/sb-xray/crfb-<pkg>.ver` 记录已装资产名；marker 命中、或 `opkg list-installed` 的版本串已含最新版本，即判为最新——**不下载、不重装、不重启**，直接跳过。重复执行安全。
 - **不影响已运行插件**：跳过分支永不重启；仅在确有安装/升级时**只**重启目标插件自身服务（`/etc/init.d/<pkg> restart`），绝不触碰其它已运行插件。`CRFB_RESTART=0` 可关闭自动重启（只装不重启）。
-- **下载线路**：API 与 `.run` 下载都先走 `GH_PROXY` 镜像前缀（默认一个 ghproxy 类镜像）、失败回退直连。镜像失效时改 `GH_PROXY` 或置空走纯直连。
-- **mihomo Smart 核自动安装**（`openclash` 子命令专属，默认开）：装完 LuCI 本体后,按 CPU 微架构自动选核——x86_64 读 `/proc/cpuinfo` flags 选 `v3`(avx2)/`v2`(sse4_2)/`v1`(基线)，arm64 用 `linux-arm64`——经 `GH_PROXY` 从 `vernesong/mihomo` 拉对应 Smart 核到 `/etc/openclash/core/clash_meta`，**装后即跑 `-v` 自检**（CPU 不支持该等级会拒绝执行，自检失败即报错并提示用 `CLASH_CORE_VARIANT` 降级），再写 `core_version` + `enable=1` 并重启。幂等：核已在且可执行且版本匹配则跳过下载。同时按架构装 Smart 模型 `Model.bin`。**主全装流程（裸跑 `sh openwrt-init.sh`）也会在 OpenClash 配置应用后补装/校验核心**，堵住「本体+配置就位但核心缺失→7891 不监听」的洞。
+- **下载线路**：API 与 `.run` 下载默认轮询一组 GH 镜像候选（`GH_PROXIES`）、最后直连兜底；某镜像失效自动换下一个，无需手改。显式设 `GH_PROXY` 则只走它 + 直连（向后兼容旧 `config.env`）。
+- **mihomo Smart 核自动安装**（`openclash` 子命令专属，默认开）：装完 LuCI 本体后,按 CPU 微架构自动选核——x86_64 读 `/proc/cpuinfo` flags 选 `v3`(avx2)/`v2`(sse4_2)/`v1`(基线)，arm64 用 `linux-arm64`——运行时从 `vernesong/mihomo` 经 **GitHub API + expanded_assets HTML 双源动态解析当前最新版本**（滚动预发布 hash 每次构建都变，故不写死）、再经镜像候选拉对应 Smart 核到 `/etc/openclash/core/clash_meta`，**装后即跑 `-v` 自检**（CPU 不支持该等级会拒绝执行，自检失败即报错并提示用 `CLASH_CORE_VARIANT` 降级），再写 `core_version` + `enable=1` 并重启。幂等：核已在且可执行且版本匹配则跳过下载。同时按架构装 Smart 模型 `Model.bin`。**主全装流程（裸跑 `sh openwrt-init.sh`）也会在 OpenClash 配置应用后补装/校验核心**，堵住「本体+配置就位但核心缺失→7891 不监听」的洞。
   - 历史坑：本体装了但核心从未自动下载（国内网络）、或从异 CPU 设备的黄金备份恢复来的 v3 核在不支持 AVX2 的新机（如 J6413/Tremont）上 SIGILL 起不来——此特性即为根治。
 
-相关变量见 `config.env.example`「插件安装」段：`CRFB_REPO` / `CRFB_TAG` / `CRFB_FALLBACK_TAG` / `GH_PROXY` / `CRFB_RESTART`；核心安装：`INSTALL_CLASH_CORE` / `CLASH_CORE_REPO` / `CLASH_CORE_TAG` / `CLASH_CORE_VARIANT` / `CLASH_CORE_FALLBACK_HASH` / `CLASH_MODEL`（全部带默认兜底，不填即可用）。
+相关变量见 `config.env.example`「插件安装」段：`CRFB_REPO` / `CRFB_TAG` / `CRFB_FALLBACK_TAG` / `GH_PROXY` / `GH_PROXIES` / `CRFB_RESTART`；核心安装：`INSTALL_CLASH_CORE` / `CLASH_CORE_REPO` / `CLASH_CORE_TAG` / `CLASH_CORE_VARIANT` / `CLASH_CORE_FALLBACK_HASH`（默认空，纯动态发现；仅排障逃生时显式设 hash）/ `CLASH_MODEL`（其余全部带默认兜底，不填即可用）。
 
 ### 5.8 单独收口 LAN 公网 IPv6（`ipv6` 子命令）
 
