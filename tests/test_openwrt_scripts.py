@@ -43,6 +43,43 @@ def test_posix_syntax_ok(script: Path) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
+# ---- clash 核运行时动态版本发现契约 -----------------------------------------
+# 背景：vernesong/mihomo 的 Prerelease-Alpha 是滚动预发布，文件名里的 hash 每次构建都
+# 变、旧文件被删。任何写死的 fallback hash 早晚 404，故核版本必须运行时从 GitHub 动态
+# 解析；镜像层用多候选轮询 + 直连兜底，避免单一镜像失效即全盘卡死。
+
+
+def test_no_hardcoded_clash_core_hash() -> None:
+    """不得写死会过期的 mihomo Smart 核 commit hash；FALLBACK_HASH 默认必须为空。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "5c165b4" not in src, "残留写死的过期 hash 5c165b4"
+    assert 'CLASH_CORE_FALLBACK_HASH="${CLASH_CORE_FALLBACK_HASH:-}"' in src, (
+        "CLASH_CORE_FALLBACK_HASH 默认值必须为空（纯动态发现），仅留作显式逃生阀"
+    )
+
+
+def test_gh_proxies_multi_mirror_default() -> None:
+    """GH_PROXY 默认空（不再钉死单一镜像）；GH_PROXIES 默认提供多候选。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert 'GH_PROXY="${GH_PROXY:-}"' in src, "GH_PROXY 默认应为空，候选下沉到 GH_PROXIES"
+    assert "GH_PROXIES=" in src, "缺少 GH_PROXIES 多镜像候选变量"
+    # 默认候选至少含两个不同镜像，单一镜像失效才有得换
+    assert src.count("https://", src.index("GH_PROXIES=")) >= 2 or "ghproxy" in src
+
+
+def test_dynamic_resolve_functions_present() -> None:
+    """动态发现 + 多镜像 helper 必须存在，且 install_clash_core 走动态解析。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "gh_url_bases()" in src, "缺少 gh_url_bases 多镜像 helper"
+    assert "clash_resolve_core_url()" in src, "缺少 clash_resolve_core_url 动态发现 helper"
+    assert "_url=$(clash_resolve_core_url)" in src, (
+        "install_clash_core 应通过 clash_resolve_core_url 动态拿 URL"
+    )
+    # 双源：tags API + expanded_assets HTML
+    assert "releases/tags/${CLASH_CORE_TAG}" in src, "动态发现缺 tags API 源"
+    assert "crfb_assets_from_tag" in src, "动态发现缺 expanded_assets HTML 源"
+
+
 # ---- help -------------------------------------------------------------------
 
 
