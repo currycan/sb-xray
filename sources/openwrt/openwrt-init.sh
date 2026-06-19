@@ -1735,7 +1735,9 @@ install_crfb_pkg() {
 clash_resolve_core_url() {
     # 运行时纯动态解析 $CLASH_CORE_TAG 下匹配 $CLASH_VARIANT 的最新 Smart 核 .gz 下载 URL。
     # 源1 GitHub API(releases/tags) → 源2 expanded_assets HTML → 可选逃生阀(显式 hash)。
-    # 不写死 hash：Prerelease-Alpha 是滚动预发布，hash 每次构建变、旧文件被删。stdout 输出 URL；全失败 return 1。
+    # 不写死 hash：Prerelease-Alpha 是滚动预发布，hash 每次构建变、旧文件被删。
+    # 结果写全局 RESOLVED_CORE_URL（不经 stdout 返回——内部 gh_download 会 log 到 stdout，
+    # 用 $() 捕获会把日志混进返回值）；全失败 return 1。
     _crc_match="/mihomo-linux-${CLASH_VARIANT}-alpha-smart-[0-9a-f]+\.gz$"
     _crc_url=""
     # 源1：tags API 的 assets[].browser_download_url（prerelease 不进 latest API，必须用 tags 端点）
@@ -1756,7 +1758,7 @@ clash_resolve_core_url() {
         warn "动态发现失败，用显式 CLASH_CORE_FALLBACK_HASH 逃生: ${_crc_url##*/}"
     fi
     [ -n "$_crc_url" ] || return 1
-    printf '%s\n' "$_crc_url"
+    RESOLVED_CORE_URL=$_crc_url
 }
 
 install_clash_core() {
@@ -1779,14 +1781,20 @@ install_clash_core() {
     fi
 
     # 运行时动态解析最新 Smart 核 URL（API + HTML 双源，不写死 hash；逃生阀见 clash_resolve_core_url）
-    _url=$(clash_resolve_core_url) \
+    RESOLVED_CORE_URL=""
+    clash_resolve_core_url \
         || die "无法解析匹配 $CLASH_VARIANT 的 Smart 核最新版本（检查网络/GH_PROXY/GH_PROXIES；或显式设 CLASH_CORE_FALLBACK_HASH 逃生）"
+    _url=$RESOLVED_CORE_URL
 
     _gz=/tmp/clash_meta.gz
     gh_download "$_url" "$_gz" raw || die "clash 核下载失败: $_url（检查网络/GH_PROXY）"
     mkdir -p "$(dirname "$_core")"
-    gunzip -c "$_gz" > "$_core" || die "clash 核解压失败: $_gz"
-    chmod +x "$_core"; rm -f "$_gz"
+    # 解压到 .new 再原子 mv 替换：核可能正在运行，直接覆写会 "Text file busy"。
+    # mv(rename) 同目录替换正在执行的二进制安全——旧进程续用旧 inode，新核就位待 restart 生效。
+    gunzip -c "$_gz" > "${_core}.new" || die "clash 核解压失败: $_gz"
+    chmod +x "${_core}.new"
+    mv -f "${_core}.new" "$_core" || die "clash 核替换失败（mv）: $_core"
+    rm -f "$_gz"
     # SIGILL 自检：核必须能在本机执行（CPU 微架构不匹配会拒绝执行）
     "$_core" -v >/dev/null 2>&1 || die "clash 核无法在本机执行（CPU 不支持 $CLASH_VARIANT？用 CLASH_CORE_VARIANT 降级如 amd64-v1 重试）"
     log "clash 核已装: $("$_core" -v 2>/dev/null | head -1)"

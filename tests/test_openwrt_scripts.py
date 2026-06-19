@@ -72,12 +72,23 @@ def test_dynamic_resolve_functions_present() -> None:
     src = _SETUP.read_text(encoding="utf-8")
     assert "gh_url_bases()" in src, "缺少 gh_url_bases 多镜像 helper"
     assert "clash_resolve_core_url()" in src, "缺少 clash_resolve_core_url 动态发现 helper"
-    assert "_url=$(clash_resolve_core_url)" in src, (
-        "install_clash_core 应通过 clash_resolve_core_url 动态拿 URL"
+    # Bug A 防回归：clash_resolve_core_url 内部 gh_download 会 log 到 stdout，
+    # 必须经全局变量 RESOLVED_CORE_URL 返回，绝不能用 $() 捕获 stdout（否则日志污染返回值）。
+    assert "RESOLVED_CORE_URL" in src, "应经全局 RESOLVED_CORE_URL 返回核 URL"
+    assert "$(clash_resolve_core_url)" not in src, (
+        "禁止用 $(clash_resolve_core_url) 捕获 stdout——内部 log 会污染返回值"
     )
     # 双源：tags API + expanded_assets HTML
     assert "releases/tags/${CLASH_CORE_TAG}" in src, "动态发现缺 tags API 源"
     assert "crfb_assets_from_tag" in src, "动态发现缺 expanded_assets HTML 源"
+
+
+def test_core_install_atomic_replace() -> None:
+    """Bug B 防回归：核可能正在运行，必须解压到 .new + 原子 mv，不能直接覆写（Text file busy）。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert 'gunzip -c "$_gz" > "${_core}.new"' in src, "应解压到 .new 临时文件"
+    assert 'mv -f "${_core}.new" "$_core"' in src, "应原子 mv 替换运行中的核"
+    assert 'gunzip -c "$_gz" > "$_core"' not in src, "禁止直接覆写运行中的核"
 
 
 # ---- help -------------------------------------------------------------------
