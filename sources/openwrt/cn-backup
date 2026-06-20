@@ -106,15 +106,53 @@ _notify() {
         --data-urlencode "text=$1" >/dev/null 2>&1 || true
 }
 
-# sysupgrade -b 带重试：OpenClash 持续写 /etc/openclash/（smart_weight_data.csv、
-# cache/history db 等），busybox tar 偶发 "file changed as we read it" → sysupgrade
-# 整体非零退出并删产物。该竞争是瞬时的，重试采样到 OpenClash 不写的窗口即过。
+# 打包期间冻结 clash core，消除 OpenClash 与 sysupgrade 的读写竞争。
+# 背景：clash core 持续写 /etc/openclash/（smart_weight_data.csv 可达上百 MB、每 1~2 秒
+# 追加；history/*.db 同样在写），而 /etc/openclash/ 经 keep.d 整目录纳入 sysupgrade 备份。
+# busybox tar 读到一半文件就变 → "file changed as we read it" → sysupgrade 整体非零并删
+# 产物。该写入近乎不间断，纯重试采不到安静窗口（旧实现假定竞争"瞬时"，已被证伪）。
+# 对策：打包瞬间对 core 发 SIGSTOP 冻结其写入（TCP 连接由内核保持、不断流，仅暂停转发），
+# 打包毕 SIGCONT。重试退化为 SIGSTOP 偶发失败时的纯兜底。
+CLASH_BIN=/etc/openclash/clash
+
+# 取 clash core PID：只认 argv[0] 正好等于可执行路径的进程，规避 pgrep -f 把自身命令行
+# 里的 pattern 也算作匹配的自匹配坑；shell/grep 等 argv[0] 不是该路径，天然被排除。
+_clash_pids() {
+    for _d in /proc/[0-9]*; do
+        [ -r "$_d/cmdline" ] || continue
+        case "$(tr '\0' '\n' < "$_d/cmdline" 2>/dev/null | head -1)" in
+            "$CLASH_BIN") echo "${_d#/proc/}" ;;
+        esac
+    done
+}
+_freeze_clash() {
+    _frozen=
+    for _p in $(_clash_pids); do
+        kill -STOP "$_p" 2>/dev/null && _frozen="$_frozen $_p"
+    done
+}
+_thaw_clash() {
+    for _p in $_frozen; do kill -CONT "$_p" 2>/dev/null; done
+    _frozen=
+}
+
 _sysupgrade_b() {
     _out=$1
     _n=0
     while [ "$_n" -lt "$BACKUP_RETRIES" ]; do
         _n=$((_n + 1))
-        if sysupgrade -b "$_out" >/dev/null 2>&1; then return 0; fi
+        # 子 shell 隔离 trap，避免覆盖调用方（_backup_full）的 sysupgrade.conf 还原 trap；
+        # trap 覆盖正常/失败/被信号中断各退出路径，保证 core 必被解冻。
+        # exit $? 不可省：否则 EXIT trap 里 _thaw_clash 的返回值会成为子 shell 退出码，
+        # 掩盖 sysupgrade 的失败。
+        if (
+            trap '_thaw_clash' EXIT INT TERM HUP
+            _freeze_clash
+            sysupgrade -b "$_out" >/dev/null 2>&1
+            exit $?
+        ); then
+            return 0
+        fi
         rm -f "$_out" 2>/dev/null
         sleep 3
     done

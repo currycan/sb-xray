@@ -515,6 +515,8 @@ sh openwrt-init.sh ipv6         # 禁用 LAN 公网 IPv6（KEEP_IPV6=1 跳过）
 
 > CDN 优选的**实际结果**（优选 IP → 域名映射）写在 `/etc/hosts`，已被官方 keep.d 清单纳入备份；子域名前缀（`CDN_SUBDOMAINS`）随 CDN 优选 cron 行存于 `/etc/crontabs/root`，连同门禁 `last_best.txt` 一并纳入上面的清单，使纯 `sysupgrade -r` 恢复（不重跑全装）后 CDN 优选 cron 也能直接续跑。`/etc/CloudflareST/` 的 cfst 二进制（~8MB）可再生，故不入备份。
 
+> **打包期间会短暂冻结 OpenClash 内核。** `/etc/openclash/` 经官方 keep.d 整目录纳入备份，而运行中的 clash core 持续写其中的 `smart_weight_data.csv`（smart 分组权重，可达上百 MB、秒级追加）与 `history/*.db`，与 `sysupgrade -b` 的 busybox tar 抢读 → `tar: file changed as we read it` → 备份非零失败。为消除该竞争，`cn-backup` 在每次打包瞬间对 clash core 发 `SIGSTOP` 冻结其写入、打包毕 `SIGCONT` 恢复（TCP 连接由内核保持、不断流，仅暂停转发；约十几秒/份，安静期 cron 跑无感）。`trap` 保证成功/失败/被信号中断各路径都解冻，watchdog 见 core 仍存在不会误重启。冻结失败时退回原有重试兜底。
+
 **每次 `save` 产两份**：
 
 | 产物 | 范围 | 用途 |
