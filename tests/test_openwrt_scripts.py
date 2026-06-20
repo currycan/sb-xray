@@ -614,13 +614,29 @@ def test_backup_produces_safe_and_full_variants() -> None:
 
 def test_backup_retries_transient_sysupgrade_failure() -> None:
     """sysupgrade -b 打包 /etc/openclash 时会因 OpenClash 写文件偶发 tar『file changed』
-    非零退出——备份必须重试,否则每日 cron 会随机失败。"""
+    非零退出——备份保留重试作兜底(冻结失败等),否则每日 cron 会随机失败。"""
     src = _BACKUP.read_text(encoding="utf-8")
     assert "_sysupgrade_b()" in src, "缺少带重试的 sysupgrade 包装"
     body = src[src.index("_sysupgrade_b()"):src.index("_backup_safe()")]
     assert "BACKUP_RETRIES" in body and "while" in body, "_sysupgrade_b 须循环重试"
     # safe/full 都走重试包装,不直接裸调 sysupgrade -b
     assert "_sysupgrade_b" in src[src.index("_backup_safe()"):src.index("_prune_local()")]
+
+
+def test_backup_freezes_clash_core_during_pack() -> None:
+    """根因:clash core 持续写 /etc/openclash/(smart_weight_data.csv 上百 MB、秒级追加),
+    与 sysupgrade 打包竞争 → tar『file changed』每次必中,重试采不到安静窗口。
+    对策:打包瞬间 SIGSTOP 冻结 core、打包毕 SIGCONT,trap 保证任何退出路径都解冻。"""
+    src = _BACKUP.read_text(encoding="utf-8")
+    body = src[src.index("_sysupgrade_b()"):src.index("_backup_safe()")]
+    # 冻结 / 解冻成对存在,且包住 sysupgrade -b
+    assert "kill -STOP" in src and "kill -CONT" in src, "须 SIGSTOP/SIGCONT 冻结 clash core"
+    assert "_freeze_clash" in body and "_thaw_clash" in body, "打包循环须冻结/解冻 core"
+    # trap 兜底覆盖正常 + 中断路径,保证 core 必解冻(防永久冻结)
+    freeze_block = src[src.index("_sysupgrade_b()"):src.index("_backup_safe()")]
+    assert "trap " in freeze_block and "_thaw_clash" in freeze_block, "解冻须由 trap 兜底"
+    # 取 core PID 用 argv[0] 精确匹配,规避 pgrep -f 自匹配坑
+    assert "/proc/" in src and "cmdline" in src, "core PID 须按 argv[0] 精确匹配,非 pgrep -f"
 
 
 def test_backup_full_variant_restores_sysupgrade_conf() -> None:
