@@ -93,7 +93,12 @@ def _speed_blocks(payload: dict[str, Any]) -> list[str]:
     复用,字段同形（isp_tag / fastest_mbps / direct_mbps / speeds / diag）。
     """
     isp_tag = str(payload.get("isp_tag") or "?")
-    headline = f"选定线路: {isp_tag}"
+    # 代理模式下 isp_tag 是「带宽领头者」(带 15% 滞后的稳定值),并非实际承载流量的线
+    # —— 真正选路由 xray leastPing 按延迟实时选(见尾部说明)。只有 direct/block 才是
+    # 真正已定的线路,故标签按模式区分,避免「选定线路」对代理节点造成单线错觉。
+    proxy_mode = isp_tag.startswith("proxy")
+    head_label = "带宽最快" if proxy_mode else "选定线路"
+    headline = f"{head_label}: {isp_tag}"
     fastest = _fmt_mbps(payload.get("fastest_mbps"))
     if fastest is not None:
         headline += f" · {fastest} Mbps"
@@ -128,6 +133,11 @@ def _speed_blocks(payload: dict[str, Any]) -> list[str]:
                     line += f"  ({label})"
             detail.append(line)
         blocks.append("\n".join(detail))
+
+    if proxy_mode:
+        blocks.append(
+            "ℹ️ 实际线路由 xray leastPing 按延迟每分钟实时选;以上带宽仅作节点池排序参考。"
+        )
 
     return blocks
 
@@ -178,15 +188,20 @@ def _format_retest_noop(payload: dict[str, Any], title_prefix: str) -> tuple[str
     测速摘要改由 payload['speed'] 折进本卡,与决策结论合成一条,单条读完即闭环。
     无 speed（disabled / 缓存命中 / 测试桩 outcome=None）时退化为只出结论行。
     """
-    title = f"{title_prefix} 🔁 ISP 重测 · 线路不变"
+    title = f"{title_prefix} 🔁 ISP 重测 · 配置未变"
     speed = payload.get("speed")
     blocks = _speed_blocks(speed) if isinstance(speed, dict) else []
 
-    top = str(payload.get("top_tag") or "")
-    concl = f"结论: 维持 {top}" if top else "结论: 线路不变"
-    delta = _fmt_pct(payload.get("delta_pct"))
-    if delta is not None:
-        concl += f"（波动 {delta}%，未达切换条件）"
+    # 不渲染 top_tag(原始带宽最大值)—— 它与头部「带宽最快」(带滞后的领头者)是两个
+    # 指标,曾导致一张卡出现两个不同节点名。noop 的真相是结构层面:节点池与路由类别
+    # 都没变,故无需重建配置/重启;带宽波动纯由 leastPing 在线吸收,不构成切换条件。
+    if str(payload.get("reason") or "") == "disabled":
+        concl = "结论: ISP 重测已禁用"
+    else:
+        concl = "结论: 节点池与路由类别未变,无需重建配置(未重启)"
+        delta = _fmt_pct(payload.get("delta_pct"))
+        if delta is not None:
+            concl += f";本次最大带宽波动 {delta}%,已由 leastPing 在线吸收"
     blocks.append(concl)
     return title, "\n\n".join(blocks)
 
