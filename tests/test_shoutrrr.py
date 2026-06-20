@@ -134,7 +134,10 @@ _SPEED_PAYLOAD = {
 def test_format_message_speed_test_result_is_readable():
     title, body = shoutrrr._format_message("isp.speed_test.result", _SPEED_PAYLOAD, "[sb-xray:jp]")
     assert title == "[sb-xray:jp] 📊 ISP 测速结果"
-    assert "选定线路: proxy-us-isp · 5.17 Mbps" in body
+    # 代理模式头部用「带宽最快」(领头者),不再用「选定线路」误导为单一已定线
+    assert "带宽最快: proxy-us-isp · 5.17 Mbps" in body
+    # 实际选路机制说明(leastPing 按延迟实时选)
+    assert "leastPing" in body
     # rating ladder replaces the old binary 8K verdict (5.17 Mbps → 网络较慢)
     assert "评级: 网络较慢" in body
     assert "8K: ⚠️ 不流畅" not in body
@@ -301,15 +304,21 @@ def test_format_message_retest_noop_merges_speed_and_conclusion():
     title, body = shoutrrr._format_message(
         "isp.retest.noop", payload, "[sb-xray:zgocloud]"
     )
-    assert title == "[sb-xray:zgocloud] 🔁 ISP 重测 · 线路不变"
+    assert title == "[sb-xray:zgocloud] 🔁 ISP 重测 · 配置未变"
     # speed summary folded in
-    assert "选定线路: proxy-us-isp · 51.56 Mbps" in body
+    assert "带宽最快: proxy-us-isp · 51.56 Mbps" in body
     assert "评级: " in body
     assert "直连基准: 91.91 Mbps" in body
     assert "✓ proxy-us-isp  51.56 Mbps" in body
     assert "✓ proxy-la-isp  20.97 Mbps" in body
-    # decision conclusion
-    assert "结论: 维持 proxy-us-isp（波动 20.27%，未达切换条件）" in body
+    # decision conclusion — 结构性真相,不再凭空捏造「未达切换条件」
+    assert "结论: 节点池与路由类别未变,无需重建配置(未重启)" in body
+    assert "本次最大带宽波动 20.27%,已由 leastPing 在线吸收" in body
+    # 实际选路机制说明
+    assert "leastPing" in body
+    # 不再出现捏造的切换条件措辞,也不再渲染与头部矛盾的第二个节点名 top_tag
+    assert "未达切换条件" not in body
+    assert "维持 proxy-la-isp" not in body
     # no raw key:value dump
     assert "top_tag:" not in body
     assert "delta_pct" not in body
@@ -320,8 +329,20 @@ def test_format_message_retest_noop_without_speed_shows_conclusion_only():
     """disabled / cache-hit / pre-merge payloads carry no speed → conclusion only."""
     payload = {"reason": "no_change", "top_tag": "proxy-us-isp", "delta_pct": 5.0}
     title, body = shoutrrr._format_message("isp.retest.noop", payload, "[p]")
-    assert title == "[p] 🔁 ISP 重测 · 线路不变"
-    assert body == "结论: 维持 proxy-us-isp（波动 5%，未达切换条件）"
+    assert title == "[p] 🔁 ISP 重测 · 配置未变"
+    assert body == (
+        "结论: 节点池与路由类别未变,无需重建配置(未重启)"
+        ";本次最大带宽波动 5%,已由 leastPing 在线吸收"
+    )
+
+
+def test_format_message_retest_noop_disabled_shows_disabled_conclusion():
+    """ISP_RETEST_ENABLED=false → noop payload {reason: disabled} → 明确禁用结论。"""
+    title, body = shoutrrr._format_message(
+        "isp.retest.noop", {"reason": "disabled"}, "[p]"
+    )
+    assert title == "[p] 🔁 ISP 重测 · 配置未变"
+    assert body == "结论: ISP 重测已禁用"
 
 
 def test_format_message_retest_completed_folds_in_speed():
@@ -331,7 +352,7 @@ def test_format_message_retest_completed_folds_in_speed():
     assert "线路切换: proxy-la-isp → proxy-us-isp" in body
     assert "原因: 节点集合变化 · 已重启 xray/sing-box 生效" in body
     # speed summary now appended
-    assert "选定线路: proxy-us-isp · 51.56 Mbps" in body
+    assert "带宽最快: proxy-us-isp · 51.56 Mbps" in body
     assert "✓ proxy-la-isp  20.97 Mbps" in body
 
 
