@@ -3,6 +3,11 @@ name: Daily Version Check & Build
 on:
   push:
     branches: [main]
+    # docs/ 不进镜像（Dockerfile 不 COPY docs/），纯文档改动无需触发构建。
+    # 注意：CHANGELOG.md 在仓库根、不在忽略范围内——release 靠其提交触发镜像构建（见 docs/00 §8）；
+    # sources/ 经 `COPY sources /sources` 进镜像，其改动须照常触发，故不忽略。
+    paths-ignore:
+      - 'docs/**'
   schedule:
     # 每天 UTC 2:00 (北京时间 10:00) 执行
     - cron: "0 2 * * *"
