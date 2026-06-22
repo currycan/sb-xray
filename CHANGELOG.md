@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [26.6.22] — 2026-06-22 · OpenWrt/VPS 运维体系整合（openwrt-init 一键初始化 · gl-inet 统一工具箱 · cn-backup 配置备份 · 反向探活）+ secrets 热刷新 + 日志体积治理
+
+> 汇总自 26.6.11 以来的全部变更（90 次提交）。主线是 **OpenWrt / VPS 两侧运维体系大整合**：路由器侧把分散的手动操作收口为「填一份 config.env，跑一条命令」（`openwrt-init.sh` 一键初始化 + `gl-inet.sh` OpenClash 统一工具箱 + Tailscale 身份自恢复 + CDN 优选硬契约），VPS 侧把运维脚本集中到 `/usr/local/bin`、新增配置备份（`cn-backup`）与整机宕机反向探活（`cn-exit-watchdog`）；镜像内伴随 secrets 远端轮换热刷新、日志体积治理与多项稳定性修复。镜像版本与 Git Release tag 仍按 `YY.M.D-<短 sha>` 一一对应，生产节点经 watchtower 自动跟进 `:latest`；本版全部变更均**镜像内默认生效或属宿主侧脚本，不触发 `requires-compose-sync`（CLAUDE.md §2）**。
+
 ### Added（新增）
 
 - **OpenWrt 一键初始化整合**（`sources/openwrt/openwrt-init.sh`，原 `cn-exit-setup.sh` 更名扩展）：脚本职责从「回国出口配置」扩展为「OpenWrt 侧完整初始化」，所有手动操作归零为「填一份 config.env，跑一条命令」。本批变更仅涉及 OpenWrt 侧脚本与模板，不改 docker-compose env，无 watchtower 漂移契约（CLAUDE.md §2）影响。
@@ -21,6 +25,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **CN 出口整机宕机反向探活**（`sources/vps/cn-exit-watchdog.sh` + `vps-cn-exit-init.sh` §3.6）：补监控盲区——设备侧 `cn-bridge-monitor` 跑在 CN 出口设备自身上，整机宕机时监控随之失联，VPS 侧 balance 探活只做静默 failover 不告警。新增 VPS 侧反向探活脚本：cron 每分钟经 socks5 腿实测回国（默认 generate_204），连续 `WD_THRESHOLD`（默认 3）次失败发 Telegram 告警（bot 直连，不经 shoutrrr-forwarder；告警期去重，恢复发解除），`--test` 验证通道。init 集成为可选护栏段：`WD_TG_TOKEN`+`WD_TG_CHAT` 同时有值才装（自门控）、写 conf 600、装 `/etc/cron.d/cn-exit-watchdog` 并自动迁移清理早期手装 user-crontab 条目；建议仅 1-2 台节点启用互为冗余。纯 VPS 侧脚本，不涉及镜像/compose，无 watchtower 漂移契约（§2）影响。
 
+- **`gl-inet.sh` —— OpenClash / OpenWrt 统一工具箱**（`sources/openwrt/gl-inet.sh` + `gl-inet.md`）：把分散的 OpenClash 安装/配置脚本收敛为单一带菜单（whiptail）的工具箱。按设备 hostname 自动识别 GL-iNet 机型 profile（`--device` 可覆盖），按 profile 分支 istore/style/base/distfeeds 等动作；提供「菜单项 0 一键初始化」编排（feed 优先、交互输入带默认值，跳过 AdGuard/wireguard/overlay/self-update）；MT-3000 走两阶段初始化（overlay 先扩容→reboot→其余，带防重入 marker），overlay 扩容经 sysfs 检测 USB 且仅对 MT-3000 生效（GL SDK4 BE 固件硬编码 `/overlay`）。彻底移除 Docker 安装路径（机型支持不确定），URL 改用 `uci network.lan.ipaddr` 动态 LAN IP（不再硬编码 192.168.8.1），脚本 self-update 指向本仓 sb-xray（原指向上游 cpolar，会覆盖 fork）。纯 OpenWrt 侧脚本，不涉镜像/compose。
+
+- **`cn-backup` —— OpenWrt 配置备份 / 一键恢复**（`sources/openwrt`，#61）：新增软路由配置（`sysupgrade -b`）的备份与一键恢复能力，配合 docs/11+12 灾备文档形成「整机替换 / 固定身份零断点接管」闭环。纯 OpenWrt 侧脚本，不涉镜像/compose。
+
+- **确定性 deploy-config 生成器**（#59）：新增按部署清单确定性生成配置的工具；同时把运维留痕目录 `.local` 更名为 `.ops`（与 project-operator 约定对齐）。
+
+- **日志体积治理（logrotate + nginx 访问日志档位）**（Dockerfile / entrypoint，#58）：镜像内 `/var/log` 经 logrotate 封顶、nginx 访问日志在源头按档位裁剪。新增**均带镜像内默认**的可选覆盖 env：`NGINX_ACCESS_LOG`（`minimal` 默认，仅记非 2xx/3xx | `full` | `off`）、`LOG_ROTATE_SIZE`（默认 50M）、`LOG_ROTATE_KEEP`（默认 3）、`LOG_ROTATE_CRON`（空串禁用）。docker-compose 仅以注释暴露，watchtower 自动分发不需 compose 同步（§2）。详见 docs/04 §6.7。
+
+- **OpenWrt `ipv6` 子命令 + `config.env` 解耦**（`sources/openwrt`）：新增独立 `ipv6` 子命令，IPv6 相关配置从主流程解耦到 config.env。纯 OpenWrt 侧脚本。
+
 ### Changed（变更）
 
 - **VPS 运维脚本集中到 `/usr/local/bin`，`~/sb-xray` 回归纯 compose 项目**（`sources/vps/vps-init.sh` + `sbx-redeploy.sh`/`sbx-canary-check.sh`/`cn-exit-watchdog.sh`）：此前 `vps-init.sh` 把三个运维脚本下载到运行目录 `~/sb-xray`，与容器的 `.env`/`.envs/`/`docker-compose.yml`/数据卷混居。现统一装到 `/usr/local/bin`、去 `.sh` 后缀作一等命令（与既有 `sbx-update` 同住）：`sbx-redeploy`、`sbx-canary-check`、`cn-exit-watchdog`；`~/sb-xray` 只剩 compose 项目。脚本路径解析统一收口到 `SBXRAY_DIR`（默认 `$HOME/sb-xray`，由 init/cron 经 env 传权威值），消除此前 `sbx-canary-check.sh` 硬编码 `/root/sb-xray/.sbx-canary-last-digest` 与各脚本默认值不一致；两处 cron（`/etc/cron.d/sbx-canary-check`、`cn-exit-watchdog`）改用 `/usr/local/bin` 绝对路径并注入 `SBXRAY_DIR`/`OPENWRT_TS_IP`（cron 默认 PATH 不含 `/usr/local/bin`）。digest 状态文件 `.sbx-canary-last-digest` 仍留 `~/sb-xray`（运行时数据）。迁移：`vps-init.sh` 安装到新位置后自动 `rm` 旧 `~/sb-xray/*.sh` 残留，旧节点**重跑一次 `vps-init.sh` 即自愈**（重写 cron + 清旧副本）；未重跑前旧布局照常工作，无中断。纯宿主侧脚本、不在镜像内，与 watchtower 无关（CLAUDE.md §2 不触发 `requires-compose-sync`，分发靠 `git pull` + 重跑 init）。另：`docker-compose.yml` 的 `./.envs:/.env` 挂载补防误删注释（`.envs/` 是容器运行时生成的 secret/UUID/账户持久化目录，非 `.env` typo）。
@@ -30,6 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **CDN IP 优选转为硬契约 + 服务就绪后执行**（`sources/openwrt/openwrt-init.sh`）：堵死灾备换机反复出现的「优选 IP 静默漏做」缺口（`/etc/hosts` 无优选条目、cron 缺失却 init 报完成、只有人工排查能发现）。三处加固：① `CDN_DOMAIN` 由可选升为**必填**——`validate_config` 缺则 `die`，并要求 `CDN_SUBDOMAINS` 或非空 `/etc/subdomains.txt`（否则优选无域名可用）；② `install_cdn_speedtest` 拆为 `install_cdn_tooling`（工具+cron+subdomains+预装 CloudflareST，**无服务依赖、cron 始终先在位**）与 `cdn_optimize_firstrun`（优选首跑），首跑**锁在服务自检 `verify` 通过之后**才做——优选需 OpenClash/Tailscale 正常运行（首跑临时停 OpenClash 跑 CloudflareST 再恢复），服务未过则跳过首跑并让 init `exit 1`；③ 首跑失败由 `warn` 升为**硬失败 `die`**，自检 `verify_cdn`→`verify_cdn_outcome`：去掉 `CDN_DOMAIN` 空值逃逸外壳（杜绝「空=零检查=静默全绿」），把「优选 IP 已写入 `/etc/hosts`」由 `check_soft` 升为**硬 `check`**（真相源对齐人工排查实际看的 `/etc/hosts` 映射）。`cdn` 子命令同步走拆分流程，可在 DR 服务恢复后单独补做（不碰 Tailscale）。`docs/12` 新增 §8b「服务确认正常后补做 CDN 优选」+ §16 两条硬判据；`config.env.example`/README 标 `CDN_DOMAIN` 必填。纯 OpenWrt 侧脚本/文档，不涉镜像/compose，无 watchtower 漂移契约（§2）影响。
 
 - **`cn-exit-setup.sh` → `openwrt-init.sh` 更名**：与 `vps-cn-exit-init.sh` 命名对称。路由器上的运行时产物名（`cn-bridge`、`cn-bridge-monitor`、`/etc/cn-exit/`、`xray-bridge-<名>`）全部不变，已部署路由器无需迁移；仓库内全部文档/注释/测试引用同步更名（CHANGELOG 历史条目保留旧名）。迁移：下次重跑时按 README 下载新名脚本即可，旧脚本副本可删。
+
+- **VPS 初始化重构：Stage 1 收敛 + `.env` 单一所有者 + SSH/tcp-brutal 加固 + 单脚本化**（`sources/vps/vps-init.sh`，#68 / #69）：把 VPS 侧初始化合并为单一 `vps-init.sh`（原多脚本），`.env` 收口为单一所有者、Stage 2 自动拉取；加固项包括 SSH 与 tcp-brutal。配套新增运行时更新脚本。纯宿主侧脚本，不在镜像内，与 watchtower 无关（§2）。
+
+- **客户端模板：Claude / Gemini 改走 AI 优选节点（`*SelectAI`）**（`templates/client_template`，#67 / #66）：AI 类服务（Claude/Gemini）分流到 AI 优选组；并修复 `FilterAI` 子串误匹配、统一 `OneSmart` 智选组顺序。镜像内默认生效。
 
 ### Fixed（修复）
 
@@ -43,9 +61,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **cdn-speedtest 测速诊断改写 stderr**（`sources/openwrt/openwrt-init.sh` 内嵌工具）：`run_speedtest()` 经 `best_ip=$(run_speedtest)` 命令替换调用,而 `log()` 同时写 stdout——OpenClash 停/启与测速进度的诊断全被 `$()` 捕获吞掉(前台 `cdn-speedtest run`/首跑看不到停启过程,仅靠 `tail -1` 从混合 stdout 捞返回 IP,脆弱)。`log()` 诊断改写 **stderr**:前台诊断照常可见、`$()` 仅捕获末尾 `echo "$BEST_IP"`、`tail -1` 降为防御兜底;`log()` 写 `/var/log/cdn-speedtest.log` 不变。OpenClash 停/启行为本就正确(无条件 `stop`→测速→`restore_proxy_env` `restart`,真机实测跑后 running),本条仅修可见性与健壮性。busybox `sh -n` 通过。
 
+- **`cn-backup` 打包期间冻结 OpenClash 内核，消除 `sysupgrade -b` 备份竞争**（#71）：备份打包与 OpenClash 内核运行存在竞态，导致配置 tar 偶发不一致 / 核冻结。修复：打包期间 `SIGSTOP` 暂停 OpenClash 内核、打包完成后恢复，消除竞争。纯 OpenWrt 侧脚本。
+
+- **OpenWrt clash 核运行时动态发现最新版本 + 多镜像兜底**（#70）：clash 内核版本改为运行时动态发现，下载走多镜像兜底，避免单一源失效或版本写死导致装不上。纯 OpenWrt 侧脚本。
+
+- **ISP 重测通知文案矛盾修正**（`scripts/sb_xray/shoutrrr.py`，#72）：重测 noop 卡片原措辞「线路不变 / 未达切换条件」自相矛盾且暗示一个并不存在的阈值（代理模式下 `isp_tag` 带宽领头者 ≠ 实际承载流量的线路）。改为「配置未变」并移除误导性的 `top_tag` 渲染。镜像内默认生效。
+
+- **LAN 公网 IPv6 默认禁用 + `append_wan_dns` 默认 1→0，堵回国 IPv6/DNS 泄露**（`sources/openwrt` / OpenClash 模板）：默认禁用 LAN 侧公网 IPv6 下发，并把模板 `append_wan_dns` 默认由 1 改 0，杜绝多 WAN 下游绕过代理的 IPv6/DNS 泄露。配套新增 docs/10。纯 OpenWrt 侧脚本/模板。
+
+- **OpenClash 配置漂移自检改软检查**（`sources/openwrt`）：OpenClash 启动头 ~10s 会临时翻写 `redirect_dns`/`cachesize_dns` 等 DNS 交接字段后自行恢复，restart 后立即硬比对必然误报；漂移自检由硬比对降为软检查，真漂移由 apply 步骤捕获。纯 OpenWrt 侧脚本。
+
+- **抑制 `secret.refresh.noop` 推送 —— 仅在真实轮换/失败时告警**（`scripts/sb_xray`，#57）：secret 刷新无变化（noop）时不再发通知，只在真实凭据轮换或失败时推送。镜像内默认生效。
+
+- **修复 CDN 优选 install / verify 两处死结**（`sources/openwrt`，#62）：CDN 优选安装与自检流程中两处逻辑死结导致流程卡死，予以修复。纯 OpenWrt 侧脚本。
+
 ### Security（安全）
 
 - **op-amd / op-arm 模板 dashboard 密码脱敏**：真实生产密码以明文存在于公共仓库模板（`option dashboard_password`），改为 `<OPENCLASH_DASHBOARD_PASSWORD>` 占位符，由 `openwrt-init.sh` 从 config.env（`OPENCLASH_DASHBOARD_PASSWORD`，gitignored）注入。注意：git 历史中仍有旧值，建议轮换该密码。
+
+### Docs（文档）
+
+- **新增 docs/10「多 WAN 下游路由防泄露」**（架构 / 原理 / 排障）：系统化记录多 WAN 场景下 IPv6/DNS 绕过代理的泄露面与堵法。
+- **新增并合并 docs/11+12「OpenWrt 重新初始化与灾难恢复 / 灾备切换手册」**：覆盖软路由整机替换、固定身份零断点接管；ADR 决议把原 11 与 12 合并为单一文档，修正「黄金备份可跨同 target 设备恢复」边界。
+- **重建 `CLAUDE.md`**：补构建 / 架构指南，保留 §1–§5 纪律契约。
+
+### CI（持续集成）
+
+- **smoke gate 增加 mypy 门禁**（#56）：冒烟静态校验在 ruff/pytest 之外并入 mypy。
+- **`scripts/sb_xray` mypy `--strict` 清零（22→0）**（#55）：消除全部类型错误，配套对齐漂移的 openwrt / speed-test 测试（#54）。
 
 ## [26.6.11] — 2026-06-11 · watchtower 全自动更新体系 + ISP 测速选路优化 + 风险分类媒体分流
 
@@ -431,7 +474,9 @@ cd /root/sb-xray && docker compose up -d
 
 ---
 
-[Unreleased]: https://github.com/currycan/sb-xray/compare/v26.4.22...HEAD
+[Unreleased]: https://github.com/currycan/sb-xray/compare/26.6.11-9b19e35...HEAD
+[26.6.11]: https://github.com/currycan/sb-xray/compare/v26.6.7...26.6.11-9b19e35
+[26.6.7]: https://github.com/currycan/sb-xray/compare/v26.4.22...v26.6.7
 [26.4.22]: https://github.com/currycan/sb-xray/compare/v26.3.27...v26.4.22
 [26.3.27]: https://github.com/currycan/sb-xray/compare/v26.4.17...v26.3.27
 [26.4.17]: https://github.com/currycan/sb-xray/compare/v26.4.14...v26.4.17
