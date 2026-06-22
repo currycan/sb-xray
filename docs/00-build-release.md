@@ -553,6 +553,8 @@ flowchart TD
 
 🔬 **凭据机制**。`build` / `merge` 用仓库 secret（`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`）登录 registry 推镜像；`check` 调 GitHub API 用内置 `GITHUB_TOKEN`。文档不记录任何凭据值——这些属运维配置。
 
+🔬 **Action 以 commit SHA 固定 + Node.js 24 运行时**。工作流引用的每个 GitHub Action 都用完整 commit SHA 固定（后接版本号注释），锁定供应链来源、防 tag 漂移；运行时统一为 Node.js 24（GitHub Actions runner 不再支持 Node.js 20）。其中 artifact 的上传 / 下载刻意停在保守的 Node.js 24 大版本、不追上游最新：较新的 `download-artifact` 默认把下载哈希不匹配从告警改为报错、并按 `Content-Type` 跳过解压（为配合上游单文件直传特性），而本流水线只用空 digest 文件在 `build`→`merge` 间传递内容寻址，保守版本与这套用法完全兼容，避免引入与之无关的强校验行为。
+
 ### 8.4 CI 与本地构建、生产的关系
 
 把三段串起来看，闭环是这样的：
