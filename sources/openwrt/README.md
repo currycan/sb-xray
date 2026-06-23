@@ -426,7 +426,9 @@ CDNDOMAIN=<根域名> CDN_SUBDOMAINS=<前缀,逗号分隔> cdn-speedtest clean  
 - 测速期间会临时停 OpenClash（测速直连）、切公共 DNS，完成后自动恢复；带双层 trap 兜底（父进程+子 shell 各一道，OpenClash 恢复经原子锁串行化 + 无条件 restart 收敛，幂等可交错）——SSH 断线/Ctrl-C 即时恢复 OpenClash 与 DNS，单杀父进程会在测速自然结束后恢复（kill -9/断电除外，需手动 `/etc/init.d/openclash start`）。
 - 新旧 IP 智能比对：IP 未变 / 新 IP 提升不足 10% 时不动 hosts，避免无谓抖动。
 - 日志：`/var/log/cdn-speedtest.log`（首跑为前台执行，输出同时直接可见）。
-- 测速参数 `SPEED_TEST_THREADS/TIME/COUNT/LATENCY_MAX/MIN_SPEED` 可在 `config.env` 设置，对首跑与每日 cron 同时生效（见 `config.env.example` CDN 段）。
+- 测速参数可在 `config.env` 设置，对首跑与每日 cron 同时生效（白名单经 `build_cdn_env` 随 cron 行携带；见 `config.env.example` CDN 段）。完整旋钮与对应 cfst flag：`SPEED_TEST_THREADS`(-n)、`SPEED_TEST_TIME`(-t 延迟测速次数)、`SPEED_TEST_DL_TIME`(-dt 下载时长)、`SPEED_TEST_COUNT`(-dn)、`SPEED_TEST_LATENCY_MAX`(-tl)、`SPEED_TEST_LATENCY_MIN`(-tll)、`SPEED_TEST_LOSS_MAX`(-tlr)、`SPEED_TEST_MIN_SPEED`(-sl)。
+- **大陆优选门槛（默认偏向中国大陆，开箱生效）**：默认加 `-tll`（延迟下限 40ms）滤掉「延迟极低但带宽烂」的香港假快 IP——这是大陆优选最关键的反直觉参数（低延迟≠高带宽）；加 `-tlr`（丢包率上限 0.2）控大陆链路丢包。两者默认值写在 `cdn-speedtest` 脚本内（`${SPEED_TEST_LATENCY_MIN:-40}`/`${SPEED_TEST_LOSS_MAX:-0.2}`），不依赖 `config.env` 设置即生效；`SPEED_TEST_LATENCY_MIN=0` 关闭延迟下限。
+- **筛空自动回退兜底**：严苛门槛（tll/tlr）可能让某些线路一个合格 IP 都筛不出，此时 `SPEED_TEST_CN_FALLBACK=1`（默认开）会**放宽门槛（去掉 -tll/-tlr）重测一轮**，保证仍有可用 IP、不致本轮无 IP 可用；两轮测速跑完后只恢复一次代理环境（单一恢复点）。设 `SPEED_TEST_CN_FALLBACK=0` 则不回退、筛空即失败。
 - CloudflareST 的官方 tar.gz 是无 ustar 魔数的老式 tar，busybox tar 解不开（`invalid tar magic`）：脚本在 `tar -xzf` 失败时自动检测包管理器（`apk add tar` 优先、回退 `opkg install tar`）装上 GNU tar 再重试，一次解出全部条目（`cfst` 二进制 + `ip.txt`/`ipv6.txt` 测速输入清单），无需干预；包 feed 不可达导致装不上时硬失败并提示手动 `apk add tar` / `opkg install tar` 后重跑。cfst 默认读工作目录的 `ip.txt` 作 IP 段输入，缺它会报 `open ip.txt: no such file` 而每轮白跑——早期为绕开 busybox tar 自写的解析器只抽 `cfst`、丢了 `ip.txt`，是「优选反复漏做」的根因（已改为装 GNU tar 解全量，2026-06-16）。安装幂等门同时校验 `ip.txt` 存在，已装 cfst 但缺 `ip.txt` 的存量设备会在下次 init 走重装路径自愈补回。
 
 ### 5.5 LAN 网段迁移（如 `172.18.18.0/23` → `192.168.168.0/23`）
