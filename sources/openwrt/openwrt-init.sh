@@ -1399,7 +1399,9 @@ build_cdn_env() {
     # 直接拼进 _cdn_env 字符串既安全用于 cron 行也安全用于 `env $_cdn_env` 的分词。
     # 这是 subdomains「纯 env」化的枢纽：前缀不再落盘成 /etc/subdomains.txt。
     [ -n "$CDN_SUBDOMAINS" ] && _cdn_env="$_cdn_env CDN_SUBDOMAINS=$CDN_SUBDOMAINS"
-    for _v in SPEED_TEST_THREADS SPEED_TEST_TIME SPEED_TEST_COUNT SPEED_TEST_LATENCY_MAX SPEED_TEST_MIN_SPEED; do
+    for _v in SPEED_TEST_THREADS SPEED_TEST_TIME SPEED_TEST_DL_TIME SPEED_TEST_COUNT \
+              SPEED_TEST_LATENCY_MAX SPEED_TEST_LATENCY_MIN SPEED_TEST_LOSS_MAX \
+              SPEED_TEST_MIN_SPEED SPEED_TEST_CN_FALLBACK; do
         eval "_val=\$$_v"
         [ -n "$_val" ] && _cdn_env="$_cdn_env $_v=$_val"
     done

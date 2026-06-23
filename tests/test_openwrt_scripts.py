@@ -514,6 +514,57 @@ def test_build_cdn_env_includes_subdomains() -> None:
     assert "CDN_SUBDOMAINS=$CDN_SUBDOMAINS" in body, "build_cdn_env 未注入 CDN_SUBDOMAINS"
 
 
+def test_cdn_speedtest_mainland_filter_params() -> None:
+    """大陆优选门槛：cfst 调用须支持 -tll(延迟下限)/-tlr(丢包率)/-dt(下载时长)，
+    且新 env 带偏向大陆的脚本内默认（开箱生效，不依赖 config.env 设置）。"""
+    src = _CDN.read_text(encoding="utf-8")
+    assert "${SPEED_TEST_LATENCY_MIN:-40}" in src, "缺 -tll 大陆默认(SPEED_TEST_LATENCY_MIN=40)"
+    assert "${SPEED_TEST_LOSS_MAX:-0.2}" in src, "缺 -tlr 大陆默认(SPEED_TEST_LOSS_MAX=0.2)"
+    assert "${SPEED_TEST_DL_TIME:-10}" in src, "缺 -dt 下载时长(SPEED_TEST_DL_TIME=10)"
+    assert "${SPEED_TEST_CN_FALLBACK:-1}" in src, "缺筛空回退开关默认(SPEED_TEST_CN_FALLBACK=1)"
+    for flag in ("-tll", "-tlr", "-dt", "-tl", "-sl"):
+        assert f"{flag} " in src or f"{flag}=" in src, f"cfst 调用缺 {flag}"
+    # -t 注释纠正：标为「延迟测速次数」（原误标「下载测速时间」）
+    assert "延迟测速次数" in src, "-t 注释应纠正为「延迟测速次数」"
+
+
+def test_cdn_speedtest_empty_result_fallback() -> None:
+    """筛空回退兜底：严苛门槛(tll/tlr)未筛出 IP 时须放宽（无 tll/tlr）重测一轮，避免本轮无 IP
+    可用；SPEED_TEST_CN_FALLBACK=0 时不回退、直接失败。两轮共用抽出的 _run_cfst。"""
+    src = _CDN.read_text(encoding="utf-8")
+    assert "_run_cfst()" in src, "缺少抽出的 _run_cfst（供两轮复用）"
+    rs = src[src.index("run_speedtest()"):src.index("\n}\n", src.index("run_speedtest()"))]
+    assert "_run_cfst $_cn_filter" in rs, "第一轮须带大陆门槛 _cn_filter"
+    assert '[ "$SPEED_TEST_CN_FALLBACK" = "1" ] && _run_cfst' in rs, "回退须受 CN_FALLBACK 守卫并放宽重测"
+    assert '[ "$SPEED_TEST_LATENCY_MIN" != "0" ]' in rs, "tll=0 须视为关闭下限"
+    assert "restore_proxy_env" in rs, "两轮后须保留单一代理环境恢复点"
+
+
+def test_build_cdn_env_forwards_mainland_params() -> None:
+    """build_cdn_env 白名单须转发新增大陆门槛 SPEED_TEST_*，使 config.env 覆盖能传到 cron 运行。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    body = src[src.index("build_cdn_env()"):src.index("\n}", src.index("build_cdn_env()"))]
+    for var in (
+        "SPEED_TEST_DL_TIME",
+        "SPEED_TEST_LATENCY_MIN",
+        "SPEED_TEST_LOSS_MAX",
+        "SPEED_TEST_CN_FALLBACK",
+    ):
+        assert var in body, f"build_cdn_env 未转发 {var}"
+
+
+def test_config_env_example_documents_mainland_params() -> None:
+    """config.env.example 须文档化新增大陆优选 env（含默认值与回退说明）。"""
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in (
+        "SPEED_TEST_DL_TIME",
+        "SPEED_TEST_LATENCY_MIN",
+        "SPEED_TEST_LOSS_MAX",
+        "SPEED_TEST_CN_FALLBACK",
+    ):
+        assert var in src, f"config.env.example 缺新变量说明: {var}"
+
+
 def test_subdomains_file_fully_removed() -> None:
     """彻底纯 env：主脚本无内嵌 heredoc；validate_config 不再查 /etc/subdomains.txt 文件；
     cdn_first_fqdn 用参数展开从 CDN_SUBDOMAINS 取首段。"""

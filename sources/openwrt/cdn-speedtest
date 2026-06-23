@@ -16,11 +16,16 @@ CDNDOMAIN="${CDNDOMAIN:-}"
 CDN_SUBDOMAINS="${CDN_SUBDOMAINS:-}"
 
 # CloudflareST 参数
-SPEED_TEST_THREADS="${SPEED_TEST_THREADS:-500}"        # 延迟测速线程数
-SPEED_TEST_TIME="${SPEED_TEST_TIME:-4}"             # 下载测速时间(秒)
-SPEED_TEST_COUNT="${SPEED_TEST_COUNT:-5}"             # 下载测速数量
-SPEED_TEST_LATENCY_MAX="${SPEED_TEST_LATENCY_MAX:-200}"   # 延迟上限(ms)
-SPEED_TEST_MIN_SPEED="${SPEED_TEST_MIN_SPEED:-5}"        # 最低下载速度(MB/s)，低于此值视为失败
+SPEED_TEST_THREADS="${SPEED_TEST_THREADS:-500}"        # 延迟测速线程数 (-n)
+SPEED_TEST_TIME="${SPEED_TEST_TIME:-4}"             # 延迟测速次数 (-t)（原注释「下载测速时间」有误，-t 实为延迟测速次数）
+SPEED_TEST_DL_TIME="${SPEED_TEST_DL_TIME:-10}"          # 下载测速时长(秒) (-dt)，默认 10=cfst 默认
+SPEED_TEST_COUNT="${SPEED_TEST_COUNT:-5}"             # 下载测速数量 (-dn)
+SPEED_TEST_LATENCY_MAX="${SPEED_TEST_LATENCY_MAX:-200}"   # 延迟上限(ms) (-tl)
+# 大陆优选门槛（默认偏向中国大陆，开箱生效）：
+SPEED_TEST_LATENCY_MIN="${SPEED_TEST_LATENCY_MIN:-40}"   # 延迟下限(ms) (-tll)，滤掉「延迟极低但带宽烂」的香港假快 IP；设 0 关闭下限
+SPEED_TEST_LOSS_MAX="${SPEED_TEST_LOSS_MAX:-0.2}"       # 丢包率上限 (-tlr)，0.00-1.00，控大陆链路丢包
+SPEED_TEST_MIN_SPEED="${SPEED_TEST_MIN_SPEED:-5}"        # 最低下载速度(MB/s) (-sl)，低于此值视为失败
+SPEED_TEST_CN_FALLBACK="${SPEED_TEST_CN_FALLBACK:-1}"    # 大陆门槛(tll/tlr)筛空时回退放宽重测（1=开，0=关则直接失败）
 
 # 安装目录
 INSTALL_DIR="/etc/CloudflareST"
@@ -185,7 +190,7 @@ restore_proxy_env() {
 
 run_speedtest() {
     log "开始 Cloudflare IP 优选测速..."
-    log "参数: 线程=${SPEED_TEST_THREADS} 测速时间=${SPEED_TEST_TIME}s 数量=${SPEED_TEST_COUNT} 延迟上限=${SPEED_TEST_LATENCY_MAX}ms 最低速度=${SPEED_TEST_MIN_SPEED}MB/s"
+    log "参数: 线程=${SPEED_TEST_THREADS} 延迟次数=${SPEED_TEST_TIME} 下载时长=${SPEED_TEST_DL_TIME}s 数量=${SPEED_TEST_COUNT} 延迟=${SPEED_TEST_LATENCY_MIN}-${SPEED_TEST_LATENCY_MAX}ms 丢包≤${SPEED_TEST_LOSS_MAX} 最低速度=${SPEED_TEST_MIN_SPEED}MB/s 回退=${SPEED_TEST_CN_FALLBACK}"
 
     if [ -f /etc/init.d/openclash ]; then
         log "检测到 OpenClash，停止服务以确保测速直连..."
@@ -219,25 +224,50 @@ run_speedtest() {
 
     cd "$INSTALL_DIR"
 
-    # 先清旧结果：cfst 在严苛参数下可能产不出任何合格 IP（不写 csv），残留旧榜会被
-    # 静默当作本轮结果（真机实测：延迟上限收紧后整轮白测、对比的还是上轮数据）
-    rm -f result.csv
+    # cfst 跑一轮，$@=附加门槛参数；产出含合格 IP 的 result.csv 返 0。
+    # 每轮先清旧榜：cfst 在严苛参数下可能产不出任何合格 IP（不写 csv），残留旧榜会被
+    # 静默当作本轮结果（真机实测：门槛收紧后整轮白测、对比的还是上轮数据）。
+    _run_cfst() {
+        rm -f result.csv
+        ./cfst \
+            -n "$SPEED_TEST_THREADS" \
+            -t "$SPEED_TEST_TIME" \
+            -dt "$SPEED_TEST_DL_TIME" \
+            -dn "$SPEED_TEST_COUNT" \
+            -tl "$SPEED_TEST_LATENCY_MAX" \
+            -sl "$SPEED_TEST_MIN_SPEED" \
+            "$@" \
+            -o result.csv
+        [ -f result.csv ] && [ -n "$(sed -n '2p' result.csv | cut -d',' -f1)" ]
+    }
 
-    ./cfst \
-        -n "$SPEED_TEST_THREADS" \
-        -t "$SPEED_TEST_TIME" \
-        -dn "$SPEED_TEST_COUNT" \
-        -tl "$SPEED_TEST_LATENCY_MAX" \
-        -sl "$SPEED_TEST_MIN_SPEED" \
-        -o result.csv
+    # 第一轮：大陆优选门槛（-tll 滤「延迟极低但带宽烂」的香港假快 IP + -tlr 控丢包）。
+    # tll=0 视为关闭下限，只加 -tlr。
+    _cn_filter="-tlr $SPEED_TEST_LOSS_MAX"
+    if [ "$SPEED_TEST_LATENCY_MIN" != "0" ]; then
+        _cn_filter="-tll $SPEED_TEST_LATENCY_MIN $_cn_filter"
+    fi
 
+    # shellcheck disable=SC2086  # $_cn_filter 须分词成多个 cfst 参数（-tll 40 -tlr 0.2），加引号会当成单参
+    if _run_cfst $_cn_filter; then
+        _ok=1
+        log "大陆优选门槛命中 (tll=${SPEED_TEST_LATENCY_MIN} tlr=${SPEED_TEST_LOSS_MAX})"
+    elif [ "$SPEED_TEST_CN_FALLBACK" = "1" ] && _run_cfst; then
+        # 严苛门槛筛空 → 放宽（不带 tll/tlr）重测，保证仍有可用 IP，避免本轮无 IP 可用
+        _ok=1
+        log "WARN: 大陆门槛 (tll=${SPEED_TEST_LATENCY_MIN}/tlr=${SPEED_TEST_LOSS_MAX}) 未筛出合格 IP，已回退放宽门槛重测并命中"
+    else
+        _ok=0
+    fi
+
+    # 单一恢复点：覆盖命中/回退/失败所有路径，两轮测速跑完后只恢复一次代理环境。
     restore_proxy_env
     trap - HUP INT TERM EXIT
 
     log "测速完成"
 
-    if [ ! -f result.csv ]; then
-        log "ERROR: 测速结果文件不存在"
+    if [ "${_ok:-0}" != 1 ]; then
+        log "ERROR: 未找到满足条件的优选 IP（大陆门槛与回退均未产出；可放宽 SPEED_TEST_LATENCY_MIN/SPEED_TEST_LOSS_MAX，或确认 SPEED_TEST_CN_FALLBACK=1）"
         return 1
     fi
 
