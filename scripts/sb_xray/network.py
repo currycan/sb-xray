@@ -21,6 +21,13 @@ _RESTRICTED_RE: Final[re.Pattern[str]] = re.compile(
     r"(?i)(香港|HongKong|Hong Kong|HK|中国|China|CN|俄罗斯|Russia|RU|澳门|Macao|MO)"
 )
 
+# 数据行首 token 必须像一个 IP（IPv4 点分 或 含冒号的 IPv6），用于在 ip111.cn
+# 页面里把真正的 `<ip> <国> <城>` 行与纯标签行区分开。
+_IP_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9A-Fa-f:]+:[0-9A-Fa-f:]+$"
+)
+_GEO_LABEL: Final[str] = "这是您访问国内网站所使用的IP"
+
 _DEFAULT_CACHE: Final[Path] = Path("/tmp/ipapi.json")
 
 
@@ -77,10 +84,28 @@ def check_ip_type(*, cache_path: Path | None = None) -> str:
         return "unknown"
 
 
+def _geo_from_tokens(parts: list[str]) -> str:
+    """`<国><城>|<ip>` from a whitespace-split data line, or "" if not a data line.
+
+    A valid data line starts with an IP literal followed by ``<country> [city]``
+    (e.g. ``198.46.142.117 美国 洛杉矶``). The country alone is enough.
+    """
+    if len(parts) >= 2 and _IP_RE.match(parts[0]):
+        region = "".join(parts[1:3])
+        if region:
+            return f"{region}|{parts[0]}"
+    return ""
+
+
 def get_geo_info() -> str:
     """Extract `<region>|<ip>` from ip111.cn's landing page.
 
-    Returns "" if the fetch fails or the regex doesn't match.
+    ip111.cn renders the ``<ip> <country> <city>`` data and its label
+    (``这是您访问国内网站所使用的IP``) in **separate** elements, so after
+    stripping tags the data sits on its own line — typically the line *before*
+    the label. We locate the label, then read the adjacent data line (previous,
+    then next, then same-line as fallbacks). Returns "" on fetch failure or when
+    no data line is found.
     """
     try:
         with httpx.Client(
@@ -94,13 +119,19 @@ def get_geo_info() -> str:
         return ""
 
     plain = re.sub(r"<[^>]+>", " ", resp.text)
-    for line in plain.splitlines():
-        if "这是您访问国内网站所使用的IP" in line:
-            parts = line.split()
-            if len(parts) >= 3:
-                ip = parts[0]
-                region = "".join(parts[1:3])
-                return f"{region}|{ip}"
+    lines = [ln.strip() for ln in plain.splitlines() if ln.strip()]
+    for i, line in enumerate(lines):
+        if _GEO_LABEL not in line:
+            continue
+        candidates = [
+            lines[i - 1].split() if i > 0 else [],
+            lines[i + 1].split() if i + 1 < len(lines) else [],
+            line.replace(_GEO_LABEL, " ").split(),
+        ]
+        for parts in candidates:
+            geo = _geo_from_tokens(parts)
+            if geo:
+                return geo
     return ""
 
 

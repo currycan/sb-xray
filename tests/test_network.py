@@ -133,13 +133,37 @@ def test_check_ip_type_unknown_on_error(tmp_path: Path) -> None:
 
 @respx.mock
 def test_get_geo_info_returns_pipe_separated() -> None:
+    # 真实 ip111.cn 结构：数据 `<ip> <国> <城>` 与标签分处不同元素，
+    # 标签行本身不含 IP（标签在数据行的下一行）。
     html = (
-        "<html><body><p>1.2.3.4 这是您访问国内网站所使用的IP</p>"
-        "<p>5.6.7.8 您的IP来自 中国 上海</p></body></html>"
+        "<html><body>\n"
+        "<p>218.82.29.20 中国 上海</p>\n"
+        "<p>这是您访问国内网站所使用的IP</p>\n"
+        "</body></html>"
     )
     respx.get("https://ip111.cn/").mock(return_value=httpx.Response(200, text=html))
-    result = net.get_geo_info()
-    assert "|" in result
+    assert net.get_geo_info() == "中国上海|218.82.29.20"
+
+
+@respx.mock
+def test_get_geo_info_parses_us_node() -> None:
+    # 海外节点：数据行国名为中文「美国」，确保 region 含国名以供标旗。
+    html = (
+        "<html><body>\n"
+        "<p>198.46.142.117 美国 洛杉矶</p>\n"
+        "<p>这是您访问国内网站所使用的IP</p>\n"
+        "</body></html>"
+    )
+    respx.get("https://ip111.cn/").mock(return_value=httpx.Response(200, text=html))
+    assert net.get_geo_info() == "美国洛杉矶|198.46.142.117"
+
+
+@respx.mock
+def test_get_geo_info_empty_when_no_data_line() -> None:
+    # 只有标签、没有数据行 → 返回 ""（旧解析会误把标签当数据）。
+    html = "<html><body>\n<p>这是您访问国内网站所使用的IP</p>\n</body></html>"
+    respx.get("https://ip111.cn/").mock(return_value=httpx.Response(200, text=html))
+    assert net.get_geo_info() == ""
 
 
 @respx.mock
