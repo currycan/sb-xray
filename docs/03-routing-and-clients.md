@@ -475,8 +475,10 @@ flowchart TD
         F1{"Pipeline.format: 预格式化判断\n（已有 Emoji 旗帜且含 ✈？）"}
         F1 -- "是（快速通道）" --> PF["processPreFormatted\n① 清理（跳过分隔符规则）\n② standardizeRegion 英文→中文\n③ 清理残留分隔符 |/- 等"]
         F1 -- "否（完整流水线）" --> PR["processRawNode\n① 剥离旗帜 Emoji\n② cleanName 全规则清洗\n③ standardizeRegion\n④ splitAndDedup 拆分去重\n⑤ promoteRegion 地区前置\n⑥ detectFlag 自动标旗"]
-        PF --> S
-        PR --> S
+        PF --> GF
+        PR --> GF
+        GF{"Pipeline.geoFallback: 仅对识别失败(🏳️)的节点\n按 server 真实 IP 经 ip-api 兜底判国\n（异步·可选·失败保持 🏳️）"}
+        GF --> S
         S["Pipeline.sort: 按 ALL_REGIONS 优先级排序"] --> R
         R["Pipeline.renumber: 两遍扫描\n第一遍: 构建最终名称\n第二遍: 同名追加 01/02…"]
     end
@@ -484,6 +486,7 @@ flowchart TD
     R --> Z["输出: 标准化的 Proxy 节点列表"]
 
     style A fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    style GF fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
     style Z fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
 ```
 
@@ -496,7 +499,8 @@ flowchart TD
 | **地名统一归化**     | `Utils.standardizeRegion`  | 将 `Hong Kong`/`HK`/`深港`/`HKT` 统一为 `香港`；贯穿原始通道和预格式化通道                                 |
 | **拆分与去重**       | `Utils.splitAndDedup`      | 按分隔符拆分后去重；自动展开组合地名（如 `香港hkt2直连` → `香港` + `直连`，剥离 ISP 遗留孤立序号）         |
 | **地区前置**         | `Utils.promoteRegion`      | 将地区关键词移动到 parts 数组首位；返回新数组，不修改原数组                                                |
-| **视觉美化**         | `Utils.detectFlag`         | 自动挂载国旗 Emoji，格式化为 `Flag Protocol ✈ Region ✈ Detail`                                             |
+| **视觉美化**         | `Utils.detectFlag`         | 按名称自动挂载国旗 Emoji，格式化为 `Flag Protocol ✈ Region ✈ Detail`                                       |
+| **IP 地理兜底**      | `Pipeline.geoFallback`     | 仅对名称识别失败（🏳️）的节点，按其 `server`/`address` 真实 IP 经 ip-api 查国补旗；异步、可选、失败保持 🏳️ |
 | **协议安全移除**     | `processRawNode`           | 使用 `\b词边界\b` 正则移除协议名残留，防止 `ss` 误删 `Russia` 中的子串                                     |
 | **协议精简**         | `Utils.shouldHideProtocol` | 有 `Reality` 则隐藏 `vless`，避免冗余标签                                                                  |
 | **同名去重编号**     | `Pipeline.renumber`        | 两遍扫描：第一遍生成所有最终名称，第二遍统计重名并追加零填充序号（`01`/`02`…）                             |
@@ -531,6 +535,37 @@ flowchart TD
 | `🇬🇧 Great Britain \| ✈ 高速`      |  ss   | `🇬🇧 ss ✈ 英国 ✈ 高速`          |
 | `🇯🇵 Japan \| ✈ AI`                | vless | `🇯🇵 vless ✈ 日本 ✈ AI`         |
 
+#### IP 地理兜底（名称识别失败时）
+
+> 📘 **做什么**：上面的标旗全靠**名称字符串**猜国家。当节点名里没有任何地理线索时（典型：节点名是一串纯主机名 `rackenerd2.ansandy.com`，或纯 IP），`detectFlag` 只能给出默认白旗 🏳️。`Pipeline.geoFallback` 在这一步**按节点真实落点补救**：取该节点的 `server`/`address`，查它的真实地理位置，把 🏳️ 换成正确国旗并把国名前置为地区键。**名称已识别出国旗的节点完全不经过此阶段**，行为零变化。
+
+📘 **何时用**：仅用于名称识别失败的少数节点；命名规范的订阅几乎不触发它。
+
+🔧 **怎么开 / 默认姿态**：内置默认生效，无需配置。数据源是公共服务 `ip-api.com`，按落点类型自动分流：
+
+| 节点 `server` 形态 | 查询方式 | 结果 |
+| :--- | :--- | :--- |
+| IP 字面量（IPv4 / IPv6） | ip-api **批量**接口（≤100/请求） | 命中 → 按 ISO 国家码补旗 |
+| 公网可解析域名 | ip-api **单条**接口（服务端自有 DNS 解析） | 命中 → 按 ISO 国家码补旗 |
+| 私有 / 公网不可解析域名 | 查询失败 | **保持 🏳️**（不报错） |
+
+结果带**缓存**（命中 7 天、失败 1 天负缓存），二次刷新不重复请求；单轮未命中缓存的查询有上限（超出本轮保持 🏳️ 并打印日志）。整段**异步**执行；查询失败、限速、无网络或运行环境不支持 HTTP 时**一律优雅降级为保持 🏳️**，绝不影响其余节点。
+
+> 🔬 **深挖：兜底判的是「入口服务器」的地理位置**。它定位的是 `server` 这台机器的真实归属——对直连节点（如自建 VPS）准确;但对 **CDN 套娃 / 中转 / IP4P** 节点，入口 IP 的国家≠该节点想表达的目标地区。这类节点应当继续靠**名称**表达地区（名称已识别就不会进兜底）。换言之：名称为主、IP 地理只补名称的空缺。
+
+🔧 **如何验证**：
+
+```bash
+# 1) 离线自测（mock 网络，验证补旗 + 优雅降级 + 命名节点零回归 + 缓存）
+#    期望：9 passed, 0 failed
+node sources/hack/rename.test.js
+
+# 2) 真机：在 Sub-Store 脚本编辑界面点击「预览」，
+#    观察一个纯 IP / 纯主机名节点是否从 🏳️ 变为正确国旗。
+```
+
+🔧 **故障排查**：某节点始终保持 🏳️，常见原因——其 `server` 是公网不可解析的私有域名（对外无真实 IP 可查）；ip-api 触发限速；运行环境无外网或不支持脚本发起 HTTP。这类情况按设计保持 🏳️，可改为给该节点名称补一个地区词解决。
+
 ### 3.4 部署方式
 
 1. 进入 Sub-Store 网页端控制台
@@ -550,6 +585,8 @@ flowchart TD
 ```
 
 **新增国旗规则**：`FlagRules` 数组中的手动规则（繁体/异体字/城市名）优先级高于 `CountryDB` 自动生成的规则，复杂匹配在此处添加。
+
+**调整 IP 地理兜底**：相关常量集中在 `GeoLookup` 对象——`MAX_LOOKUPS`（单轮查询上限）、`BATCH_SIZE`、`TIMEOUT`、`CACHE_TTL`/`NEG_TTL`（缓存时长）。换数据源只需改 `API_BATCH`/`API_SINGLE` 与 `_queryBatch`/`_querySingle` 的解析。ISO 国家码→旗帜/中文名由 `Constants.CODE_MAP`（从 `CountryDB` 的 `code` 字段派生）提供，无需单独维护。
 
 **调试重命名结果**：在 Sub-Store 脚本编辑界面点击"预览"，可实时看到每个节点的清洗前后对比。
 

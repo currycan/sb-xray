@@ -441,10 +441,13 @@ const FlagRules = [
 (function initFlagRules() {
     const escapeRegExp = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const flagMap = {};
+    const codeMap = {};
 
     CountryDB.forEach(item => {
         if (item.name) flagMap[item.name] = item.flag;
         if (item.full) flagMap[item.full] = item.flag;
+        // ISO alpha-2 → { flag, name }：供 §7.5 IP 地理兜底把 API 返回的 countryCode 映射回旗帜/中文名
+        if (item.code) codeMap[item.code.toUpperCase()] = { flag: item.flag, name: item.name };
 
         const pattern = `(${escapeRegExp(item.name)}|${escapeRegExp(item.full)})`;
         FlagRules.push({ regex: new RegExp(pattern, 'i'), emoji: item.flag });
@@ -453,6 +456,7 @@ const FlagRules = [
     // 兜底匹配：关键词按长度降序，避免短词先匹配
     Constants.SORTED_COUNTRY_KEYS = Object.keys(flagMap).sort((a, b) => b.length - a.length);
     Constants.COUNTRY_MAP = flagMap;
+    Constants.CODE_MAP = codeMap;
 
     // 缓存全部地区键（优先级地区 + RegionMap 其余地区），避免函数内重复构建
     Constants.ALL_REGIONS = [
@@ -604,6 +608,152 @@ const Utils = {
             }
         }
         return '🏳️';
+    },
+};
+
+// ── §7.5  IP 地理兜底 (GeoLookup) ─────────────────────────────────────────────
+// 仅对名称识别失败（detectFlag 返回 🏳️）的节点，按其 server/address 的真实地理位置兜底判国。
+// 数据源 ip-api.com：IP 字面量走 batch 接口（≤100/请求），公网可解析域名走单条接口
+//   （服务端自有 DNS 解析）；私有 / 公网不可解析的域名查询失败 → 优雅保持 🏳️。
+// 运行时依赖 Sub-Store(Node) 全局 $（$.http）与 scriptResourceCache；二者缺失时
+//   （离线 / 非 Sub-Store 环境 / 本地测试）整体降级为纯名称行为，绝不抛出。
+
+const GeoLookup = {
+    API_BATCH: 'http://ip-api.com/batch?fields=status,countryCode,query',
+    API_SINGLE: 'http://ip-api.com/json/',
+    SINGLE_FIELDS: '?fields=status,countryCode,query',
+    BATCH_SIZE: 100,          // ip-api 批量接口单次上限
+    MAX_LOOKUPS: 300,         // 单轮未命中缓存的查询上限，超出保持 🏳️（带日志，无静默截断）
+    TIMEOUT: 5000,
+    CACHE_TTL: 7 * 24 * 3600 * 1000,   // 命中结果缓存 7 天
+    NEG_TTL: 30 * 60 * 1000,           // 失败负缓存仅 30 分钟：避免每轮重复请求，又让限速/抖动等瞬时失败快速恢复
+    CACHE_PREFIX: 'rename-geo:',
+
+    /**
+     * 规整 server 为可查询的纯主机：剥离端口、去 [IPv6] 方括号。
+     * 节点 server 可能形如 host:port / [v6]:port / 1.2.3.4 / 域名。
+     */
+    normalizeHost: (raw) => {
+        let s = String(raw == null ? '' : raw).trim();
+        const bracket = s.match(/^\[(.+?)\](?::\d+)?$/);   // [v6] 或 [v6]:port
+        if (bracket) return bracket[1];
+        // host:port（仅一个冒号且尾部为端口号）→ 去端口；裸 IPv6（多冒号）不动
+        if ((s.match(/:/g) || []).length === 1) {
+            const hp = s.match(/^(.+):\d{1,5}$/);
+            if (hp) return hp[1];
+        }
+        return s;
+    },
+
+    /** 是否为 IP 字面量（IPv4 点分 或 含冒号的 IPv6）——决定走 batch 还是单条 */
+    isIpLiteral: (s) => /^\d{1,3}(\.\d{1,3}){3}$/.test(s) || s.includes(':'),
+
+    /** 运行时是否具备联网能力（$ 与 $.http 都在） */
+    hasHttp: () => {
+        try { return typeof $ !== 'undefined' && !!$ && !!$.http; } catch (_) { return false; }
+    },
+
+    /** 缓存读（typeof 守卫；缺失或异常返回 undefined） */
+    cacheGet: (key) => {
+        try {
+            if (typeof scriptResourceCache === 'undefined' || !scriptResourceCache) return undefined;
+            return scriptResourceCache.get(GeoLookup.CACHE_PREFIX + key);
+        } catch (_) { return undefined; }
+    },
+
+    /** 缓存写（typeof 守卫；空字符串表示“已知查询失败”的负缓存） */
+    cacheSet: (key, value, ttl) => {
+        try {
+            if (typeof scriptResourceCache === 'undefined' || !scriptResourceCache) return;
+            scriptResourceCache.set(GeoLookup.CACHE_PREFIX + key, value, ttl);
+        } catch (_) { /* 缓存不可用不影响主流程 */ }
+    },
+
+    /** 单条接口查询一个（公网可解析）域名 → countryCode 或 ''（失败） */
+    _querySingle: async (host) => {
+        try {
+            const { body } = await $.http.get({
+                url: GeoLookup.API_SINGLE + encodeURIComponent(host) + GeoLookup.SINGLE_FIELDS,
+                timeout: GeoLookup.TIMEOUT,
+            });
+            const data = JSON.parse(body);
+            return (data && data.status === 'success' && data.countryCode) ? data.countryCode : '';
+        } catch (_) { return ''; }
+    },
+
+    /** 批量接口查询一组 IP → { query: countryCode }（失败项为 ''） */
+    _queryBatch: async (ips) => {
+        const out = {};
+        try {
+            const { body } = await $.http.post({
+                url: GeoLookup.API_BATCH,
+                headers: { 'content-type': 'application/json' },
+                timeout: GeoLookup.TIMEOUT,
+                body: JSON.stringify(ips),
+            });
+            const arr = JSON.parse(body);
+            if (Array.isArray(arr)) {
+                for (const r of arr) {
+                    if (r && r.query) out[r.query] = (r.status === 'success' && r.countryCode) ? r.countryCode : '';
+                }
+            }
+        } catch (_) { /* 整片失败 → 留空，各项保持 🏳️ */ }
+        return out;
+    },
+
+    /**
+     * 查询一组 server（IP 或域名）→ Map<server, countryCode>。
+     * 先吃缓存；未命中的按 IP / 域名分流查询并回写缓存（含负缓存）。
+     * 无联网能力或查询失败时，该项不进结果（调用方据此保持 🏳️）。
+     */
+    lookup: async (servers) => {
+        const result = new Map();
+        const uniq = [...new Set((servers || []).filter(Boolean))];
+
+        // 先吃缓存：命中正值入结果，命中负值（''）跳过，未命中入待查
+        const misses = [];
+        for (const s of uniq) {
+            const cached = GeoLookup.cacheGet(s);
+            if (cached !== undefined && cached !== null) {
+                if (cached) result.set(s, cached);
+            } else {
+                misses.push(s);
+            }
+        }
+
+        if (!GeoLookup.hasHttp() || misses.length === 0) return result;
+
+        // 容量上限：超出部分本轮不查（保持 🏳️），显式日志，避免静默截断
+        let toQuery = misses;
+        if (misses.length > GeoLookup.MAX_LOOKUPS) {
+            toQuery = misses.slice(0, GeoLookup.MAX_LOOKUPS);
+            try {
+                console.log(`[rename.js] geo 兜底：本轮 ${misses.length} 个待查超过上限 ${GeoLookup.MAX_LOOKUPS}，剩余 ${misses.length - GeoLookup.MAX_LOOKUPS} 个本轮保持 🏳️`);
+            } catch (_) { /* 无 console 忽略 */ }
+        }
+
+        const ips = toQuery.filter(GeoLookup.isIpLiteral);
+        const domains = toQuery.filter((s) => !GeoLookup.isIpLiteral(s));
+
+        // IP：分片批量查询
+        for (let i = 0; i < ips.length; i += GeoLookup.BATCH_SIZE) {
+            const chunk = ips.slice(i, i + GeoLookup.BATCH_SIZE);
+            const map = await GeoLookup._queryBatch(chunk);
+            for (const ip of chunk) {
+                const cc = map[ip] || '';
+                if (cc) result.set(ip, cc);
+                GeoLookup.cacheSet(ip, cc, cc ? GeoLookup.CACHE_TTL : GeoLookup.NEG_TTL);
+            }
+        }
+
+        // 域名：逐个走单条接口（服务端解析，绕开本地 fake-ip / 私有 DNS）
+        for (const host of domains) {
+            const cc = await GeoLookup._querySingle(host);
+            if (cc) result.set(host, cc);
+            GeoLookup.cacheSet(host, cc, cc ? GeoLookup.CACHE_TTL : GeoLookup.NEG_TTL);
+        }
+
+        return result;
     },
 };
 
@@ -798,6 +948,42 @@ const Pipeline = {
         return Pipeline._processRawNode(p, protocol);
     }),
 
+    /** 阶段 1.5: IP 地理兜底（仅对名称识别失败的 🏳️ 节点）
+     *  按 server/address 的真实地理位置补旗，名称已识别的节点完全不受影响。
+     *  依赖: GeoLookup.lookup, Constants.CODE_MAP, Constants.SEPARATOR */
+    geoFallback: async (proxies) => {
+        // 预格式化节点自带真实国旗，不会是 🏳️；只处理 raw 节点中识别失败且有 server 的
+        const pending = proxies.filter(p => p && p.flag === '🏳️' && (p.server || p.address));
+        if (pending.length === 0) return proxies;
+
+        const codeMap = Constants.CODE_MAP || {};
+        const hostOf = (p) => GeoLookup.normalizeHost(p.server || p.address);
+        let resolved;
+        try {
+            resolved = await GeoLookup.lookup(pending.map(hostOf));
+        } catch (_) {
+            return proxies;   // 兜底整体失败绝不影响主流程
+        }
+
+        for (const p of pending) {
+            const cc = resolved.get(hostOf(p));
+            const info = cc && codeMap[cc.toUpperCase()];
+            if (!info) continue;   // 查不到（私有/不可解析/失败）→ 保持 🏳️
+
+            p.flag = info.flag;
+            // 把中文国名前置进 processedName，使 sort/renumber 将其当作地区键处理，
+            // 产出如「🇺🇸 vless ✈ 美国 ✈ rackenerd2.ansandy.com」。保留可能存在的 IPv6 前缀。
+            let pn = p.processedName || '';
+            let ipv6 = '';
+            const m = pn.match(/^IPv6\s+/i);
+            if (m) { ipv6 = 'IPv6 '; pn = pn.slice(m[0].length); }
+            p.processedName = `${ipv6}${info.name}${pn ? Constants.SEPARATOR + pn : ''}`;
+            // 同步 p.name，保证 sort 阶段 getPriority 能命中地区（renumber 仍据 processedName 重建最终名）
+            p.name = `${p.flag} ${p.protocol ? p.protocol + ' ' : ''}${p.processedName}`;
+        }
+        return proxies;
+    },
+
     /** 阶段 2: 排序（地区优先级 → 序号）
      *  依赖: Utils.getPriority, Utils.getNum */
     sort: (proxies) => proxies.sort((a, b) => {
@@ -844,11 +1030,15 @@ const Pipeline = {
 /**
  * Sub-Store 脚本入口
  * @param {Array} proxies - 节点数组
- * @returns {Array} 格式化后的节点数组
+ * @returns {Promise<Array>} 格式化后的节点数组
+ *
+ * async：geoFallback 阶段需对名称识别失败的节点发起 IP 地理查询（await）。
+ * 无 🏳️ 节点或无联网能力时该阶段零网络早退，行为等价于纯名称管线。
  */
-function operator(proxies) {
+async function operator(proxies) {
     const filtered  = Pipeline.filter(proxies);
-    const formatted = Pipeline.format(filtered);
+    let formatted   = Pipeline.format(filtered);
+    formatted       = await Pipeline.geoFallback(formatted);
     const sorted    = Pipeline.sort(formatted);
     return Pipeline.renumber(sorted);
 }

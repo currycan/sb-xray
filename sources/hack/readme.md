@@ -61,3 +61,10 @@ https://hk.gh-proxy.org/https://raw.githubusercontent.com/currycan/sb-xray/main/
 ```
 https://raw.githubusercontent.com/Keywos/rule/main/rename.js#name=Nexitally&fgf=|&blkey=Emby+GPT>OpenAI&nm
 ```
+
+**标旗：名称优先 + IP 地理兜底。** 默认按节点名称识别国旗；名称无地理线索（纯主机名 / 纯 IP）而识别为 🏳️ 时，自动按节点 `server` 的真实 IP 经 `ip-api.com` 兜底判国。兜底为异步、可选、带缓存，失败/无网时优雅保持 🏳️。机制与排障见 [docs/03 §3.3「IP 地理兜底」](../../docs/03-routing-and-clients.md#ip-地理兜底名称识别失败时)。
+
+自测（零依赖，node 直跑，期望 `9 passed`）：
+```
+node sources/hack/rename.test.js
+```
