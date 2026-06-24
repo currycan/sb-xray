@@ -277,12 +277,14 @@ def test_probe_base_env_persists_fields(
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(ep.sbnet, "get_geo_info", lambda: "Tokyo JP|8.8.8.8")
+    monkeypatch.setattr(ep.sbnet, "get_geo_cc", lambda: "JP")
     monkeypatch.setattr(ep.sbnet, "check_ip_type", lambda: "isp")
     monkeypatch.setattr(ep.sbnet, "check_brutal_status", lambda: "true")
     monkeypatch.setattr(ep.sbnet, "probe_ip_sb", lambda: (True, False))
     ep.probe_base_env(EnvManager(tmp_env_file))
     content = tmp_env_file.read_text(encoding="utf-8")
     assert "export GEOIP_INFO='Tokyo JP|8.8.8.8'" in content
+    assert "export GEOIP_CC='JP'" in content
     assert "export IP_TYPE='isp'" in content
     assert "export IS_BRUTAL='true'" in content
     assert os.environ["IP_TYPE"] == "isp"

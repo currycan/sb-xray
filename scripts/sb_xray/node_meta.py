@@ -34,7 +34,10 @@ def derive_and_export() -> None:
     node_name = domain.split(".", 1)[0] if domain else ""
     region_info, _, node_ip = geoip.partition("|")
 
-    flag = display.get_flag_emoji(region_info)
+    # ISO country code is the primary flag source (GEOIP_CC); the region-string
+    # substring match is a fallback for migration-era nodes with no GEOIP_CC.
+    cc = os.environ.get("GEOIP_CC", "")
+    flag = display.flag_from_iso(cc) or display.get_flag_emoji(region_info)
     flag_prefix = f"{flag} " if flag else ""
 
     os.environ["NODE_NAME"] = node_name

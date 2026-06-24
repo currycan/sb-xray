@@ -26,7 +26,7 @@ from sb_xray import display
         # 子串消歧：印度尼西亚 必须判为印尼，而非印度
         ("印度尼西亚雅加达|1.2.3.4", "🇮🇩"),
         ("印度孟买|1.2.3.4", "🇮🇳"),
-        # 扩充覆盖（ip111.cn 输出形如「<国><城>」）
+        # 扩充覆盖（region 文本形如「<国><城>」，回退路径）
         ("西班牙马德里|1.2.3.4", "🇪🇸"),
         ("波兰华沙|1.2.3.4", "🇵🇱"),
         ("墨西哥墨西哥城|1.2.3.4", "🇲🇽"),
@@ -39,6 +39,24 @@ from sb_xray import display
 )
 def test_get_flag_emoji(info: str, expected: str) -> None:
     assert display.get_flag_emoji(info) == expected
+
+
+@pytest.mark.parametrize(
+    "cc,expected",
+    [
+        ("US", "🇺🇸"),
+        ("us", "🇺🇸"),  # case-insensitive
+        ("JP", "🇯🇵"),
+        ("HK", "🇭🇰"),
+        ("DE", "🇩🇪"),
+        ("", ""),  # empty
+        ("U", ""),  # too short
+        ("USA", ""),  # too long
+        ("U1", ""),  # non-alpha
+    ],
+)
+def test_flag_from_iso(cc: str, expected: str) -> None:
+    assert display.flag_from_iso(cc) == expected
 
 
 def test_tls_ping_diagnose_calls_xray(

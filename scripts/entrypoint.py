@@ -70,6 +70,7 @@ _SUMMARY_KEYS = (
     "DOMAIN",
     "CDNDOMAIN",
     "GEOIP_INFO",
+    "GEOIP_CC",
     "IP_TYPE",
     "ISP_TAG",
     "ENABLE_REVERSE",
@@ -367,15 +368,16 @@ def probe_base_env(mgr: EnvManager) -> None:
         ("SUBSCRIBE_TOKEN", lambda: sbrand.generate("path", 32)),
         ("STRATEGY", _strategy),
         ("GEOIP_INFO", sbnet.get_geo_info),
+        ("GEOIP_CC", sbnet.get_geo_cc),
         ("IS_BRUTAL", sbnet.check_brutal_status),
         ("SUB_STORE_FRONTEND_BACKEND_PATH", lambda: "/" + sbrand.generate("path", 32)),
         ("IP_TYPE", sbnet.check_ip_type),
     )
-    # GEOIP_INFO is probed from a remote page (ip111.cn) and can transiently
-    # come back empty (network blip, parser regression, offline boot). Such an
-    # empty result must never stick in the volume-backed env file and suppress
-    # every later attempt — regenerate it whenever the persisted value is empty.
-    _regen_if_empty = {"GEOIP_INFO"}
+    # GEOIP_INFO / GEOIP_CC are probed from ipapi.is and can transiently come
+    # back empty (network blip, API hiccup, offline boot). Such an empty result
+    # must never stick in the volume-backed env file and suppress every later
+    # attempt — regenerate it whenever the persisted value is empty.
+    _regen_if_empty = {"GEOIP_INFO", "GEOIP_CC"}
     for key, gen in specs:
         mgr.ensure_var(key, generator=gen, regenerate_if_empty=key in _regen_if_empty)
 

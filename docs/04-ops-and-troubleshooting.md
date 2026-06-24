@@ -289,11 +289,14 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 | `DUFS_PORT` | 随机高位端口 | Dufs 内部监听端口 |
 | `SUB_STORE_FRONTEND_BACKEND_PATH` | 随机 32 位路径 | Sub-Store 后端 API 路径（每次部署唯一，防扫描） |
 | `STRATEGY` | API 检测 | 双栈 / 纯 IPv4 / 纯 IPv6 |
-| `GEOIP_INFO` | API 检测 | GeoIP 归属字符串 |
+| `GEOIP_INFO` | ipapi.is | 落地归属串 `<国>\|<ip>`（国家级中文名） |
+| `GEOIP_CC` | ipapi.is | 落地 ISO 国家码（如 `US`）；国旗与受限地区判定的主真相源 |
 | `IS_BRUTAL` | 内核探测 | BBR/Brutal 支持状态 |
-| `IP_TYPE` | API 检测 | `isp` / `hosting` 等 |
+| `IP_TYPE` | ipapi.is | `isp` / `hosting` 等 |
 
-> 📘 **`GEOIP_INFO` 为空时自动重探**：表中变量一旦计算成功即永久缓存，唯 `GEOIP_INFO` 例外。它由远端页面探测落地国家／城市，可能因网络抖动等临时原因失败而得到空值；为避免空值被永久缓存后压制后续探测，**持久化值为空时每次启动都会重新探测，且空结果不写入缓存**——探测成功即正常缓存并保持稳定。实践含义：某节点若曾因探测失败导致节点名无国旗（`FLAG_PREFIX` 为空），重启容器即可自愈，无需手动删 `/.env/sb-xray`。
+> 📘 **落地探测复用一次抓取**：`GEOIP_INFO` / `GEOIP_CC` / `IP_TYPE` 同源于一次 `api.ipapi.is` 抓取（结果缓存在 `/tmp/ipapi.json`，一次启动只请求一次）。国旗由 ISO 码 `GEOIP_CC` 经码点直接生成。
+
+> 📘 **`GEOIP_INFO` / `GEOIP_CC` 为空时自动重探**：表中变量一旦计算成功即永久缓存，唯这两个探测类变量例外。它们由 `api.ipapi.is` 探测落地国，可能因网络抖动等临时原因失败而得到空值；为避免空值被永久缓存后压制后续探测，**持久化值为空时每次启动都会重新探测，且空结果不写入缓存**——探测成功即正常缓存并保持稳定。实践含义：某节点若曾因探测失败导致节点名无国旗（`FLAG_PREFIX` 为空），重启容器即可自愈，无需手动删 `/.env/sb-xray`。
 
 ### 2.5 自动检测变量（`/.env/status`，可清除重新检测）
 
@@ -929,21 +932,21 @@ docker compose restart
 
 **现象**：分享链接导入客户端后，本机节点名只有裸协议名（`Hysteria2`、`TUIC`、`XTLS-Reality`…），缺少 `🇺🇸` / `🇯🇵` 等国旗前缀。
 
-**根本原因**：本机节点的国旗由 `GEOIP_INFO`（远端探测的落地国家／城市）经 `node_meta.derive_and_export` 派生为 `FLAG_PREFIX`。`GEOIP_INFO` 一旦探测落空（探测站点临时不可达、解析异常等），空值会被持久化进卷 `/.env/sb-xray`，并随卷跨镜像升级保留——即便后续探测能力已恢复，节点名仍旧无旗。
+**根本原因**：本机节点的国旗由 `GEOIP_CC`（`api.ipapi.is` 探测的落地 ISO 国家码）经 `node_meta.derive_and_export` 派生为 `FLAG_PREFIX`。`GEOIP_CC` / `GEOIP_INFO` 一旦探测落空（探测站点临时不可达等），空值会被持久化进卷 `/.env/sb-xray`，并随卷跨镜像升级保留——即便后续探测能力已恢复，节点名仍旧无旗。
 
-**自愈**：`GEOIP_INFO` 的空持久化值会在每次启动重新探测（见 §2.4），因此**重启容器即可自愈**：
+**自愈**：`GEOIP_CC` / `GEOIP_INFO` 的空持久化值会在每次启动重新探测（见 §2.4），因此**重启容器即可自愈**：
 
 ```bash
 docker compose restart
-# 期望：GEOIP_INFO 已填充为「<国><城>|<ip>」，节点名带上国旗前缀
-docker exec sb-xray grep GEOIP_INFO /.env/sb-xray
+# 期望：GEOIP_CC 已填充为 ISO 码（如 US）、GEOIP_INFO 为「<国>|<ip>」，节点名带上国旗前缀
+docker exec sb-xray grep -E 'GEOIP_CC|GEOIP_INFO' /.env/sb-xray
 ```
 
 若重启后仍为空，则是该节点到探测站点的出网受限（网络层问题，非缓存），手动验证可达性：
 
 ```bash
 # 期望 HTTP=200；非 200 说明该节点访问探测站点受限
-docker exec sb-xray curl -s -o /dev/null -w 'HTTP=%{http_code}\n' --max-time 12 https://ip111.cn/
+docker exec sb-xray curl -s -o /dev/null -w 'HTTP=%{http_code}\n' --max-time 12 https://api.ipapi.is/
 ```
 
 ---

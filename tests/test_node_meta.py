@@ -12,6 +12,7 @@ def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "DOMAIN",
         "GEOIP_INFO",
+        "GEOIP_CC",
         "ISP_TAG",
         "IS_8K_SMOOTH",
         "IP_TYPE",
@@ -44,6 +45,17 @@ def test_flag_prefix_empty_when_region_unknown(monkeypatch: pytest.MonkeyPatch) 
     node_meta.derive_and_export()
     assert os.environ["FLAG_INFO"] == ""
     assert os.environ["FLAG_PREFIX"] == ""
+
+
+def test_iso_cc_is_primary_flag_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    # GEOIP_CC (ISO) drives the flag even when the region string is unmatched.
+    _clear(monkeypatch)
+    monkeypatch.setenv("DOMAIN", "vpn.example.com")
+    monkeypatch.setenv("GEOIP_INFO", "Neverland|198.51.100.9")
+    monkeypatch.setenv("GEOIP_CC", "US")
+    node_meta.derive_and_export()
+    assert os.environ["FLAG_INFO"] == "🇺🇸"
+    assert os.environ["FLAG_PREFIX"] == "🇺🇸 "
 
 
 def test_fast_domain_prefix_prepends_speed_tag(monkeypatch: pytest.MonkeyPatch) -> None:

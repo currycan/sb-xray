@@ -6,7 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import httpx
 
@@ -14,19 +14,35 @@ from sb_xray import http as sbhttp
 
 _IPAPI_URL: Final[str] = "https://api.ipapi.is/"
 _IP_SB_V4: Final[str] = "https://api.ip.sb/ip"
-_IP111_URL: Final[str] = "https://ip111.cn/"
 _BRUTAL_MODULE_PATH: Path = Path("/sys/module/brutal")
 
+# 落地国判定的单一真相源是 ISO alpha-2 国家码（来自 ipapi.is）。名称正则仅作
+# 兜底——迁移期旧节点或探测失败、GEOIP_CC 为空时，回退按 GEOIP_INFO 文本匹配。
+_RESTRICTED_CC: Final[frozenset[str]] = frozenset({"CN", "HK", "MO", "RU"})
 _RESTRICTED_RE: Final[re.Pattern[str]] = re.compile(
     r"(?i)(香港|HongKong|Hong Kong|HK|中国|China|CN|俄罗斯|Russia|RU|澳门|Macao|MO)"
 )
 
-# 数据行首 token 必须像一个 IP（IPv4 点分 或 含冒号的 IPv6），用于在 ip111.cn
-# 页面里把真正的 `<ip> <国> <城>` 行与纯标签行区分开。
-_IP_RE: Final[re.Pattern[str]] = re.compile(
-    r"^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9A-Fa-f:]+:[0-9A-Fa-f:]+$"
-)
-_GEO_LABEL: Final[str] = "这是您访问国内网站所使用的IP"
+# ISO alpha-2 → 中文国名。覆盖常见 VPS/机场落地国；未命中时回退 ipapi.is 的英文
+# country 字段，保证 region 只要探测成功就不为空。
+_CC_TO_ZH: Final[dict[str, str]] = {
+    "US": "美国", "JP": "日本", "HK": "香港", "TW": "台湾", "SG": "新加坡",
+    "KR": "韩国", "GB": "英国", "DE": "德国", "FR": "法国", "CA": "加拿大",
+    "AU": "澳大利亚", "RU": "俄罗斯", "ID": "印度尼西亚", "IN": "印度",
+    "NL": "荷兰", "PH": "菲律宾", "MY": "马来西亚", "TH": "泰国", "VN": "越南",
+    "TR": "土耳其", "AR": "阿根廷", "BR": "巴西", "ZA": "南非", "MO": "澳门",
+    "CH": "瑞士", "SE": "瑞典", "IT": "意大利", "IE": "爱尔兰", "TM": "土库曼斯坦",
+    "ES": "西班牙", "PT": "葡萄牙", "PL": "波兰", "UA": "乌克兰", "MX": "墨西哥",
+    "FI": "芬兰", "NO": "挪威", "DK": "丹麦", "BE": "比利时", "AT": "奥地利",
+    "CZ": "捷克", "RO": "罗马尼亚", "HU": "匈牙利", "GR": "希腊", "LU": "卢森堡",
+    "IS": "冰岛", "IL": "以色列", "AE": "阿联酋", "SA": "沙特", "QA": "卡塔尔",
+    "KZ": "哈萨克斯坦", "PK": "巴基斯坦", "BD": "孟加拉", "LK": "斯里兰卡",
+    "KH": "柬埔寨", "MM": "缅甸", "LA": "老挝", "NP": "尼泊尔", "MN": "蒙古",
+    "CL": "智利", "CO": "哥伦比亚", "PE": "秘鲁", "NZ": "新西兰", "NG": "尼日利亚",
+    "KE": "肯尼亚", "EG": "埃及", "MA": "摩洛哥", "RS": "塞尔维亚", "BG": "保加利亚",
+    "HR": "克罗地亚", "SK": "斯洛伐克", "SI": "斯洛文尼亚", "LT": "立陶宛",
+    "LV": "拉脱维亚", "EE": "爱沙尼亚", "CY": "塞浦路斯", "MT": "马耳他", "CN": "中国",
+}
 
 _DEFAULT_CACHE: Final[Path] = Path("/tmp/ipapi.json")
 
@@ -59,12 +75,14 @@ def probe_ip_sb() -> tuple[bool, bool]:
     return v4_ok, v6_ok
 
 
-def check_ip_type(*, cache_path: Path | None = None) -> str:
-    """Return the ASN type reported by ipapi.is.
+def _load_ipapi(cache_path: Path | None = None) -> dict[str, Any] | None:
+    """Fetch ipapi.is once, caching the raw JSON to ``cache_path``.
 
-    Caches the full JSON response at ``cache_path`` (defaults to
-    ``/tmp/ipapi.json``) to avoid hitting the API multiple times
-    during a single entrypoint run. Returns ``"unknown"`` on failure.
+    Shared by :func:`check_ip_type` and :func:`get_geo_info` /
+    :func:`get_geo_cc` so a single entrypoint run makes **one** request:
+    whichever runs first writes the cache (defaults to ``/tmp/ipapi.json``),
+    the rest read it. Returns the parsed dict, or ``None`` on
+    fetch/parse failure.
     """
     path = cache_path if cache_path is not None else _DEFAULT_CACHE
     if not path.exists():
@@ -75,64 +93,65 @@ def check_ip_type(*, cache_path: Path | None = None) -> str:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(resp.text, encoding="utf-8")
         except httpx.HTTPError:
-            return "unknown"
+            return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        asn = data.get("asn") or {}
-        return str(asn.get("type") or "unknown")
-    except (json.JSONDecodeError, AttributeError):
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def check_ip_type(*, cache_path: Path | None = None) -> str:
+    """Return the ASN type reported by ipapi.is (``"unknown"`` on failure)."""
+    data = _load_ipapi(cache_path)
+    if data is None:
         return "unknown"
+    asn = data.get("asn")
+    if isinstance(asn, dict) and asn.get("type"):
+        return str(asn["type"])
+    return "unknown"
 
 
-def _geo_from_tokens(parts: list[str]) -> str:
-    """`<国><城>|<ip>` from a whitespace-split data line, or "" if not a data line.
+def _ipapi_country_code(data: dict[str, Any]) -> str:
+    """ISO alpha-2 country code from an ipapi.is response.
 
-    A valid data line starts with an IP literal followed by ``<country> [city]``
-    (e.g. ``198.46.142.117 美国 洛杉矶``). The country alone is enough.
+    Tries ``location.country_code`` → ``datacenter.country`` →
+    ``asn.country`` (all verified to carry the ISO code). Returns "" if none.
     """
-    if len(parts) >= 2 and _IP_RE.match(parts[0]):
-        region = "".join(parts[1:3])
-        if region:
-            return f"{region}|{parts[0]}"
+    for section, key in (("location", "country_code"), ("datacenter", "country"), ("asn", "country")):
+        obj = data.get(section)
+        if isinstance(obj, dict) and obj.get(key):
+            return str(obj[key]).upper()
     return ""
+
+
+def get_geo_cc() -> str:
+    """ISO alpha-2 country code of this node's egress IP, or "" on failure."""
+    data = _load_ipapi()
+    return _ipapi_country_code(data) if data is not None else ""
 
 
 def get_geo_info() -> str:
-    """Extract `<region>|<ip>` from ip111.cn's landing page.
+    """`<region>|<ip>` for this node's egress IP, from ipapi.is.
 
-    ip111.cn renders the ``<ip> <country> <city>`` data and its label
-    (``这是您访问国内网站所使用的IP``) in **separate** elements, so after
-    stripping tags the data sits on its own line — typically the line *before*
-    the label. We locate the label, then read the adjacent data line (previous,
-    then next, then same-line as fallbacks). Returns "" on fetch failure or when
-    no data line is found.
+    ``region`` is a Chinese country name via :data:`_CC_TO_ZH`, falling back
+    to ipapi.is's English ``location.country``. Country-level granularity is
+    intentional: the node name carries only ``FLAG_PREFIX`` (now ISO-derived),
+    never the region text, so the city is not needed here. Returns "" on
+    fetch failure — :func:`EnvManager.ensure_var` with ``regenerate_if_empty``
+    keeps that empty value from being persisted, so the next boot retries.
     """
-    try:
-        with httpx.Client(
-            timeout=10.0,
-            follow_redirects=True,
-            headers={"User-Agent": sbhttp.DEFAULT_UA},
-        ) as client:
-            resp = client.get(_IP111_URL)
-            resp.raise_for_status()
-    except httpx.HTTPError:
+    data = _load_ipapi()
+    if data is None:
         return ""
-
-    plain = re.sub(r"<[^>]+>", " ", resp.text)
-    lines = [ln.strip() for ln in plain.splitlines() if ln.strip()]
-    for i, line in enumerate(lines):
-        if _GEO_LABEL not in line:
-            continue
-        candidates = [
-            lines[i - 1].split() if i > 0 else [],
-            lines[i + 1].split() if i + 1 < len(lines) else [],
-            line.replace(_GEO_LABEL, " ").split(),
-        ]
-        for parts in candidates:
-            geo = _geo_from_tokens(parts)
-            if geo:
-                return geo
-    return ""
+    cc = _ipapi_country_code(data)
+    ip = str(data.get("ip") or "")
+    loc = data.get("location")
+    en_country = str(loc.get("country")) if isinstance(loc, dict) and loc.get("country") else ""
+    region = _CC_TO_ZH.get(cc) or en_country or cc
+    if not region or not ip:
+        return ""
+    return f"{region}|{ip}"
 
 
 def check_brutal_status() -> str:
@@ -140,16 +159,26 @@ def check_brutal_status() -> str:
     return "true" if _BRUTAL_MODULE_PATH.is_dir() else "false"
 
 
-def is_restricted_region(info: str | None = None) -> bool:
-    """Match the Bash regex on ``GEOIP_INFO`` (CN/HK/MO/RU variants).
+def is_restricted_region(info: str | None = None, cc: str | None = None) -> bool:
+    """True for CN/HK/MO/RU landing regions.
 
-    ``info`` lets callers pass the value directly instead of round-tripping
-    through ``os.environ`` (avoids a thread-shared env mutation). When omitted,
-    the value is read from ``${GEOIP_INFO}`` for backward compatibility.
+    Resolution order:
+
+    1. Explicit ``cc`` (ISO alpha-2) → decided purely on it.
+    2. Explicit ``info`` → name regex on that value alone. Callers passing a
+       value want the decision made on *it*, not on ambient env (this is how
+       ``isp._restricted_by_geoip`` keeps its "no env round-trip" contract).
+    3. Neither given → read env: ``${GEOIP_CC}`` (ISO, authoritative) first,
+       then the ``${GEOIP_INFO}`` name regex as a migration-era fallback.
     """
-    if info is None:
-        info = os.environ.get("GEOIP_INFO", "")
-    return bool(_RESTRICTED_RE.search(info))
+    if cc:
+        return cc.upper() in _RESTRICTED_CC
+    if info is not None:
+        return bool(_RESTRICTED_RE.search(info))
+    cc_env = os.environ.get("GEOIP_CC", "")
+    if cc_env:
+        return cc_env.upper() in _RESTRICTED_CC
+    return bool(_RESTRICTED_RE.search(os.environ.get("GEOIP_INFO", "")))
 
 
 def get_fallback_proxy() -> str:

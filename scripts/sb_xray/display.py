@@ -46,8 +46,9 @@ RESET: Final = "\033[0m"
 _TPL_COLORS: Final = (BRIGHT_YELLOW, BRIGHT_MAGENTA, BRIGHT_GREEN, BRIGHT_BLUE, BRIGHT_RED)
 _ANSI_RE: Final = re.compile(r"\x1b\[[0-9;]*m")
 
-# 子串匹配表：region 文本（来自 ip111.cn 的 `<国><城>`，如「美国洛杉矶」）含任一
-# marker 即命中。顺序敏感——当一个国名是另一个的子串时，更长/更具体的必须排在前面
+# 子串匹配表（回退路径）：region 文本（中英文国/城名，如「美国洛杉矶」）含任一
+# marker 即命中。主路径是 flag_from_iso(ISO 码)；本表仅用于迁移期 GEOIP_CC 为空的
+# 旧节点。顺序敏感——当一个国名是另一个的子串时，更长/更具体的必须排在前面
 # （如「印度尼西亚/印尼」必须先于「印度」，否则「印度尼西亚」会被误判为印度）。
 _FLAG_MATRIX: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
     (("香港", "Hong Kong", "HongKong", "HK"), "🇭🇰"),
@@ -134,10 +135,27 @@ _FLAG_MATRIX: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
 _CLIENT_TEMPLATE_DIR: Final = Path("/templates/client_template")
 
 
+def flag_from_iso(cc: str) -> str:
+    """Flag emoji from an ISO 3166-1 alpha-2 country code via code points.
+
+    ``"US"`` → 🇺🇸 by mapping each ASCII letter to its Regional Indicator
+    Symbol (``A`` → U+1F1E6). This is the primary flag path now that geo
+    probing yields ISO codes; it makes :data:`_FLAG_MATRIX` substring matching
+    a fallback only. Returns "" for anything that isn't two ASCII letters.
+    """
+    if len(cc) != 2 or not cc.isascii() or not cc.isalpha():
+        return ""
+    cc = cc.upper()
+    base = ord("\U0001f1e6") - ord("A")
+    return chr(base + ord(cc[0])) + chr(base + ord(cc[1]))
+
+
 def get_flag_emoji(info: str) -> str:
     """Return a flag emoji derived from an IP-info / region string.
 
-    Returns "" when no match (matches the Bash default-case behavior).
+    Substring fallback over :data:`_FLAG_MATRIX`, kept for migration-era nodes
+    whose ``GEOIP_CC`` is empty (the ISO path :func:`flag_from_iso` is
+    preferred). Returns "" when no match (matches the Bash default-case).
     """
     for markers, flag in _FLAG_MATRIX:
         if any(marker in info for marker in markers):
