@@ -46,6 +46,13 @@ _CC_TO_ZH: Final[dict[str, str]] = {
 
 _DEFAULT_CACHE: Final[Path] = Path("/tmp/ipapi.json")
 
+# 二级回退 geo 源。ipapi.is 失败时改用 ip-api.com 拿 ISO 国家码（免费档 HTTP-only）。
+# 只取 status/countryCode/country(中文)/query(本机 IP)——不要城市。
+_IP_API_URL: Final[str] = (
+    "http://ip-api.com/json/?fields=status,countryCode,country,query&lang=zh-CN"
+)
+_DEFAULT_IP_API_CACHE: Final[Path] = Path("/tmp/ip-api.json")
+
 
 def detect_ip_strategy(*, v4_ok: bool, v6_ok: bool) -> str:
     """Classify dual-stack reachability.
@@ -125,33 +132,73 @@ def _ipapi_country_code(data: dict[str, Any]) -> str:
     return ""
 
 
+def _load_ip_api(cache_path: Path | None = None) -> dict[str, Any] | None:
+    """Fallback geo source (ip-api.com), cached separately from ipapi.is.
+
+    Only hit when ipapi.is fails to yield a country code. Caches the raw JSON
+    so repeated lookups in one boot make at most one request. Returns the
+    parsed dict, or ``None`` on fetch/parse failure.
+    """
+    path = cache_path if cache_path is not None else _DEFAULT_IP_API_CACHE
+    if not path.exists():
+        try:
+            with httpx.Client(timeout=5.0, headers={"User-Agent": sbhttp.DEFAULT_UA}) as client:
+                resp = client.get(_IP_API_URL)
+                resp.raise_for_status()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(resp.text, encoding="utf-8")
+        except httpx.HTTPError:
+            return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _resolve_geo() -> tuple[str, str]:
+    """``(cc, region)`` + node IP encoded as ``region|ip``-ready parts.
+
+    Returns ``(country_code, "<region>|<ip>")`` from ipapi.is, falling back to
+    ip-api.com when ipapi.is can't yield a country code. ``region`` is a
+    country-level Chinese name (no city) via :data:`_CC_TO_ZH`, falling back to
+    the source's own country name. Returns ``("", "")`` if both sources fail.
+    """
+    data = _load_ipapi()
+    if data is not None:
+        cc = _ipapi_country_code(data)
+        ip = str(data.get("ip") or "")
+        if cc and ip:
+            loc = data.get("location")
+            en = str(loc.get("country")) if isinstance(loc, dict) and loc.get("country") else ""
+            return cc, f"{_CC_TO_ZH.get(cc) or en or cc}|{ip}"
+
+    alt = _load_ip_api()
+    if alt is not None and alt.get("status") == "success":
+        cc = str(alt.get("countryCode") or "").upper()
+        ip = str(alt.get("query") or "")
+        if cc and ip:
+            zh = str(alt.get("country") or "")  # lang=zh-CN → Chinese country name
+            return cc, f"{_CC_TO_ZH.get(cc) or zh or cc}|{ip}"
+
+    return "", ""
+
+
 def get_geo_cc() -> str:
     """ISO alpha-2 country code of this node's egress IP, or "" on failure."""
-    data = _load_ipapi()
-    return _ipapi_country_code(data) if data is not None else ""
+    return _resolve_geo()[0]
 
 
 def get_geo_info() -> str:
-    """`<region>|<ip>` for this node's egress IP, from ipapi.is.
+    """`<region>|<ip>` for this node's egress IP (ipapi.is → ip-api.com).
 
-    ``region`` is a Chinese country name via :data:`_CC_TO_ZH`, falling back
-    to ipapi.is's English ``location.country``. Country-level granularity is
-    intentional: the node name carries only ``FLAG_PREFIX`` (now ISO-derived),
-    never the region text, so the city is not needed here. Returns "" on
-    fetch failure — :func:`EnvManager.ensure_var` with ``regenerate_if_empty``
-    keeps that empty value from being persisted, so the next boot retries.
+    ``region`` is a country-level Chinese name (no city): the node name carries
+    only ``FLAG_PREFIX`` (ISO-derived), never the region text, so the city is
+    not needed here. Returns "" when both sources fail —
+    :func:`EnvManager.ensure_var` with ``regenerate_if_empty`` keeps that empty
+    value from being persisted, so the next boot retries.
     """
-    data = _load_ipapi()
-    if data is None:
-        return ""
-    cc = _ipapi_country_code(data)
-    ip = str(data.get("ip") or "")
-    loc = data.get("location")
-    en_country = str(loc.get("country")) if isinstance(loc, dict) and loc.get("country") else ""
-    region = _CC_TO_ZH.get(cc) or en_country or cc
-    if not region or not ip:
-        return ""
-    return f"{region}|{ip}"
+    return _resolve_geo()[1]
 
 
 def check_brutal_status() -> str:

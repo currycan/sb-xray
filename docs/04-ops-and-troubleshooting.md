@@ -294,7 +294,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 | `IS_BRUTAL` | 内核探测 | BBR/Brutal 支持状态 |
 | `IP_TYPE` | ipapi.is | `isp` / `hosting` 等 |
 
-> 📘 **落地探测复用一次抓取**：`GEOIP_INFO` / `GEOIP_CC` / `IP_TYPE` 同源于一次 `api.ipapi.is` 抓取（结果缓存在 `/tmp/ipapi.json`，一次启动只请求一次）。国旗由 ISO 码 `GEOIP_CC` 经码点直接生成。
+> 📘 **落地探测复用一次抓取 + 二级回退**：`GEOIP_INFO` / `GEOIP_CC` / `IP_TYPE` 同源于一次 `api.ipapi.is` 抓取（结果缓存在 `/tmp/ipapi.json`，一次启动只请求一次）。国旗由 ISO 码 `GEOIP_CC` 经码点直接生成。`api.ipapi.is` 拿不到落地国时，geo（`GEOIP_INFO`/`GEOIP_CC`）二级回退 `ip-api.com`（缓存 `/tmp/ip-api.json`，仅取国家级、无城市）；`IP_TYPE` 仅 ipapi.is 提供、无回退。
 
 > 📘 **`GEOIP_INFO` / `GEOIP_CC` 为空时自动重探**：表中变量一旦计算成功即永久缓存，唯这两个探测类变量例外。它们由 `api.ipapi.is` 探测落地国，可能因网络抖动等临时原因失败而得到空值；为避免空值被永久缓存后压制后续探测，**持久化值为空时每次启动都会重新探测，且空结果不写入缓存**——探测成功即正常缓存并保持稳定。实践含义：某节点若曾因探测失败导致节点名无国旗（`FLAG_PREFIX` 为空），重启容器即可自愈，无需手动删 `/.env/sb-xray`。
 

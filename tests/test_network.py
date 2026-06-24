@@ -178,20 +178,46 @@ def test_get_geo_info_unmapped_cc_falls_back_to_english(
 
 
 @respx.mock
-def test_get_geo_info_empty_when_no_country(
+def test_get_geo_info_empty_when_both_sources_fail_no_country(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # ipapi.is 给不出国家码 → 落到 ip-api 回退；回退也失败 → ""。
     monkeypatch.setattr(net, "_DEFAULT_CACHE", tmp_path / "ipapi.json")
+    monkeypatch.setattr(net, "_DEFAULT_IP_API_CACHE", tmp_path / "ip-api.json")
     respx.get("https://api.ipapi.is/").mock(return_value=httpx.Response(200, json={"ip": "1.2.3.4"}))
+    respx.get(host="ip-api.com").mock(side_effect=httpx.ConnectError("x"))
     assert net.get_geo_info() == ""
 
 
 @respx.mock
-def test_get_geo_info_empty_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_geo_info_empty_when_both_sources_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(net, "_DEFAULT_CACHE", tmp_path / "ipapi.json")
+    monkeypatch.setattr(net, "_DEFAULT_IP_API_CACHE", tmp_path / "ip-api.json")
     respx.get("https://api.ipapi.is/").mock(side_effect=httpx.ConnectError("x"))
+    respx.get(host="ip-api.com").mock(side_effect=httpx.ConnectError("x"))
     assert net.get_geo_info() == ""
     assert net.get_geo_cc() == ""
+
+
+@respx.mock
+def test_get_geo_info_falls_back_to_ip_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ipapi.is 失败 → ip-api.com 二级回退（ISO 码 + 中文国名，无城市）。
+    monkeypatch.setattr(net, "_DEFAULT_CACHE", tmp_path / "ipapi.json")
+    monkeypatch.setattr(net, "_DEFAULT_IP_API_CACHE", tmp_path / "ip-api.json")
+    respx.get("https://api.ipapi.is/").mock(side_effect=httpx.ConnectError("x"))
+    ip_api = respx.get(host="ip-api.com").mock(
+        return_value=httpx.Response(
+            200,
+            json={"status": "success", "countryCode": "JP", "country": "日本", "query": "203.0.113.7"},
+        )
+    )
+    assert net.get_geo_info() == "日本|203.0.113.7"
+    assert net.get_geo_cc() == "JP"
+    assert ip_api.called
 
 
 @respx.mock
