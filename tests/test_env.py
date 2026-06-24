@@ -72,6 +72,64 @@ def test_ensure_var_missing_and_no_generator_or_default(
         mgr.ensure_var("MISSING")
 
 
+def test_regenerate_if_empty_skips_persisted_blank(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persisted empty string is ignored and the generator re-runs.
+
+    Reproduces the GEOIP_INFO drift: a buggy boot wrote ``GEOIP_INFO=''`` to
+    the volume-backed env file; on a later (fixed) boot the generator must run
+    again and the file must self-heal to the new value.
+    """
+    tmp_env_file.write_text("export GEOIP_INFO=''\n", encoding="utf-8")
+    monkeypatch.delenv("GEOIP_INFO", raising=False)
+    mgr = EnvManager(tmp_env_file)
+    value = mgr.ensure_var(
+        "GEOIP_INFO", generator=lambda: "美国水牛城|198.46.142.117", regenerate_if_empty=True
+    )
+    assert value == "美国水牛城|198.46.142.117"
+    content = tmp_env_file.read_text(encoding="utf-8")
+    assert "export GEOIP_INFO='美国水牛城|198.46.142.117'" in content
+    assert content.count("export GEOIP_INFO=") == 1  # stale blank line replaced
+
+
+def test_persisted_blank_kept_without_flag(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default behavior unchanged: a persisted '' is a valid cache."""
+    tmp_env_file.write_text("export GEOIP_INFO=''\n", encoding="utf-8")
+    monkeypatch.delenv("GEOIP_INFO", raising=False)
+    mgr = EnvManager(tmp_env_file)
+    value = mgr.ensure_var("GEOIP_INFO", generator=lambda: "should-not-run")
+    assert value == ""
+
+
+def test_regenerate_if_empty_does_not_persist_blank_result(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A still-empty generator result is not cached, so the next boot retries."""
+    monkeypatch.delenv("GEOIP_INFO", raising=False)
+    mgr = EnvManager(tmp_env_file)
+    value = mgr.ensure_var("GEOIP_INFO", generator=lambda: "", regenerate_if_empty=True)
+    assert value == ""
+    assert "GEOIP_INFO" not in tmp_env_file.read_text(encoding="utf-8")
+
+
+def test_regenerate_if_empty_keeps_nonempty_cache(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-empty persisted value still wins — no needless re-probe."""
+    tmp_env_file.write_text("export GEOIP_INFO='日本东京|203.0.113.7'\n", encoding="utf-8")
+    monkeypatch.delenv("GEOIP_INFO", raising=False)
+    mgr = EnvManager(tmp_env_file)
+
+    def never_called() -> str:
+        raise AssertionError("generator should not run for a non-empty cache")
+
+    value = mgr.ensure_var("GEOIP_INFO", generator=never_called, regenerate_if_empty=True)
+    assert value == "日本东京|203.0.113.7"
+
+
 def test_ensure_key_pair_atomic(tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PRIV", raising=False)
     monkeypatch.delenv("PUB", raising=False)
