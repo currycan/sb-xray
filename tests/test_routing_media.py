@@ -41,7 +41,7 @@ _ACCOUNT_SENSITIVE: list[Callable[[], str]] = [
 
 @pytest.fixture(autouse=True)
 def _clear_routing_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("IP_TYPE", "GEOIP_INFO", "HAS_ISP_NODES", "GEMINI_DIRECT"):
+    for var in ("IP_TYPE", "GEOIP_INFO", "GEOIP_CC", "HAS_ISP_NODES", "GEMINI_DIRECT"):
         monkeypatch.delenv(var, raising=False)
 
 
