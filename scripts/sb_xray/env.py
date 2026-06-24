@@ -64,14 +64,25 @@ class EnvManager:
         default: str | None = None,
         generator: Callable[[], str] | None = None,
         persist: bool = True,
+        regenerate_if_empty: bool = False,
     ) -> str:
-        """Three-tier lookup: shell env → file → generator/default."""
+        """Three-tier lookup: shell env → file → generator/default.
+
+        With ``regenerate_if_empty=True`` a *persisted empty string* is treated
+        as "not set" — the generator re-runs and an empty result is **not**
+        persisted. This is for probed values (e.g. ``GEOIP_INFO``) that can
+        transiently fail: a buggy or offline boot must never cache ``''`` into
+        the volume-backed env file, because that empty value would otherwise be
+        adopted on every later boot and permanently suppress the (now working)
+        generator. The default ``False`` preserves the original semantics for
+        all other keys, where an empty persisted value is a legitimate cache.
+        """
         existing = os.environ.get(key)
         if existing:
             return existing
 
         persisted = self.get(key)
-        if persisted is not None:
+        if persisted is not None and not (regenerate_if_empty and persisted == ""):
             os.environ[key] = persisted
             return persisted
 
@@ -85,7 +96,7 @@ class EnvManager:
             )
 
         os.environ[key] = value
-        if persist:
+        if persist and not (regenerate_if_empty and value == ""):
             self._persist(key, value)
         return value
 

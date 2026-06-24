@@ -117,7 +117,7 @@ docker exec -it sb-xray bash
 | **4** | `docker-compose environment` | 容器启动时注入 | 用户显式配置 |
 | **5（最低）** | `Dockerfile ENV` | 镜像构建时烘焙 | 安全默认值 |
 
-> **实践说明**：各层通常包含不同的变量，实际覆盖冲突极少。`ensure_var` 的三分支逻辑确保自动生成的变量首次计算后即永久缓存，不会被重复生成。
+> **实践说明**：各层通常包含不同的变量，实际覆盖冲突极少。`ensure_var` 的三分支逻辑确保自动生成的变量首次计算后即永久缓存，不会被重复生成；唯一例外是探测类变量 `GEOIP_INFO`——其持久化值为空（探测曾失败）时下次启动会重新探测，避免空值被永久缓存后压制后续探测（见 §2.4）。
 
 ### 2.2 用户配置变量（在 docker-compose 设置）
 
@@ -292,6 +292,8 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 | `GEOIP_INFO` | API 检测 | GeoIP 归属字符串 |
 | `IS_BRUTAL` | 内核探测 | BBR/Brutal 支持状态 |
 | `IP_TYPE` | API 检测 | `isp` / `hosting` 等 |
+
+> 📘 **`GEOIP_INFO` 为空时自动重探**：表中变量一旦计算成功即永久缓存，唯 `GEOIP_INFO` 例外。它由远端页面探测落地国家／城市，可能因网络抖动等临时原因失败而得到空值；为避免空值被永久缓存后压制后续探测，**持久化值为空时每次启动都会重新探测，且空结果不写入缓存**——探测成功即正常缓存并保持稳定。实践含义：某节点若曾因探测失败导致节点名无国旗（`FLAG_PREFIX` 为空），重启容器即可自愈，无需手动删 `/.env/sb-xray`。
 
 ### 2.5 自动检测变量（`/.env/status`，可清除重新检测）
 
@@ -922,6 +924,27 @@ docker compose restart
 ```
 
 > **注意**：升级到修复版本后，仅删除 `/.env/status` 并重启即可触发完整的缓存联动清除，无需手动执行上述命令。
+
+#### ❌ 故障八：本机节点名无国旗（`FLAG_PREFIX` 为空）
+
+**现象**：分享链接导入客户端后，本机节点名只有裸协议名（`Hysteria2`、`TUIC`、`XTLS-Reality`…），缺少 `🇺🇸` / `🇯🇵` 等国旗前缀。
+
+**根本原因**：本机节点的国旗由 `GEOIP_INFO`（远端探测的落地国家／城市）经 `node_meta.derive_and_export` 派生为 `FLAG_PREFIX`。`GEOIP_INFO` 一旦探测落空（探测站点临时不可达、解析异常等），空值会被持久化进卷 `/.env/sb-xray`，并随卷跨镜像升级保留——即便后续探测能力已恢复，节点名仍旧无旗。
+
+**自愈**：`GEOIP_INFO` 的空持久化值会在每次启动重新探测（见 §2.4），因此**重启容器即可自愈**：
+
+```bash
+docker compose restart
+# 期望：GEOIP_INFO 已填充为「<国><城>|<ip>」，节点名带上国旗前缀
+docker exec sb-xray grep GEOIP_INFO /.env/sb-xray
+```
+
+若重启后仍为空，则是该节点到探测站点的出网受限（网络层问题，非缓存），手动验证可达性：
+
+```bash
+# 期望 HTTP=200；非 200 说明该节点访问探测站点受限
+docker exec sb-xray curl -s -o /dev/null -w 'HTTP=%{http_code}\n' --max-time 12 https://ip111.cn/
+```
 
 ---
 

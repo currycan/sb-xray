@@ -371,8 +371,13 @@ def probe_base_env(mgr: EnvManager) -> None:
         ("SUB_STORE_FRONTEND_BACKEND_PATH", lambda: "/" + sbrand.generate("path", 32)),
         ("IP_TYPE", sbnet.check_ip_type),
     )
+    # GEOIP_INFO is probed from a remote page (ip111.cn) and can transiently
+    # come back empty (network blip, parser regression, offline boot). Such an
+    # empty result must never stick in the volume-backed env file and suppress
+    # every later attempt — regenerate it whenever the persisted value is empty.
+    _regen_if_empty = {"GEOIP_INFO"}
     for key, gen in specs:
-        mgr.ensure_var(key, generator=gen)
+        mgr.ensure_var(key, generator=gen, regenerate_if_empty=key in _regen_if_empty)
 
     logger.info(
         "base ports: hy2=%s tuic=%s anytls=%s",
