@@ -16,6 +16,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 import respx
+from sb_xray import http as sbhttp
 from sb_xray.routing import media
 from sb_xray.routing.service_spec import SPECS_BY_ENV, ContentSignature
 
@@ -305,3 +306,24 @@ def test_self_check_no_rot_on_unreachable(monkeypatch: pytest.MonkeyPatch) -> No
             respx.get(spec.probe_url).mock(side_effect=httpx.ConnectError("down"))
     assert media.run_signature_self_check() == 0
     emit.assert_not_called()
+
+
+# ---- _classify truncation fail-safe -----------------------------------------
+
+
+def test_classify_truncated_no_match_is_blocked() -> None:
+    sig = ContentSignature(real_substrings=("netflix.reactContext",), blocked_substrings=("M7111",))
+    res = sbhttp.FetchResult(status=200, body="nothing matched here", final_url="https://x", truncated=True)
+    assert media._classify(res, sig) == media._BLOCKED
+
+
+def test_classify_not_truncated_no_match_is_unknown() -> None:
+    sig = ContentSignature(real_substrings=("netflix.reactContext",))
+    res = sbhttp.FetchResult(status=200, body="nothing", final_url="https://x", truncated=False)
+    assert media._classify(res, sig) == media._UNKNOWN
+
+
+def test_classify_real_marker_within_cap_still_real_even_if_truncated() -> None:
+    sig = ContentSignature(real_substrings=("playerModel",))
+    res = sbhttp.FetchResult(status=200, body="...playerModel...", final_url="https://x", truncated=True)
+    assert media._classify(res, sig) == media._REAL

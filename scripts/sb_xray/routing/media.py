@@ -57,6 +57,10 @@ def _classify(result: sbhttp.FetchResult, sig: ContentSignature) -> str:
         return _BLOCKED
     if sig.real_substrings and any(s in body for s in sig.real_substrings):
         return _REAL
+    # marker 可能落在 64 KiB 截断点之外 → 无法证明是 REAL,fail-safe 判 BLOCKED
+    # 走住宅回退,而非 UNKNOWN（UNKNOWN 同样回退,但显式 BLOCKED 让事件总线可观测）
+    if result.truncated:
+        return _BLOCKED
     return _UNKNOWN
 
 
