@@ -9,7 +9,7 @@
 1. [构建环境准备](#1-构建环境准备)
 2. [自动构建脚本](#2-自动构建脚本buildsh)
 3. [三阶段 Dockerfile 架构](#3-三阶段-dockerfile-架构)
-4. [组件版本管理](#4-组件版本管理)（[4.2 供应链 pin](#42-供应链-pin不可变-ref-绑定)）（[4.3 镜像 digest pin 与 GOPROXY](#43-镜像-digest-pin-与-goproxy)）
+4. [组件版本管理](#4-组件版本管理)（[4.2 供应链 pin](#42-供应链-pin不可变-ref-绑定)）（[4.3 镜像 digest pin 与 GOPROXY](#43-镜像-digest-pin-与-goproxy)）（[4.5 供应链 provenance](#45-供应链-provenance)）
 5. [手动精细构建](#5-手动精细构建)
 6. [常见构建问题 FAQ](#6-常见构建问题-faq)
 7. [Git Release 版本发布](#7-git-release-版本发布releasesh)
@@ -56,7 +56,7 @@ export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 `build.sh` 是推荐的构建入口。**单一真相源是仓库根目录的 `versions.json`**，`build.sh` 既不硬编码任何组件版本，也不在本地构建期间与 CI 产生漂移：
 
-- 日常构建直接读 `versions.json`（已由 CI 每天刷新并提交），纯离线、可复现
+- 日常构建直接读 `versions.json`（已由 CI 每天刷新并提交），纯离线；版本与下载字节 SHA256 可复现（UPX 后 shipped 字节除外，见 §4.5）
 - 需要跟最新上游版本时用 `./build.sh refresh`，会像 CI 一样调用 GitHub API 拉取 versions + digests，写回 `versions.json`，然后构建
 
 ### 2.1 基本用法
@@ -100,7 +100,7 @@ flowchart TD
 | **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr、Mihomo、Http-Meta、Sub-Store |
 | **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100`（过滤 `rc/beta/alpha`） | Xray、Sing-box、3x-ui、Dufs、Cloudflared |
 
-`.github/workflows/daily-build.yml` 每日跑相同逻辑：调用 API → 计算 digests → 提交 `versions.json`。所以本地 `./build.sh` 和 CI 的最新产物始终位级一致。
+`.github/workflows/daily-build.yml` 每日跑相同逻辑：调用 API → 计算 digests → 提交 `versions.json`。所以本地 `./build.sh` 和 CI 用相同的 versions + digests 构建：**版本与下载字节（downloaded artifact）的 SHA256 可复现**。注意经 UPX 压缩的组件（xray/dufs/cloudflared/crypctl）其镜像内 shipped 字节有意不可复现——校验锚定的是压缩前的上游下载物，见 §4.5「供应链 provenance」。
 
 ### 2.4 镜像版本号与 OCI 标签
 
@@ -210,7 +210,7 @@ supervisor dumb-init fail2ban acme.sh
 
 ### 4.1 当前组件版本
 
-所有版本由仓库根目录 `versions.json` 统一声明，CI 每日从 GitHub API 刷新并提交。`build.sh` 离线模式直接读取该文件，因此**本地构建与 CI 产物始终一致**。查阅当前组件版本：
+所有版本由仓库根目录 `versions.json` 统一声明，CI 每日从 GitHub API 刷新并提交。`build.sh` 离线模式直接读取该文件，因此**本地构建与 CI 的版本+digest 输入始终一致**（UPX 后 shipped 字节有意不可复现，见 §4.5）。查阅当前组件版本：
 
 ```bash
 jq -r 'to_entries[] | select(.key != "digests") | "\(.key): \(.value)"' versions.json
@@ -298,6 +298,40 @@ XRAY_VERSION=25.12.15 docker buildx build \
   --tag currycan/sb-xray:custom \
   .
 ```
+
+### 4.5 供应链 provenance
+
+📘 **`versions.json` 的 `provenance` 字段**是每个 shipped 组件 pin 状态与字节可复现性的单一真相源，机器可读，由 `tests/test_versions_provenance.py` 在 CI 质量门中守门。
+
+| 组件 | `pinned` | `reproducible` | 校验锚来源 |
+|:---|:---:|:---:|:---|
+| **xray** | ✅ | ❌ | 上游 `.dgst` 文件 SHA2-256（压缩前下载物） |
+| **shoutrrr** | ✅ | ✅ | 上游 `checksums.txt` SHA256，录入 `versions.json` |
+| **sing_box** | ✅ | ✅ | `versions.json` `digests` SHA256 |
+| **mihomo** | ✅ | ✅ | `versions.json` `digests`（amd64 用 `-compatible` 资源） |
+| **dufs** | ✅ | ❌ | `versions.json` `digests` SHA256（压缩前下载物） |
+| **cloudflared** | ✅ | ❌ | `versions.json` `digests` SHA256（压缩前下载物） |
+| **xui** | ✅ | ✅ | `versions.json` `digests` SHA256 |
+| **http_meta** | ✅ | ✅ | `versions.json` bundle+tpl SHA256 |
+| **sub_store_backend** | ✅ | ✅ | `versions.json` `digests` SHA256 |
+| **sub_store_frontend** | ✅ | ✅ | git checkout 至 `versions.json` 记录 commit SHA（B1） |
+| **crypctl** | ✅ | ❌ | git pin 至记录 SHA 后 `go build` + UPX（B2） |
+| **acme** | ✅ | ❌ | release tar.gz pin + `sha256sum -c`；`AUTO_UPGRADE=0`（B3） |
+
+📘 **UPX 后 shipped 字节有意不可复现**：xray/dufs/cloudflared/crypctl 在 Dockerfile 阶段二经 `upx --lzma --best` 极限压缩，LZMA 压缩输出不保证位级确定性。**校验锚定的是压缩前的上游下载物 SHA256**，不是镜像内最终字节——这是有意设计：UPX 压缩节省 50-70% 体积，代价是放弃镜像内字节可复现性，但下载完整性仍由 digest 锚严格保障。acme 不经 UPX，`AUTO_UPGRADE=0` 锁定版本并永久禁止运行时静默自升级。
+
+🔧 **自检 provenance 完整性**：
+
+```bash
+# 查看全量 provenance 状态
+jq '.provenance' versions.json
+
+# 列出非可复现组件及原因
+jq -r '.provenance | to_entries[] | select(.value.reproducible == false) | "\(.key): \(.value.note)"' versions.json
+# 期望：xray / dufs / cloudflared / crypctl / acme 各一行，附原因说明
+```
+
+🔬 **守护测试**：`tests/test_versions_provenance.py` 在 CI 质量门中强制验证：所有 shipped 组件均在 `provenance` 中声明；`pinned: true` 的组件在 `versions.json` 中必须存在对应 digest 或 pin 字段；`reproducible: false` 的组件必须附 `note` 说明不可复现原因。
 
 ---
 
@@ -534,7 +568,7 @@ flowchart LR
 
 前面 §2 / §7 讲的是**本地**手动构建与发布。生产环境用的 `:latest` 镜像并不是手动推的——它由 `.github/workflows/daily-build.yml` 这条 CI 流水线**每天自动产出并发布**。本节讲清这条主干怎么跑、做了哪些架构取舍，以及它和本地 `build.sh`、`versions.json`、生产节点之间的关系。
 
-> 📘 **一句话**：CI 是生产镜像的权威生产者，`build.sh` 是同一套逻辑的**可复现离线镜像**。两者都以仓库根 `versions.json` 为单一真相源，因此本地构建与 CI 产物位级一致。
+> 📘 **一句话**：CI 是生产镜像的权威生产者，`build.sh` 是同一套逻辑的**可复现离线镜像**。两者都以仓库根 `versions.json` 为单一真相源，因此本地构建与 CI 的版本+digest 输入一致（UPX 后 shipped 字节有意不可复现，见 §4.5）。
 
 ### 8.1 流水线总览
 
@@ -612,7 +646,7 @@ flowchart TD
 把三段串起来看，闭环是这样的：
 
 1. **单一真相源**：`versions.json`（含组件版本 + `digests`）。CI 每日刷新并由 `update-versions` 提交回仓库，是它的权威生产者。
-2. **本地一致**：`./build.sh` 离线读同一份 `versions.json`，所以本地手动构建与 CI 产物位级一致；`./build.sh refresh` 则复刻 CI 的「调 API → 算 digest → 写回」逻辑。
+2. **本地一致**：`./build.sh` 离线读同一份 `versions.json`，所以本地手动构建与 CI 使用同一份版本+digest 输入（UPX 后 shipped 字节有意不可复现，见 §4.5）；`./build.sh refresh` 则复刻 CI 的「调 API → 算 digest → 写回」逻辑。
 3. **发布到生产**：CI 的 `merge` 推出 `:latest` 后，生产节点经 watchtower 自动跟进该 tag——这一步的运维约束（watchtower 不读 `docker-compose.yml`、新增 env 必须镜像内默认兜底）见仓库根 `CLAUDE.md` 的「Watchtower 自动更新发布纪律」。因此**修复类变更必须落在镜像内默认行为里**，才能随 `:latest` 自动生效。
 
 > ⚠️ CI 自动发的 `:latest` 不会自动同步 `docker-compose.yml`。若某次发布确实必须靠新 compose env 才能正确运行，应在发布说明标记 `requires-compose-sync` 并改走全量 `git pull && docker compose up -d`，不走 watchtower 自动分发。
