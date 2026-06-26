@@ -377,3 +377,21 @@ def test_service_env_vars_matches_registry() -> None:
     assert service_spec.service_env_vars() == frozenset(
         s.env_var for s in service_spec.SERVICE_SPECS
     )
+
+
+# ---- G5: gemini dual geosite rule order + outbound regression ---------------
+
+
+def test_gemini_emits_both_wide_and_narrow_google_rules() -> None:
+    rules = isp.build_xray_service_rules(outbounds={"GEMINI_OUT": "proxy-us"})
+    # Wide geosite:google + narrow geosite:google-gemini BOTH route to GEMINI_OUT
+    # by design (keep all Google traffic on one egress with Gemini). G5.
+    assert '"geosite:google"' in rules
+    assert '"geosite:google-gemini"' in rules
+    wide = rules.index("geosite:google\"")
+    narrow = rules.index("geosite:google-gemini")
+    assert wide < narrow
+    google_rules = [
+        d for d, env, _m in isp._SERVICE_SPEC if env == "GEMINI_OUT"
+    ]
+    assert google_rules == [("geosite:google",), ("geosite:google-gemini",)]

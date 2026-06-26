@@ -91,6 +91,11 @@ _SERVICE_SPEC: Final[tuple[tuple[tuple[str, ...], str, bool], ...]] = (
     (("geosite:netflix",), "NETFLIX_OUT", False),
     (("geosite:disney",), "DISNEY_OUT", False),
     (("geosite:anthropic",), "CLAUDE_OUT", False),
+    # GEMINI_OUT intentionally also captures the WIDE geosite:google so all
+    # Google-property traffic shares Gemini's egress (avoids Gemini API and the
+    # Google account system splitting across exits → risk-control flags). The
+    # narrow geosite:google-gemini follows for explicit Gemini-only overrides.
+    # G5: behaviour is deliberate, pinned by tests/test_routing_isp.py.
     (("geosite:google",), "GEMINI_OUT", False),
     (("geosite:google-gemini",), "GEMINI_OUT", False),
     (("geosite:youtube",), "YOUTUBE_OUT", False),
