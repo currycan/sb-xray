@@ -332,6 +332,10 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 ENV ENABLE_REVERSE="false"
 ENV REVERSE_DOMAINS="domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan"
 
+# 订阅 provider / icon 账号段（§4：不入库具体账号；运维经 compose/.env 注入实际值）
+ENV GIST_OWNER=""
+ENV ICON_REPO=""
+
 # 回国出口模式开关（显式选择回国链路）：
 #   socks5   CN 流量经 SOCKS5（Tailscale/OpenClash，需 CN_EXIT_SOCKS5_HOST/PORT）
 #   reverse  CN 流量经 r-tunnel（VLESS reverse bridge，需 ENABLE_REVERSE=true + 国内 bridge）
