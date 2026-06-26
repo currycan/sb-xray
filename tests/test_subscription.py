@@ -117,7 +117,8 @@ def test_hysteria2_has_obfs_salamander(env: None) -> None:
     url = sub.build_hysteria2_link()
     assert "obfs=salamander" in url
     assert "obfs-password=abcdef12-3456-4789-0abc-def123456789" in url
-    assert url.endswith("#🇯🇵 Hysteria2 ✈ jp ✈ isp")
+    frag = url.split("#", 1)[1]
+    assert urllib.parse.unquote(frag) == "🇯🇵 Hysteria2 ✈ jp ✈ isp"
 
 
 def test_vmess_payload_has_ws_path_and_alpn(env: None) -> None:
@@ -138,7 +139,8 @@ def test_vless_vision_reality_link(env: None) -> None:
     assert "security=reality" in url
     assert "sni=www.apple.com" in url
     assert "type=tcp" in url
-    assert url.endswith("#🇯🇵 XTLS-Reality ✈ jp ✈ isp")
+    frag = url.split("#", 1)[1]
+    assert urllib.parse.unquote(frag) == "🇯🇵 XTLS-Reality ✈ jp ✈ isp"
 
 
 def test_xhttp_reality_main_has_mlkem(env: None) -> None:
@@ -216,8 +218,8 @@ def test_v2rayn_subscription_includes_all_ten_lines(env: None) -> None:
     assert lines[3].startswith("vmess://")
     assert lines[4].startswith("vless://") and "flow=xtls-rprx-vision" in lines[4]
     # part2: xhttp-h3, xhttp-reality, up_cdn, up_reality, mix
-    assert "Xhttp-H3+BBR" in lines[5]
-    assert lines[6].startswith("vless://") and "Xhttp+Reality直连" in lines[6]
+    assert "Xhttp-H3%2BBBR" in lines[5]
+    assert lines[6].startswith("vless://") and "Xhttp%2BReality%E7%9B%B4%E8%BF%9E" in lines[6]
 
 
 def test_common_subscription_has_eight_lines(env: None) -> None:
@@ -230,12 +232,38 @@ def test_common_subscription_has_eight_lines(env: None) -> None:
     assert lines[2].startswith("anytls://")
     assert lines[3].startswith("vmess://")
     assert lines[4].startswith("vless://") and "flow=xtls-rprx-vision" in lines[4]
-    assert "Xhttp+Reality直连" in lines[5]
-    assert "上行Xhttp+TLS+CDN下行Xhttp+Reality" in lines[6]
-    assert "Xhttp+TLS+CDN上下行不分离" in lines[7]
-    assert not any("上行Xhttp+Reality下行Xhttp+TLS+CDN" in ln for ln in lines)
+    assert "Xhttp%2BReality%E7%9B%B4%E8%BF%9E" in lines[5]
+    assert "%E4%B8%8A%E8%A1%8CXhttp%2BTLS%2BCDN%E4%B8%8B%E8%A1%8CXhttp%2BReality" in lines[6]
+    assert "Xhttp%2BTLS%2BCDN%E4%B8%8A%E4%B8%8B%E8%A1%8C%E4%B8%8D%E5%88%86%E7%A6%BB" in lines[7]
+    assert not any("Xhttp%2BReality%E7%9B%B4%E8%BF%9E" in ln and "%E4%B8%8B%E8%A1%8CXhttp%2BTLS" in ln for ln in lines)
     # main-only H3 link must NOT be in common track
-    assert not any("Xhttp-H3+BBR" in ln for ln in lines)
+    assert not any("Xhttp-H3%2BBBR" in ln for ln in lines)
     # common XHTTP variants must all use mode=packet-up or encryption=none
     for ln in lines[5:]:
         assert "encryption=none" in ln
+
+
+def test_remark_special_chars_are_url_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """J1: 运维可控 NODE_NAME 含 #/&/换行 必须 URL-encode,否则破坏 fragment 解析或注入。"""
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("FLAG_PREFIX", "")
+    monkeypatch.setenv("NODE_SUFFIX", "")
+    monkeypatch.setenv("NODE_NAME", "ev#il&x=1\nz")
+    url = sub.build_hysteria2_link()
+    # fragment 必须不含裸 # / & / 换行(除分隔 query 与 fragment 的首个 #)
+    frag = url.split("#", 1)[1]
+    assert "#" not in frag
+    assert "\n" not in frag
+    assert "%23" in frag  # 被编码的 '#'
+    # 解码后还原原始备注内容
+    assert urllib.parse.unquote(frag) == "Hysteria2 ✈ ev#il&x=1\nz"
+
+
+def test_remark_preserves_flag_emoji_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """常规 emoji 旗标 + 中文备注仍能解码还原(无回归)。"""
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    url = sub.build_tuic_link()
+    frag = url.split("#", 1)[1]
+    assert urllib.parse.unquote(frag) == "🇯🇵 TUIC ✈ jp ✈ isp"

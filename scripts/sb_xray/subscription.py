@@ -31,13 +31,15 @@ def _env(name: str, default: str = "") -> str:
 
 
 def _remark(protocol: str) -> str:
-    """`${FLAG_PREFIX}<proto> ✈ ${NODE_NAME}${NODE_SUFFIX}` — no URL-encode.
+    """`${FLAG_PREFIX}<proto> ✈ ${NODE_NAME}${NODE_SUFFIX}` — URL-encoded.
 
-    show-config.sh leaves the ``#fragment`` remark un-encoded (the Bash
-    scripts simply append ``#${FLAG_PREFIX}...``); we preserve that so
-    the base64 payload is byte-identical.
+    运维可自定义 FLAG_PREFIX/NODE_NAME/NODE_SUFFIX。这些值会进入订阅链接的
+    ``#fragment``；若含 ``#``/``&``/``?``/换行 会破坏 query 解析或产出可注入
+    链接(J1)。统一经 ``urlquote`` 编码，emoji/中文/空格走百分号编码后客户端
+    解码仍能还原原始备注(safe="-._~"，与 Bash/JS quote 默认一致)。
     """
-    return f"{_env('FLAG_PREFIX')}{protocol} ✈ {_env('NODE_NAME')}{_env('NODE_SUFFIX')}"
+    raw = f"{_env('FLAG_PREFIX')}{protocol} ✈ {_env('NODE_NAME')}{_env('NODE_SUFFIX')}"
+    return urlquote(raw)
 
 
 def urlquote(value: str) -> str:
