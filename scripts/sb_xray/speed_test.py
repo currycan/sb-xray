@@ -969,7 +969,9 @@ def measure_isp_speeds(url: str, sample_count: int) -> SpeedOutcome:
         except (ValueError, TypeError):
             prev_speeds = {}
 
-    leader_tag, leader_speed = _leader_with_hysteresis(ctx, prev_speeds)
+    leader_tag, leader_speed = _leader_with_hysteresis(
+        ctx, prev_speeds, prev_isp_tag=prev.get("ISP_TAG", "")
+    )
     decision = apply_isp_routing_logic(
         RoutingContext(
             ip_type=os.environ.get("IP_TYPE", "unknown"),
@@ -1061,8 +1063,30 @@ def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
     return ctx
 
 
+def _resolve_prev_leader(
+    prev_speeds: dict[str, float], prev_isp_tag: str
+) -> str | None:
+    """Pick the prior leader for hysteresis, ignoring the 999.0 cache sentinel.
+
+    Priority: the persisted ``ISP_TAG`` (the tag that actually steered routing
+    last run) when it is present in ``prev_speeds``; else the argmax of
+    ``prev_speeds`` after dropping the ``_KEEP_ON_CACHE_HIT_MBPS`` sentinel a
+    cache-hit injects (which would otherwise lock the incumbent to the cached
+    tag forever). G5.
+    """
+    real = {t: v for t, v in prev_speeds.items() if v != _KEEP_ON_CACHE_HIT_MBPS}
+    if prev_isp_tag and prev_isp_tag in prev_speeds:
+        return prev_isp_tag
+    if not real:
+        return None
+    return max(real.items(), key=lambda kv: kv[1])[0]
+
+
 def _leader_with_hysteresis(
-    ctx: IspSpeedContext, prev_speeds: dict[str, float]
+    ctx: IspSpeedContext,
+    prev_speeds: dict[str, float],
+    *,
+    prev_isp_tag: str = "",
 ) -> tuple[str | None, float]:
     """Apply cross-run hysteresis to the fastest-tag pick.
 
@@ -1072,14 +1096,18 @@ def _leader_with_hysteresis(
     unless this run's winner beats it by ``ISP_LEADER_HYSTERESIS`` (default
     1.15 = 15%). The previous leader must still be usable this run to be kept.
 
+    ``prev_isp_tag`` should be the persisted ``ISP_TAG`` from the last run so
+    that the hysteresis incumbent is the tag that actually steered routing, not
+    the argmax of raw speeds (which may include the 999.0 cache-hit sentinel).
+
     Returns ``(tag, speed)`` — ``ctx``'s own winner when there is no eligible
     incumbent. Note this only stabilises the headline/verdict; live routing is
     handled by xray ``leastPing`` regardless of this pick.
     """
     if not ctx.fastest_tag or not prev_speeds:
         return ctx.fastest_tag, ctx.fastest_speed
-    prev_leader = max(prev_speeds.items(), key=lambda kv: kv[1])[0]
-    if prev_leader == ctx.fastest_tag:
+    prev_leader = _resolve_prev_leader(prev_speeds, prev_isp_tag)
+    if prev_leader is None or prev_leader == ctx.fastest_tag:
         return ctx.fastest_tag, ctx.fastest_speed
     incumbent_speed = ctx.speeds.get(prev_leader, 0.0)
     if incumbent_speed <= _USABLE_MIN_MBPS:
