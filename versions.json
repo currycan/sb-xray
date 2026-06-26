@@ -32,5 +32,67 @@
     "xray_arm64_sha256": "4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c",
     "shoutrrr_amd64_sha256": "18060f39eacf6949662f011ab651957a39dc840a26695724e295b714e97a7cc7",
     "shoutrrr_arm64_sha256": "c0147767fca91faf5870c4b4271b7043054294b634cc507c2f2128a57d7a7023"
+  },
+  "provenance": {
+    "xray": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "upstream .dgst 校验+录入 versions.json；UPX --lzma 压缩后 shipped 字节有意不可复现"
+    },
+    "shoutrrr": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "upstream checksums.txt 校验+录入 versions.json；未 UPX，字节可复现"
+    },
+    "sing_box": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256，未 UPX"
+    },
+    "mihomo": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256（amd64 用 -compatible 资源），未 UPX"
+    },
+    "dufs": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "versions.json SHA256；UPX 压缩后字节不可复现"
+    },
+    "cloudflared": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "versions.json SHA256；UPX 压缩后字节不可复现"
+    },
+    "xui": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256，未 UPX"
+    },
+    "http_meta": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json bundle+tpl SHA256"
+    },
+    "sub_store_backend": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256"
+    },
+    "sub_store_frontend": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "git checkout pin 至 versions.json 记录的 commit/SHA（B1）"
+    },
+    "crypctl": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "git pin 至记录 SHA 后 go build + UPX；UPX 后字节不可复现（B2）"
+    },
+    "acme": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "pin release tag 校验，AUTO_UPGRADE=0（B3）；运行时不自更新"
+    }
   }
 }
