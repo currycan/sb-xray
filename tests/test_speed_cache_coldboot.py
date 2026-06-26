@@ -355,3 +355,21 @@ def test_budgeted_zero_budget_is_synchronous(
     sentinel = object()
     monkeypatch.setattr(st, "run_isp_speed_tests", lambda **_kw: sentinel)
     assert st.run_isp_speed_tests_budgeted() is sentinel
+
+
+def test_apply_last_known_routing_logs_true_coldboot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When STATUS_FILE is absent, _apply_last_known_routing must log a distinct
+    warning that there is NO last-known routing (true cold boot), not silently
+    proceed.  The message must differ from the 'fell back to last-known' path."""
+    monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))  # file does not exist
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="sb_xray.speed_test"):
+        st._apply_last_known_routing()
+
+    assert any(
+        "真正冷启动" in r.message or "无 last-known" in r.message
+        for r in caplog.records
+    ), f"Expected true-cold-boot warning not found in: {[r.message for r in caplog.records]}"

@@ -1260,6 +1260,16 @@ def _apply_last_known_routing() -> None:
             os.environ[key] = value
     isp_tag = snap.get("ISP_TAG", "")
     os.environ["HAS_ISP_NODES"] = "true" if isp_tag not in ("", "direct", "block") else ""
+    if snap:
+        logger.info(
+            "last-known 选路已加载 (isp_tag=%s)；配置基于上次持久化结果渲染",
+            isp_tag or "未知",
+        )
+    else:
+        logger.warning(
+            "STATUS_FILE 不存在或为空 — 真正冷启动，本次 boot 无 last-known 选路，"
+            "ISP_TAG / _ISP_SPEEDS_JSON 等路由键本周期保持未设置状态",
+        )
 
 
 def run_isp_speed_tests_budgeted(
@@ -1285,6 +1295,10 @@ def run_isp_speed_tests_budgeted(
     try:
         budget = float(raw) if raw else 45.0
     except ValueError:
+        logger.warning(
+            "ISP_SPEED_BOOT_BUDGET_SEC=%r は数値に変換できません — 45.0s にフォールバックします",
+            raw,
+        )
         budget = 45.0
     if budget <= 0:
         return run_isp_speed_tests(samples=samples, url=url)
@@ -1300,7 +1314,10 @@ def run_isp_speed_tests_budgeted(
     if t.is_alive():
         logger.warning(
             "ISP 测速超过启动墙钟预算 %.0fs，改用 STATUS_FILE 中 last-known 选路继续 boot"
-            "（测速线程后台继续，结果将原子写回 STATUS_FILE）",
+            "（测速线程后台继续，结果将原子写回 STATUS_FILE）。"
+            "本次 boot 渲染的配置基于 last-known 路由值；"
+            "后台线程更新完成前 os.environ 与渲染配置可能存在偏差，"
+            "下次 isp-retest 完成后自动对齐。",
             budget,
         )
         _apply_last_known_routing()
