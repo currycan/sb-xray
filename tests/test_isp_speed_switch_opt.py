@@ -96,6 +96,17 @@ def test_hysteresis_no_prev_returns_ctx_leader() -> None:
     assert st._leader_with_hysteresis(ctx, {}) == ("proxy-us", 5.0)
 
 
+def test_hysteresis_all_sentinel_prev_falls_back_to_fastest() -> None:
+    # When all previous speeds are the sentinel and prev_isp_tag is absent,
+    # _resolve_prev_leader returns None; hysteresis then falls back to
+    # the current run's fastest tag (no incumbent bias).
+    ctx = _ctx({"proxy-us": 8.0, "proxy-la": 12.0}, "proxy-la")
+    # prev_speeds: all sentinel values, no prior tag persisted
+    tag, speed = st._leader_with_hysteresis(ctx, {"proxy-us": 999.0, "proxy-la": 999.0}, prev_isp_tag="")
+    assert tag == "proxy-la"
+    assert speed == 12.0
+
+
 # ---- notify edge-trigger ---------------------------------------------------
 
 

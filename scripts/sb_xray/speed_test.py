@@ -1075,6 +1075,7 @@ def _resolve_prev_leader(
     tag forever). G5.
     """
     real = {t: v for t, v in prev_speeds.items() if v != _KEEP_ON_CACHE_HIT_MBPS}
+    # 路由权威的 ISP_TAG 被返回即使其速度是哨兵，但 argmax 回退路径排除哨兵——非对称但正确。
     if prev_isp_tag and prev_isp_tag in prev_speeds:
         return prev_isp_tag
     if not real:
