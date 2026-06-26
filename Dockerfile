@@ -269,13 +269,24 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
   pip install -U pip supervisor socksio; \
   rm -rf /tmp/*
 
-# 安装 acme.sh
-ENV AUTO_UPGRADE=1
+# 安装 acme.sh（B3 供应链：pin release tag + 校验 sha256，AUTO_UPGRADE 关闭）
+ENV AUTO_UPGRADE=0
 ENV LE_WORKING_DIR=/acme.sh
 ENV LE_CONFIG_HOME=/acmecerts
 ENV ACMESH_DEBUG=2
 ENV PATH=/acme.sh/:$PATH
-RUN set -ex && curl -L https://get.acme.sh | sh
+ARG ACME_SH_VERSION=""
+ARG ACME_SH_SHA256=""
+RUN set -ex; \
+  [ -n "${ACME_SH_VERSION}" ] || { echo "ERROR: ACME_SH_VERSION build-arg required"; exit 1; }; \
+  [ -n "${ACME_SH_SHA256}" ]  || { echo "ERROR: ACME_SH_SHA256 build-arg required"; exit 1; }; \
+  curl -fsSL --retry 5 --retry-delay 5 -o /tmp/acme.tar.gz \
+    "https://github.com/acmesh-official/acme.sh/archive/refs/tags/${ACME_SH_VERSION}.tar.gz"; \
+  echo "${ACME_SH_SHA256}  /tmp/acme.tar.gz" | sha256sum -c -; \
+  mkdir -p /tmp/acme-src; \
+  tar --strip-components=1 -xzf /tmp/acme.tar.gz -C /tmp/acme-src; \
+  cd /tmp/acme-src && ./acme.sh --install --home /acme.sh --config-home /acmecerts --nocron; \
+  rm -rf /tmp/acme.tar.gz /tmp/acme-src
 
 # x-ui dependences
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \

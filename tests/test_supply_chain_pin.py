@@ -17,6 +17,11 @@ _BUILD_SH = _REPO / "build.sh"
 _VERSIONS = _REPO / "versions.json"
 
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _HEX40_or_64(v: str) -> bool:
+    return bool(_HEX64.match(v))
 
 
 def _versions() -> dict:
@@ -67,3 +72,29 @@ def test_build_sh_wires_crypctl_ref() -> None:
     assert "get_cached_version crypctl_sha" in src
     assert "_require_sha \"CRYPCTL_REF\"" in src
     assert "--build-arg CRYPCTL_REF=" in src
+
+
+def test_acme_sh_pinned_and_autoupgrade_disabled() -> None:
+    src = _DOCKERFILE.read_text(encoding="utf-8")
+    # AUTO_UPGRADE 必须显式关闭，杜绝运行时静默自升级
+    assert "ENV AUTO_UPGRADE=1" not in src, "AUTO_UPGRADE=1 must be removed"
+    assert "ENV AUTO_UPGRADE=0" in src, "AUTO_UPGRADE must be explicitly 0"
+    # 不得再 curl|sh 直跑 get.acme.sh 的浮动 master
+    assert "curl -L https://get.acme.sh | sh" not in src, (
+        "acme.sh must not pipe floating get.acme.sh into sh"
+    )
+    # 必须 pin 版本 + 校验 checksum
+    assert "ARG ACME_SH_VERSION" in src and "ARG ACME_SH_SHA256" in src
+    assert "sha256sum -c -" in src.split("acme", 1)[1][:1200] or "${ACME_SH_SHA256}" in src
+
+    data = _versions()
+    assert _HEX40_or_64(data.get("acme_sh_sha256", "")), "acme_sh_sha256 must be 64-hex"
+    assert data.get("acme_sh", "")
+
+
+def test_build_sh_wires_acme_sh() -> None:
+    src = _BUILD_SH.read_text(encoding="utf-8")
+    assert "get_cached_version acme_sh" in src
+    assert "_require_sha \"ACME_SH_SHA256\"" in src
+    assert "--build-arg ACME_SH_VERSION=" in src
+    assert "--build-arg ACME_SH_SHA256=" in src

@@ -175,6 +175,8 @@ if [ "$MODE" == "offline" ]; then
     SING_BOX_TAG=$(get_cached_version sing_box)
     XRAY_TAG=$(get_cached_version xray)
     CRYPCTL_REF=$(get_cached_version crypctl_sha)
+    ACME_SH_VERSION=$(get_cached_version acme_sh)
+    ACME_SH_SHA256=$(get_cached_version acme_sh_sha256)
 else
     echo -e "${BLUE}刷新模式：从 GitHub API 获取最新版本信息...${NC}"
     SHOUTRRR_TAG=$(get_latest_release "containrrr/shoutrrr")
@@ -195,6 +197,10 @@ else
     CRYPCTL_TAG=$(get_latest_release "currycan/key")
     CRYPCTL_REF=$(git ls-remote "https://github.com/currycan/key.git" \
       "refs/tags/${CRYPCTL_TAG}^{}" "refs/tags/${CRYPCTL_TAG}" 2>/dev/null | awk 'NR==1{print $1}')
+    ACME_SH_VERSION=$(get_latest_release "acmesh-official/acme.sh")
+    ACME_SH_SHA256=$(curl -fsSL --retry 3 \
+      "https://github.com/acmesh-official/acme.sh/archive/refs/tags/${ACME_SH_VERSION}.tar.gz" \
+      | sha256sum | awk '{print $1}')
 fi
 
 # 处理版本号并构建 Docker 参数
@@ -252,6 +258,8 @@ check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"
 check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"
 check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"
 _require_sha "CRYPCTL_REF" "$CRYPCTL_REF"
+_require_sha "ACME_SH_VERSION" "$ACME_SH_VERSION"
+_require_sha "ACME_SH_SHA256"  "$ACME_SH_SHA256"
 
 # 刷新模式：把新获取到的 versions 写回 versions.json（与 digests 同步更新）
 if [ "$MODE" == "refresh" ]; then
@@ -271,6 +279,8 @@ if [ "$MODE" == "refresh" ]; then
         --arg xray                 "${XRAY_TAG#v}" \
         --arg crypctl              "${CRYPCTL_TAG}" \
         --arg crypctl_sha          "${CRYPCTL_REF}" \
+        --arg acme_sh              "${ACME_SH_VERSION}" \
+        --arg acme_sh_sha256       "${ACME_SH_SHA256}" \
         '. + {
             shoutrrr: $shoutrrr,
             mihomo: $mihomo,
@@ -285,7 +295,9 @@ if [ "$MODE" == "refresh" ]; then
             sing_box: $sing_box,
             xray: $xray,
             crypctl: $crypctl,
-            crypctl_sha: $crypctl_sha
+            crypctl_sha: $crypctl_sha,
+            acme_sh: $acme_sh,
+            acme_sh_sha256: $acme_sh_sha256
         }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
     echo -e "  ${GREEN}✓ versions 段已写回 versions.json${NC}"
 fi
@@ -448,7 +460,9 @@ BUILD_ARGS="${BUILD_ARGS} \
   --build-arg SING_BOX_AMD64_SHA256=${SING_BOX_AMD64_SHA} \
   --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA} \
   --build-arg SUB_STORE_FRONTEND_SHA=${SUB_STORE_FRONTEND_SHA} \
-  --build-arg CRYPCTL_REF=${CRYPCTL_REF}"
+  --build-arg CRYPCTL_REF=${CRYPCTL_REF} \
+  --build-arg ACME_SH_VERSION=${ACME_SH_VERSION} \
+  --build-arg ACME_SH_SHA256=${ACME_SH_SHA256}"
 
 # 镜像版本号注入（Dockerfile final stage 的 ARG VERSION/SHA → OCI label）
 BUILD_ARGS="${BUILD_ARGS} --build-arg VERSION=${TAG_VERSION} --build-arg SHA=${GIT_SHA}"
