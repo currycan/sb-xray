@@ -354,7 +354,7 @@ def test_all_managed_lines_reinstall_idempotent(
     sbcron.install_crontab(cron_file=target, isp_hours=6, secret_hours=1)
     sbcron.install_crontab(cron_file=target, isp_hours=6, secret_hours=1)
     content = target.read_text(encoding="utf-8")
-    for sub in ("geo-update", "isp-retest", "substore-check", "secrets-refresh", "log-rotate"):
+    for sub in ("geo-update", "isp-retest", "substore-check", "secrets-refresh", "log-rotate", "cert-renew"):
         assert content.count(f"/scripts/entrypoint.py {sub}") == 1, sub
 
 
@@ -387,6 +387,7 @@ def test_cert_renew_default_jitters_minute(
 
 def test_cert_renew_custom_cron(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CERT_RENEW_CRON", "30 5 * * *")
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
     target = tmp_path / "crontab"
     sbcron.install_crontab(cron_file=target)
     assert "30 5 * * * /scripts/entrypoint.py cert-renew" in target.read_text(encoding="utf-8")
