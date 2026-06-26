@@ -30,8 +30,9 @@ import os
 import re
 
 from sb_xray import http as sbhttp
+from sb_xray.events import emit_event
 from sb_xray.network import get_fallback_proxy, is_restricted_region
-from sb_xray.routing.service_spec import SPECS_BY_ENV, ContentSignature, ServiceSpec
+from sb_xray.routing.service_spec import SERVICE_SPECS, SPECS_BY_ENV, ContentSignature, ServiceSpec
 
 # Streaming-unlock classify verdicts.
 _REAL = "REAL"
@@ -136,6 +137,41 @@ def check_gemini() -> str:
     if override == "false":
         return get_fallback_proxy()
     return _account_sensitive()
+
+
+def run_signature_self_check() -> int:
+    """Fetch each B-class probe URL and flag rotted content signatures.
+
+    Pure observation: for every spec carrying a ``ContentSignature``, GET the
+    real page and reclassify. A *reachable* page (status 200-399) that yields
+    UNKNOWN means our markers no longer match the live markup — the signature
+    has rotted and B-class routing has silently degraded to fail-safe fallback
+    with no alert. We emit ``routing.signature.rot`` so operators see it.
+
+    Routing is untouched — this never changes a verdict, it only reports. An
+    unreachable probe (status < 200) is NOT a rot (the IP just can't reach it),
+    so it raises no event. Returns the rot count (0 = all signatures healthy).
+    """
+    rot = 0
+    for spec in SERVICE_SPECS:
+        if spec.signature is None:
+            continue
+        result = sbhttp.fetch(spec.probe_url)
+        if result.status < 200 or result.status >= 400:
+            continue
+        verdict = _classify(result, spec.signature)
+        if verdict == _UNKNOWN:
+            rot += 1
+            emit_event(
+                "routing.signature.rot",
+                {
+                    "service": spec.slug,
+                    "probe_url": spec.probe_url,
+                    "verdict": verdict,
+                    "status": result.status,
+                },
+            )
+    return rot
 
 
 # ---- aggregate --------------------------------------------------------------

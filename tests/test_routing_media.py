@@ -251,3 +251,57 @@ def test_classify_signature_none_signature_is_unknown() -> None:
     spec = SPECS_BY_ENV["CHATGPT_OUT"]
     assert spec.signature is None
     assert media.classify_signature(spec) == media._UNKNOWN
+
+
+# ---- run_signature_self_check: C3 marker-rot observability -----------------
+
+
+from unittest.mock import MagicMock  # noqa: E402
+
+from sb_xray.routing.service_spec import SERVICE_SPECS  # noqa: E402
+
+
+@respx.mock
+def test_self_check_emits_rot_on_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    emit = MagicMock()
+    monkeypatch.setattr(media, "emit_event", emit)
+    # Every B-class probe_url returns a 200 page with NO known markers → UNKNOWN
+    # despite being reachable = a rotted signature, the exact C3 failure.
+    for spec in SERVICE_SPECS:
+        if spec.signature is not None:
+            respx.get(spec.probe_url).mock(
+                return_value=httpx.Response(200, text="<html>changed markup</html>")
+            )
+    rot = media.run_signature_self_check()
+    b_class = [s for s in SERVICE_SPECS if s.signature is not None]
+    assert rot == len(b_class)
+    assert emit.call_count == len(b_class)
+    name, payload = emit.call_args[0]
+    assert name == "routing.signature.rot"
+    assert payload["verdict"] == media._UNKNOWN
+    assert payload["status"] == 200
+
+
+@respx.mock
+def test_self_check_silent_when_markers_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    emit = MagicMock()
+    monkeypatch.setattr(media, "emit_event", emit)
+    for spec in SERVICE_SPECS:
+        if spec.signature is not None:
+            marker = spec.signature.real_substrings[0]
+            respx.get(spec.probe_url).mock(return_value=httpx.Response(200, text=marker))
+    assert media.run_signature_self_check() == 0
+    emit.assert_not_called()
+
+
+@respx.mock
+def test_self_check_no_rot_on_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A down probe (status<200) is NOT a signature rot — only a reachable
+    # known-good page that fails to match counts. No false-positive event.
+    emit = MagicMock()
+    monkeypatch.setattr(media, "emit_event", emit)
+    for spec in SERVICE_SPECS:
+        if spec.signature is not None:
+            respx.get(spec.probe_url).mock(side_effect=httpx.ConnectError("down"))
+    assert media.run_signature_self_check() == 0
+    emit.assert_not_called()
