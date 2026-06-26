@@ -119,8 +119,9 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
 ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
 ENV GOTOOLCHAIN=auto
-# 默认 goproxy.cn 优先（国内构建友好）；CI 可用 --build-arg GOPROXY=... 覆盖为 proxy.golang.org
-ARG GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"
+# 默认走官方 proxy.golang.org，与 CI(daily-build.yml)对齐 → offline/CI 模块源位级一致。
+# 国内构建可 opt-in：--build-arg GOPROXY="https://goproxy.cn,direct"。GOSUMDB 始终启用(校验和保护)。
+ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOPROXY=${GOPROXY}
 
 WORKDIR /app
