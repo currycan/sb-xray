@@ -38,11 +38,15 @@ def _port(name: str) -> str:
     """
     raw = _env(name)
     try:
-        int(raw)
+        value = int(raw)
     except ValueError as exc:
         raise RuntimeError(
             f"端口 env {name}={raw!r} 不是合法整数,无法生成订阅链接"
         ) from exc
+    if not (1 <= value <= 65535):
+        raise RuntimeError(
+            f"端口 env {name}={raw!r} 超出合法范围 1-65535"
+        )
     return raw
 
 

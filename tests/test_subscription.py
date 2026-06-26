@@ -100,6 +100,39 @@ def test_common_track_has_no_mlkem(tmp_path: Path, env: None) -> None:
         assert "mlkem768" not in common
 
 
+def test_out_of_range_port_fails_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Port values outside 1-65535 must raise RuntimeError with env key in message."""
+    # Test port 0 (too low)
+    monkeypatch.setenv("TEST_PORT", "0")
+    with pytest.raises(RuntimeError, match=r"TEST_PORT=.*超出合法范围 1-65535"):
+        sub._port("TEST_PORT")
+
+    # Test port 65536 (too high)
+    monkeypatch.setenv("TEST_PORT", "65536")
+    with pytest.raises(RuntimeError, match=r"TEST_PORT=.*超出合法范围 1-65535"):
+        sub._port("TEST_PORT")
+
+    # Test negative port
+    monkeypatch.setenv("TEST_PORT", "-1")
+    with pytest.raises(RuntimeError, match=r"TEST_PORT=.*超出合法范围 1-65535"):
+        sub._port("TEST_PORT")
+
+
+def test_valid_ports_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valid ports (1-65535) must pass unchanged."""
+    # Test minimum valid port
+    monkeypatch.setenv("TEST_PORT", "1")
+    assert sub._port("TEST_PORT") == "1"
+
+    # Test maximum valid port
+    monkeypatch.setenv("TEST_PORT", "65535")
+    assert sub._port("TEST_PORT") == "65535"
+
+    # Test typical port
+    monkeypatch.setenv("TEST_PORT", "443")
+    assert sub._port("TEST_PORT") == "443"
+
+
 def test_urlquote_noop_for_plain_string() -> None:
     assert sub.urlquote("plain") == "plain"
 
