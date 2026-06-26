@@ -57,3 +57,24 @@ def test_doc04_default_isp_matches_dockerfile_env() -> None:
     # docs/04 必须同时讲清:Dockerfile 默认 LA_ISP + 显式置空=测速自动选路。
     isp_row = next(ln for ln in doc04.splitlines() if "`DEFAULT_ISP`" in ln and "LA_ISP" in ln)
     assert "显式置空" in isp_row and "Dockerfile 默认" in isp_row
+
+
+def test_docs_free_of_env_specific_real_names() -> None:
+    docs_dir = _REPO / "docs"
+    forbidden = ("dc99-3", "ssrdog", "多宝")
+    hits = []
+    for md in sorted(docs_dir.glob("*.md")):
+        text = md.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in text:
+                hits.append(f"{md.name}: {token}")
+    assert not hits, f"docs/ 含环境特定真实名(§4): {hits}"
+
+
+def test_doc08_bridge_example_uses_neutral_node_names() -> None:
+    doc08 = _read("docs/08-xray-reverse-bridge.md")
+    # BRIDGE_NODES/BRIDGE_HOT 示例与 portal 行不得含环境特定节点名(§4)。
+    for token in ("dc99", "jp.example.com", "cn2.example.com"):
+        assert token not in doc08, f"docs/08 仍含环境特定示例: {token}"
+    # 替换后应使用中性占位。
+    assert "node-a.example.com" in doc08

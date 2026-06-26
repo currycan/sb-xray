@@ -623,10 +623,10 @@ node sources/hack/rename.test.js
 告警样式：
 
 ```text
-[sb-xray:dc99-3.example.com] 🔴 订阅拉取失败
+[sb-xray:node-a.example.com] 🔴 订阅拉取失败
 
-✗ ssrdog (机场) — HTTP 403
-✗ 多宝 — HTTP 500
+✗ 机场A (机场) — HTTP 403
+✗ 机场B — HTTP 500
 
 共 2/10 条失败
 ```
