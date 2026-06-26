@@ -726,6 +726,23 @@ def _status_file() -> Path:
     return Path(os.environ.get("STATUS_FILE", "/.env/status"))
 
 
+_STATUS_LINE_RE: Final[re.Pattern[str]] = re.compile(r"^export (\w+)=['\"]?(.*?)['\"]?$")
+
+
+def _parse_status_line(line: str) -> tuple[str, str] | None:
+    """Parse one ``export KEY='VALUE'`` STATUS_FILE line → ``(key, value)``.
+
+    Single source of truth for the export-line grammar shared by
+    :func:`_read_status_snapshot` and :func:`_try_speed_cache_hit`; returns
+    ``None`` for blank / comment / non-matching lines so both callers strip
+    quotes identically (G5: no per-call regex drift).
+    """
+    m = _STATUS_LINE_RE.match(line.strip())
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
 # Strictly-positive Mbps marks a tag as "usable"; 0.0 means every sample
 # failed (connect_fail / timeout / low_speed), i.e. a dead line that must not
 # steer routing or linger in the balancer selector.
@@ -751,9 +768,9 @@ def _read_status_snapshot() -> dict[str, str]:
     snapshot: dict[str, str] = {}
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^export (\w+)=['\"]?(.*?)['\"]?$", line.strip())
-            if m:
-                snapshot[m.group(1)] = m.group(2)
+            parsed = _parse_status_line(line)
+            if parsed:
+                snapshot[parsed[0]] = parsed[1]
     except OSError:
         return {}
     return snapshot
@@ -1351,9 +1368,9 @@ def _try_speed_cache_hit() -> bool:
     status: dict[str, str] = {}
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^export (\w+)=['\"]?(.*?)['\"]?$", line.strip())
-            if m:
-                status[m.group(1)] = m.group(2)
+            parsed = _parse_status_line(line)
+            if parsed:
+                status[parsed[0]] = parsed[1]
     except OSError:
         return False
 
