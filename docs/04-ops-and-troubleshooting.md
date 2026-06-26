@@ -269,7 +269,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 > `<PREFIX>` 可自定义（如 `LA`、`KR`），需在 `DEFAULT_ISP` 中指定全局兜底前缀。
 
 > 📘 **密钥轮换如何下发到运行中的节点**：`/.env/secret` 是远端加密库 `tmp.bin` 解密后的本地缓存，经宿主机卷持久化。更新 `tmp.bin` 后，运行中的服务通过两条路径感知变更，均**镜像内默认生效**：
-> - **周期 cron**（`secrets-refresh`，默认每小时，见 §6）：下载比对 `tmp.bin`，凭据有变化才重解密 `/.env/secret`、覆盖运行期 env、重测选路并热重启 xray/sing-box，生效延迟有上界（默认 ≤1h），与镜像发布节奏解耦。
+> - **周期 cron**（`secrets-refresh`，默认每小时，见 §6）：下载比对 `tmp.bin`，凭据有变化才重解密 `/.env/secret`、覆盖运行期 env、重测选路并热重启 xray/sing-box；重启后执行 `nginx -s reload`，使重渲的 nginx 配置即时生效（无需重启容器）。生效延迟有上界（默认 ≤1h），与镜像发布节奏解耦。
 > - **每次 boot 复检**：容器启动时复查上游，内容变化即原子替换缓存，故 `docker compose up -d --force-recreate`（或 watchtower 镜像跳变重建）会顺带刷新——**无需再手删 `.envs/secret`**。上游不可达且本地已有缓存时降级用旧值，启动不失败。
 >
 > 🔧 **立即下发某次轮换**（不等周期 cron）：`docker exec sb-xray /scripts/entrypoint.py secrets-refresh`；期望日志含 `secrets-refresh: completed`（凭据无变化则 `secrets-refresh: noop`）。
@@ -626,7 +626,7 @@ SAN[1]: example.com       (主域名)
 ### 5.1 自动更新
 
 - **启动阶段**: entrypoint `geoip` 段（17 段坐标系第 11 段，`stages/geoip.py`）调用 `geo.refresh(on_startup=True)`。文件 <7 天视为新鲜,直接跳过下载;仅维护 `/usr/local/bin/*.dat` 符号链接。
-- **每日任务**: cron 每天 03:00 (容器时区) 执行 `/scripts/entrypoint.py geo-update`,强制刷新并通过 `supervisorctl` 重启 xray 让新规则生效。
+- **每日任务**: cron 在 03:00 时段（分钟受 `ISP_RETEST_JITTER` 打散，默认 `true`；设 `false` 回退到分钟 0）执行 `/scripts/entrypoint.py geo-update`，强制刷新并通过 `supervisorctl` 重启 xray 让新规则生效。
 - **日志**: cron 输出重定向到 `/var/log/geo_update.log`;启动阶段输出走 entrypoint 的 stderr。
 
 ### 5.2 手动更新
@@ -669,10 +669,10 @@ docker compose restart sb-xray
 
 | # | 任务 | 默认表达式 | 控制变量 | 调度来源 | 用途 |
 |:---:|:---|:---|:---|:---|:---|
-| 1 | `geo-update` | `0 3 * * *` | —（恒定 daily 03:00） | root crontab | 强制刷新 GeoIP/GeoSite 规则库并重启 xray（见 §5.1） |
-| 2 | `isp-retest` | `0 */6 * * *`（按 hostname 打散分钟位） | `ISP_RETEST_INTERVAL_HOURS`（默认 `6`，`0` 禁用） | root crontab | 周期性带宽重测，线路集/类别变化时热重配 balancer（见 §2.6） |
+| 1 | `geo-update` | `xx 3 * * *`（分钟按 hostname jitter） | `ISP_RETEST_JITTER`（默认 `true`，`false` 回退分钟 0） | root crontab | 强制刷新 GeoIP/GeoSite 规则库并重启 xray（见 §5.1） |
+| 2 | `isp-retest` | `0 */6 * * *`（按 hostname 打散分钟位） | `ISP_RETEST_INTERVAL_HOURS`（默认 `6`，`0` 禁用） | root crontab | 周期性带宽重测，线路集/类别变化时热重配 balancer 并重启 xray/sing-box，重启后执行 `nginx -s reload` 使重渲 nginx 配置即时生效（见 §2.6） |
 | 3 | `substore-check` | `30 4 * * *` | `SUBSTORE_CHECK_CRON`（空串禁用） | root crontab | 拉取自检全部 remote 订阅，失败发 `substore.sub_fetch.failed` 告警（见 §2.6） |
-| 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，发 `secret.refresh.completed` 事件（见 §2.3） |
+| 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，重启后执行 `nginx -s reload` 使重渲 nginx 配置即时生效，发 `secret.refresh.completed` 事件（见 §2.3） |
 | 5 | `log-rotate` | `0 * * * *` | `LOG_ROTATE_CRON`（空串禁用） | root crontab | 按大小轮转 `/var/log` 下日志（logrotate），防止 nginx/xray/sing-box 日志撑满磁盘（见 §6.7） |
 | 6 | `cert-renew` | `xx 3 * * *`（分钟按 hostname jitter） | `CERT_RENEW_CRON`（**镜像内默认开**，空串禁用） | root crontab | 每日检查 TLS 证书有效期；剩余 <7 天时通过 acme.sh 向 CA 申请续签并执行 `nginx -s reload` 使新证书立即生效；有效期充足时零操作。日志写 `/var/log/cert_renew.log`，发 `cert.renew.completed` 事件 |
 | 7 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
