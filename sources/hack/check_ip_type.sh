@@ -54,14 +54,21 @@ fullIP=0           # 显示完整 IP
 CurlARGS=()        # curl 参数（数组形式避免引号注入）
 
 # 存储结果的关联数组
-declare -A maxmind ipinfo scamalytics ipregistry ipapi abuseipdb ip2location dbip ipwhois ipdata ipqs
-declare -A tiktok disney netflix youtube amazon reddit chatgpt
+declare -A maxmind ipinfo scamalytics ipregistry ipapi abuseipdb ip2location
 declare -A tiktok disney netflix youtube amazon reddit chatgpt
 
 # 资源地址前缀
 rawgithub="https://raw.githubusercontent.com/xykt/IPQuality/main"
 
 # --- 工具函数 ---
+
+# 把可能含小数/非数字的评分强制取整：截掉小数部分，非纯数字归 0。
+# bash 算术比较 [[ x -lt y ]] 对 "12.5" 这类小数会直接语法报错，故所有
+# 参与整数比较的 score 都先过此函数。
+_int_or_zero() {
+    local v="${1%%.*}"
+    case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac
+}
 
 # 显示进度 (简化版)
 show_progress() {
@@ -248,7 +255,7 @@ db_ip2location() {
     local response
     response=$(curl "${CurlARGS[@]}" -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=ip2location")
 
-    ip2location[score]=$(echo "$response" | jq -r '.fraud_score // 0')
+    ip2location[score]=$(_int_or_zero "$(echo "$response" | jq -r '.fraud_score // 0')")
     local type=$(echo "$response" | jq -r '.usage_type')
     type="${type%%/*}"
     case "$type" in
@@ -273,7 +280,7 @@ db_abuseipdb() {
     local response
     response=$(curl "${CurlARGS[@]}" -sL -$1 -m 10 "https://ipinfo.check.place/$IP?db=abuseipdb")
 
-    abuseipdb[score]=$(echo "$response" | jq -r '.data.abuseConfidenceScore // 0')
+    abuseipdb[score]=$(_int_or_zero "$(echo "$response" | jq -r '.data.abuseConfidenceScore // 0')")
     local type=$(echo "$response" | jq -r '.data.usageType')
     shopt -s nocasematch
     case "$type" in
@@ -299,7 +306,9 @@ db_scamalytics() {
     local response
     response=$(curl "${CurlARGS[@]}" -sL -$ip_ver -m 10 "https://ipinfo.check.place/$IP?db=scamalytics")
 
-    local score=$(echo "$response" | jq -r '.scamalytics.scamalytics_score // 0')
+    local score
+    score=$(echo "$response" | jq -r '.scamalytics.scamalytics_score // 0')
+    score=$(_int_or_zero "$score")
     scamalytics[score]=$score
 
     if [[ $score -lt 30 ]]; then

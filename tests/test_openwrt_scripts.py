@@ -24,6 +24,9 @@ _BACKUP = _OPENWRT / "cn-backup"
 _CDN = _OPENWRT / "cdn-speedtest"
 _ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR, _BACKUP, _CDN]
 
+_HACK = Path(__file__).resolve().parent.parent / "sources" / "hack"
+_CHECK_IP = _HACK / "check_ip_type.sh"
+
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -821,3 +824,41 @@ def test_config_env_example_documents_backup_vars() -> None:
     # 云端目标复用 BRIDGE_HOT；告警复用 Telegram 通道
     assert "BRIDGE_HOT" in src
     assert "ALERT_TG_TOKEN" in src
+
+
+# ---- check_ip_type.sh 评分硬化与去重 declare（H3） ---------------------------
+
+
+def test_check_ip_no_duplicate_declare() -> None:
+    """行 58/59 完全重复的 `declare -A tiktok ... chatgpt` 须去重为一行。"""
+    src = _CHECK_IP.read_text(encoding="utf-8")
+    dup = "declare -A tiktok disney netflix youtube amazon reddit chatgpt"
+    assert src.count(dup) == 1, "媒体数组 declare 行重复，应只声明一次"
+
+
+def test_check_ip_no_unused_db_arrays() -> None:
+    """声明但从不赋值/读取的关联数组（dbip ipwhois ipdata ipqs）应删除。"""
+    src = _CHECK_IP.read_text(encoding="utf-8")
+    for arr in ("dbip", "ipwhois", "ipdata", "ipqs"):
+        assert f"{arr}[" not in src, f"{arr} 既无赋值也无读取，declare 应删除"
+    db_line = next(ln for ln in src.splitlines() if ln.startswith("declare -A maxmind"))
+    for arr in ("dbip", "ipwhois", "ipdata", "ipqs"):
+        assert arr not in db_line, f"declare -A 行残留未用数组 {arr}"
+
+
+def test_check_ip_score_coerced_to_integer() -> None:
+    """score 经整数比较前必须强制取整——API 回小数(12.5)会令 bash [[ -lt ]] 语法报错。
+    三处取分（scamalytics/ip2location/abuseipdb）统一经 _int_or_zero 过滤。"""
+    src = _CHECK_IP.read_text(encoding="utf-8")
+    assert "_int_or_zero()" in src, "缺少取整 helper _int_or_zero"
+    # helper：截小数 + 非数字归 0
+    fn = src[src.index("_int_or_zero()"):src.index("\n}", src.index("_int_or_zero()"))]
+    assert "%%.*" in fn, "_int_or_zero 须用 ${v%%.*} 截掉小数部分"
+    assert "*[!0-9]*" in fn, "_int_or_zero 须把非纯数字归零"
+    # scamalytics 整数比较前已取整
+    sc = src[src.index("db_scamalytics()"):src.index("end_progress\n}", src.index("db_scamalytics()"))]
+    assert "_int_or_zero" in sc, "db_scamalytics 的 score 须经 _int_or_zero 取整再比较"
+    # ip2location / abuseipdb 的 score 字段同样取整（一致硬化）
+    for fnname in ("db_ip2location()", "db_abuseipdb()"):
+        body = src[src.index(fnname):src.index("end_progress\n}", src.index(fnname))]
+        assert "_int_or_zero" in body, f"{fnname} 的 score 须经 _int_or_zero 取整"
