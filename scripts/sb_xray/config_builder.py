@@ -586,6 +586,7 @@ def _resolve_supervisor_credentials() -> None:
         os.environ["SUPERVISOR_USER"] = _SUPERVISOR_DEFAULT_USER
     if not os.environ.get("SUPERVISOR_PASSWORD", "").strip():
         seed = os.environ.get("PUBLIC_PASSWORD", "")
+        # 盐值冻结——禁止改动以跟随 _SUPERVISOR_DEFAULT_USER，改盐会轮转所有存量部署的派生密码
         digest = hashlib.sha256(f"sb-xray-supervisor::{seed}".encode()).hexdigest()
         os.environ["SUPERVISOR_PASSWORD"] = digest[:32]
 

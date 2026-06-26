@@ -1078,12 +1078,28 @@ def test_supervisord_conf_renders_separated_creds(
     monkeypatch.setenv("PUBLIC_PASSWORD", "public-pw-xyz")
     monkeypatch.setenv("PUBLIC_USER", "admin")
     cb._resolve_supervisor_credentials()
-    src = Path("templates/supervisord/supervisord.conf")
+    src = Path(__file__).parent.parent / "templates/supervisord/supervisord.conf"
     rendered = cb._envsubst(src.read_text(encoding="utf-8"))
     sup_pw = os.environ["SUPERVISOR_PASSWORD"]
     assert rendered.count(f"password={sup_pw}") == 2  # 两段都替换
     assert "password=public-pw-xyz" not in rendered    # public 不再出现在控制段
     assert "${PUBLIC_PASSWORD}" not in rendered          # 无残留占位符
+
+
+def test_resolve_supervisor_credentials_empty_public_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F4 §2 watchtower 空 seed 路径：PUBLIC_PASSWORD 未设时派生密码必须非空且与
+    空字符串不同，保证旧 env 集重建镜像不产出空白 supervisord 控制密码。"""
+    monkeypatch.delenv("PUBLIC_PASSWORD", raising=False)
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    monkeypatch.delenv("SUPERVISOR_USER", raising=False)
+    cb._resolve_supervisor_credentials()
+    sup_pw = os.environ["SUPERVISOR_PASSWORD"]
+    assert sup_pw  # 非空
+    assert sup_pw != ""  # 明确不等于空字符串
+    # 空 PUBLIC_PASSWORD seed 派生值不等于空字符串本身（独立盐确保区分）
+    assert sup_pw != os.environ.get("PUBLIC_PASSWORD", "")
 
 
 def test_http_conf_includes_internal_acl_in_admin_locations() -> None:
