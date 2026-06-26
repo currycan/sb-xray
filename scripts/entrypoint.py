@@ -98,6 +98,12 @@ _STAGE_IDS: tuple[str, ...] = (
     "show",
 )
 
+# C1: probe/speed/media steer routing but are NOT load-bearing for a bootable
+# container — a crash here must degrade (DEGRADED) and let boot reach
+# exec_supervisord, not abort before it. cert/keys/dhparam/config stay
+# fail-fast (their failure makes nginx/xray restart-loop on missing files).
+_NON_FATAL_STAGES: frozenset[str] = frozenset({"probe", "speed", "media"})
+
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -640,7 +646,8 @@ def run_pipeline(
 
     for index, skip_name, name, label, fn in stage_table:
         info = StageInfo(index=index, total=TOTAL_STAGES, name=name, label=label)
-        with StageTimer(info, logger, summary=summary) as t:
+        non_fatal = name in _NON_FATAL_STAGES
+        with StageTimer(info, logger, summary=summary, non_fatal=non_fatal) as t:
             if skip_name is not None and skip_name in skips:
                 t.skipped("--skip-stage")
                 continue

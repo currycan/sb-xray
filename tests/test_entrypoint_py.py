@@ -611,3 +611,47 @@ def test_cert_renew_command_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
     rc = ep.main(["cert-renew"])
     assert rc == 0
     assert called["ran"] is True
+
+
+# ---------------------------------------------------------------------------
+# non-fatal stage degradation (C1)
+# ---------------------------------------------------------------------------
+
+
+def test_probe_exception_degrades_but_still_execs_supervisord(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1: a probe-stage crash must degrade (not abort) — boot still hands
+    over to supervisord instead of dying before exec."""
+    _patch_stage_stubs(monkeypatch)
+    called = _patch_supervisord(monkeypatch)
+
+    def _boom(_mgr: object) -> None:
+        raise RuntimeError("probe boom")
+
+    monkeypatch.setattr(ep, "probe_base_env", _boom)
+
+    rc = ep.run_pipeline(
+        env_file=tmp_env_file, skip_stage=[], dry_run=False, extras=[]
+    )
+
+    assert rc == 0
+    assert called["invoked"] is True
+
+
+def test_cert_exception_still_aborts_boot(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1 guard: cert stays fail-fast — its crash must propagate, never reach
+    exec_supervisord (nginx/xray would restart-loop on a missing bundle)."""
+    _patch_stage_stubs(monkeypatch)
+    called = _patch_supervisord(monkeypatch)
+
+    def _boom() -> None:
+        raise RuntimeError("cert boom")
+
+    monkeypatch.setattr(ep, "issue_bundle_certificate", _boom)
+
+    with pytest.raises(RuntimeError, match="cert boom"):
+        ep.run_pipeline(env_file=tmp_env_file, skip_stage=[], dry_run=False, extras=[])
+    assert called["invoked"] is False
