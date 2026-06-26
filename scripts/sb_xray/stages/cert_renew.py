@@ -4,25 +4,41 @@ Invoked by ``/scripts/entrypoint.py cert-renew`` on the daily (jittered) cron
 schedule installed by :mod:`sb_xray.stages.cron`. A fresh cron process lacks
 the ACME credentials (they live in SECRET_FILE, not in the boot-frozen env of
 the long-running PID-1), so we load them first, then delegate to
-:func:`sb_xray.cert.ensure_certificate` — which itself skips when the bundle
-still has >7d validity and, on actual renewal, reloads nginx via acme.sh's
-``--install-cert --reloadcmd``. Image-default behaviour (§2b): the cron entry
-is registered unconditionally; no new compose env is required to renew.
+:func:`sb_xray.cert.ensure_certificate`.
+
+On SKIPPED (cert still has >7d validity) nothing else happens.
+
+On INSTALLED (cert was renewed and written to disk): ``ensure_certificate``
+copies the new bundle files into ``$SSL_PATH`` via ``acme.sh --install-cert``.
+The ``--reloadcmd /usr/sbin/nginx`` used during that call is a **boot-time**
+mechanism only — it starts a short-lived standalone nginx (required by
+acme.sh's protocol), which ``_install_and_cleanup`` immediately tears down.
+It does NOT signal the supervisord-managed nginx master that is already
+running. nginx caches cert file descriptors in worker memory at startup; to
+serve the renewed cert without a container restart it needs ``nginx -s
+reload`` (SIGHUP to the master), which we send explicitly here on the
+INSTALLED path.
+
+Image-default behaviour (§2b): the cron entry is registered
+unconditionally; no new compose env is required to renew.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from pathlib import Path
 
-from sb_xray.cert import ensure_certificate
+from sb_xray.cert import CertStatus, ensure_certificate
 from sb_xray.events import emit_event
 from sb_xray.secrets import parse_env_file
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SECRET_FILE = Path("/.env/secret")
+
+_NGINX_BIN = Path("/usr/sbin/nginx")
 
 
 def _secret_file() -> Path:
@@ -44,6 +60,29 @@ def _load_secret_env(secret_file: Path) -> None:
         os.environ[key] = value
 
 
+def _reload_nginx() -> bool:
+    """Send ``nginx -s reload`` (SIGHUP) to the supervisord-managed master.
+
+    Returns True on success, False on failure (non-zero exit or missing
+    binary). The caller logs and continues regardless — a reload failure is
+    not fatal to the renewal itself; the cert files on disk are already
+    correct and the next container restart will pick them up.
+    """
+    if not _NGINX_BIN.exists():
+        logger.warning("cert-renew: nginx binary not found at %s; skipping reload", _NGINX_BIN)
+        return False
+    rc = subprocess.run(
+        [str(_NGINX_BIN), "-s", "reload"],
+        check=False,
+        capture_output=True,
+    ).returncode
+    if rc != 0:
+        logger.warning("cert-renew: nginx -s reload exited %d; new cert will be served after next restart", rc)
+        return False
+    logger.info("cert-renew: nginx reloaded — renewed cert now served without restart")
+    return True
+
+
 def run() -> int:
     """Execute a single cert-renew cycle - the cron entrypoint."""
     domain = os.environ.get("DOMAIN", "")
@@ -61,6 +100,9 @@ def run() -> int:
         logger.exception("cert-renew: ensure_certificate 失败")
         emit_event("cert.renew.error", {"error": repr(exc)})
         return 1
+
+    if status is CertStatus.INSTALLED:
+        _reload_nginx()
 
     logger.info("cert-renew: completed (status=%s)", status.value)
     emit_event("cert.renew.completed", {"status": status.value})
