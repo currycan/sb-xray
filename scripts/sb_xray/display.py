@@ -217,6 +217,17 @@ def show_qrcode(content: str, *, name: str) -> None:
 # ---- banner ---------------------------------------------------------------
 
 
+def _mask_secret(value: str) -> str:
+    """Mask a credential for banner display: keep first 2 chars + ``****``.
+
+    J3: 横幅默认不打印明文凭据。``SHOW_CREDS=true`` 时调用方走明文分支，
+    否则一律掩码。短于 3 字符的值整体掩码（不泄露长度信息）。
+    """
+    if len(value) < 3:
+        return "****"
+    return f"{value[:2]}****"
+
+
 def _print_colored(color: str, text: str, *, out: io.TextIOBase | None = None) -> None:
     """``echo -e "${color}${text}${RESET}\\n"`` equivalent (trailing blank line)."""
     stream = out or sys.stdout
@@ -295,7 +306,15 @@ def render_info_links(out: io.TextIOBase) -> None:
         user = os.environ.get("PUBLIC_USER", "未设置")
         pwd = os.environ.get("PUBLIC_PASSWORD", "未设置")
         out.write(f"  💡 {YELLOW}已附加安全认证 Token，可直接导入客户端使用{RESET}\n")
-        out.write(f"  🔒 {YELLOW}Basic Auth: {user} / {pwd}{RESET}\n")
+        # J3: 默认掩码，避免横幅（stdout/归档/截图）泄露明文 Basic Auth。
+        # SHOW_CREDS=true 显式开启明文（本地排障用）。
+        if os.environ.get("SHOW_CREDS", "false").lower() == "true":
+            out.write(f"  🔒 {YELLOW}Basic Auth: {user} / {pwd}{RESET}\n")
+        else:
+            out.write(
+                f"  🔒 {YELLOW}Basic Auth: {_mask_secret(user)} / {_mask_secret(pwd)}"
+                f"  {DIM}(SHOW_CREDS=true 显示明文){RESET}{YELLOW}{RESET}\n"
+            )
         out.write("\n")
 
     _render_sub_store_links(out, domain=domain, cdn=cdn)
