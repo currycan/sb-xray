@@ -270,7 +270,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 
 > 📘 **密钥轮换如何下发到运行中的节点**：`/.env/secret` 是远端加密库 `tmp.bin` 解密后的本地缓存，经宿主机卷持久化。更新 `tmp.bin` 后，运行中的服务通过两条路径感知变更，均**镜像内默认生效**：
 > - **周期 cron**（`secrets-refresh`，默认每小时，见 §6）：下载比对 `tmp.bin`，凭据有变化才重解密 `/.env/secret`、覆盖运行期 env、重测选路并热重启 xray/sing-box；重启后执行 `nginx -s reload`，使重渲的 nginx 配置即时生效（无需重启容器）。生效延迟有上界（默认 ≤1h），与镜像发布节奏解耦。
-> - **每次 boot 复检**：容器启动时复查上游，内容变化即原子替换缓存，故 `docker compose up -d --force-recreate`（或 watchtower 镜像跳变重建）会顺带刷新——**无需再手删 `.envs/secret`**。上游不可达且本地已有缓存时降级用旧值，启动不失败。
+> - **每次 boot 复检**：容器启动时复查上游，内容变化即原子替换缓存，故 `docker compose up -d --force-recreate`（或 watchtower 镜像跳变重建）会顺带刷新——**无需再手删 `.envs/secret`**。上游不可达且本地已有缓存时降级用旧值，启动不失败。三类远端拉取（secret 加密库、geo `.dat` 规则库、ipapi 地理信息）遭遇瞬态失败时均执行一次有界重试（共 2 次尝试，无 sleep），仍失败则降级；ipapi 地理信息仅在响应携带有效 `country_code` 时才写入 `/tmp` 缓存，局部响应不污染缓存。
 >
 > 🔧 **立即下发某次轮换**（不等周期 cron）：`docker exec sb-xray /scripts/entrypoint.py secrets-refresh`；期望日志含 `secrets-refresh: completed`（凭据无变化则 `secrets-refresh: noop`）。
 
