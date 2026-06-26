@@ -356,3 +356,64 @@ def test_all_managed_lines_reinstall_idempotent(
     content = target.read_text(encoding="utf-8")
     for sub in ("geo-update", "isp-retest", "substore-check", "secrets-refresh", "log-rotate"):
         assert content.count(f"/scripts/entrypoint.py {sub}") == 1, sub
+
+
+def test_installs_cert_renew_default_daily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CERT_RENEW_CRON", raising=False)
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")  # pin minute 0
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "0 3 * * * /scripts/entrypoint.py cert-renew" in content
+    assert content.count("cert-renew") == 1
+
+
+def test_cert_renew_default_jitters_minute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CERT_RENEW_CRON", raising=False)
+    monkeypatch.delenv("ISP_RETEST_JITTER", raising=False)
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "dc99-3")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    line = next(
+        ln for ln in target.read_text(encoding="utf-8").splitlines() if "cert-renew" in ln
+    )
+    assert int(line.split()[0]) == sbcron._jitter_minute()
+    assert line.split()[1] == "3"
+
+
+def test_cert_renew_custom_cron(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CERT_RENEW_CRON", "30 5 * * *")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    assert "30 5 * * * /scripts/entrypoint.py cert-renew" in target.read_text(encoding="utf-8")
+
+
+def test_cert_renew_disabled_with_empty_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CERT_RENEW_CRON", "")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "cert-renew" not in content
+    assert "geo-update" in content
+
+
+def test_cert_renew_replaces_stale_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CERT_RENEW_CRON", raising=False)
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    target.write_text(
+        "0 1 * * * /scripts/entrypoint.py cert-renew >> /var/log/cert_renew.log 2>&1\n",
+        encoding="utf-8",
+    )
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert content.count("cert-renew") == 1
+    assert "0 3 * * *" in content

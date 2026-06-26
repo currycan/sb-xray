@@ -36,6 +36,7 @@ _DEFAULT_CRON = Path("/var/spool/cron/crontabs/root")
 _GEO_ENTRY = "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
 _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
 _LOGROTATE_DEFAULT_CRON = "0 * * * *"  # hourly size-based; LOG_ROTATE_CRON="" disables
+_CERT_RENEW_DEFAULT_HOUR = 3  # daily 03:xx (minute jittered); CERT_RENEW_CRON="" disables
 
 # 本模块托管的 entrypoint.py 子命令——剥行/重装时只针对这些命令尾锚定,
 # 避免对裸 marker 子串匹配误删运维自定义行 (F1)。
@@ -45,6 +46,7 @@ _MANAGED_SUBCOMMANDS: Final[tuple[str, ...]] = (
     "substore-check",
     "secrets-refresh",
     "log-rotate",
+    "cert-renew",
 )
 _ENTRYPOINT = "/scripts/entrypoint.py"
 # 迁移期旧 shell 入口(纯字面量,无对应子命令)。
@@ -137,6 +139,25 @@ def _logrotate_entry() -> str | None:
     return f"{spec} /scripts/entrypoint.py log-rotate >> /var/log/logrotate.log 2>&1"
 
 
+def _cert_renew_entry() -> str | None:
+    """Daily TLS bundle renewal; ``CERT_RENEW_CRON=""`` disables.
+
+    Like :func:`_substore_check_entry` the env value (when set) is a full
+    5-field cron spec; unset falls back to a daily run whose *minute* is
+    fleet-jittered (every node shares the same ACME DNS provider, so a fixed
+    minute would herd the renewals). The cmd itself is idempotent: cert.py
+    skips when the bundle still has >7d validity.
+    """
+    raw = os.environ.get("CERT_RENEW_CRON")
+    if raw is None:
+        spec = f"{_jitter_minute()} {_CERT_RENEW_DEFAULT_HOUR} * * *"
+    else:
+        spec = raw.strip()
+        if not spec:
+            return None
+    return f"{spec} /scripts/entrypoint.py cert-renew >> /var/log/cert_renew.log 2>&1"
+
+
 def _read_hours_env() -> int:
     raw = os.environ.get("ISP_RETEST_INTERVAL_HOURS", "").strip()
     if not raw:
@@ -198,6 +219,7 @@ def install_crontab(
     secret_hours_val = _read_secret_hours_env() if secret_hours is None else secret_hours
     secret_entry = _secret_refresh_entry(secret_hours_val)
     logrotate_entry = _logrotate_entry()
+    cert_entry = _cert_renew_entry()
 
     cron_file.parent.mkdir(parents=True, exist_ok=True)
     existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
@@ -211,6 +233,8 @@ def install_crontab(
         lines.append(secret_entry)
     if logrotate_entry is not None:
         lines.append(logrotate_entry)
+    if cert_entry is not None:
+        lines.append(cert_entry)
     cleaned = "\n".join(lines).rstrip() + "\n"
     cron_file.write_text(cleaned, encoding="utf-8")
     cron_file.chmod(0o600)
@@ -221,9 +245,11 @@ def install_crontab(
         else "secrets-refresh disabled"
     )
     logrotate_desc = "log-rotate on" if logrotate_entry is not None else "log-rotate disabled"
+    cert_desc = "cert-renew on" if cert_entry is not None else "cert-renew disabled"
     logger.info(
-        "Cron 定时任务已安装 (geo-update daily 03:00; %s; %s; %s)",
+        "Cron 定时任务已安装 (geo-update daily 03:00; %s; %s; %s; %s)",
         isp_desc,
         secret_desc,
         logrotate_desc,
+        cert_desc,
     )
