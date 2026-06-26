@@ -418,3 +418,31 @@ def test_cert_renew_replaces_stale_entry(
     content = target.read_text(encoding="utf-8")
     assert content.count("cert-renew") == 1
     assert "0 3 * * *" in content
+
+
+def test_geo_update_default_jitters_minute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default (no ISP_RETEST_JITTER) must NOT pin geo-update to minute 0."""
+    monkeypatch.delenv("ISP_RETEST_JITTER", raising=False)
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "dc99-3")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    geo_line = next(
+        ln for ln in target.read_text(encoding="utf-8").splitlines() if "geo-update" in ln
+    )
+    fields = geo_line.split()
+    assert int(fields[0]) == sbcron._jitter_minute()  # jittered minute
+    assert fields[1] == "3"  # hour stays 03:00
+
+
+def test_geo_update_jitter_disabled_pins_minute_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    geo_line = next(
+        ln for ln in target.read_text(encoding="utf-8").splitlines() if "geo-update" in ln
+    )
+    assert geo_line.startswith("0 3 * * * /scripts/entrypoint.py geo-update")

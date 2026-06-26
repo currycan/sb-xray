@@ -33,7 +33,7 @@ from typing import Final
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CRON = Path("/var/spool/cron/crontabs/root")
-_GEO_ENTRY = "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+_GEO_MARKER = "geo-update"
 _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
 _LOGROTATE_DEFAULT_CRON = "0 * * * *"  # hourly size-based; LOG_ROTATE_CRON="" disables
 _CERT_RENEW_DEFAULT_HOUR = 3  # daily 03:xx (minute jittered); CERT_RENEW_CRON="" disables
@@ -102,6 +102,19 @@ def _jitter_minute() -> int:
     host = socket.gethostname() or "sb-xray"
     digest = hashlib.sha1(host.encode("utf-8")).hexdigest()
     return int(digest, 16) % 60
+
+
+def _geo_update_entry() -> str:
+    """Daily geoip/geosite refresh, jittered to avoid a fleet-wide thundering herd.
+
+    Hour stays at 03:00; the minute is spread across the fleet via
+    :func:`_jitter_minute` (every node else hits the same upstream rule-set
+    mirror in the same second). ``ISP_RETEST_JITTER=false`` restores minute 0.
+    """
+    return (
+        f"{_jitter_minute()} 3 * * * "
+        "/scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+    )
 
 
 def _isp_retest_entry(hours: int) -> str | None:
@@ -202,7 +215,7 @@ def _read_secret_hours_env() -> int:
 def install_crontab(
     *,
     cron_file: Path = _DEFAULT_CRON,
-    geo_entry: str = _GEO_ENTRY,
+    geo_entry: str | None = None,
     isp_hours: int | None = None,
     secret_hours: int | None = None,
 ) -> None:
@@ -213,6 +226,7 @@ def install_crontab(
     installations upgrade cleanly. Setting ``ISP_RETEST_INTERVAL_HOURS=0``
     (or passing ``isp_hours=0``) removes the isp-retest entry.
     """
+    geo_entry_line = _geo_update_entry() if geo_entry is None else geo_entry
     hours = _read_hours_env() if isp_hours is None else isp_hours
     isp_entry = _isp_retest_entry(hours)
     substore_entry = _substore_check_entry()
@@ -224,7 +238,7 @@ def install_crontab(
     cron_file.parent.mkdir(parents=True, exist_ok=True)
     existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
     lines = [ln for ln in existing.splitlines() if not _is_managed_line(ln)]
-    lines.append(geo_entry)
+    lines.append(geo_entry_line)
     if isp_entry is not None:
         lines.append(isp_entry)
     if substore_entry is not None:
