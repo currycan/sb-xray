@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import respx
 from sb_xray import geo
 
 
@@ -179,6 +180,31 @@ def test_refresh_forces_download_when_not_on_startup(
     assert len(hits) == len(manifest)
     for name in manifest:
         assert (target / name).read_bytes() == b"fresh"
+
+
+@respx.mock
+def test_download_one_retries_once_then_succeeds(tmp_path: Path) -> None:
+    url = "https://example.test/geoip.dat"
+    route = respx.get(url).mock(
+        side_effect=[
+            httpx.ConnectError("flap"),                       # 首次抖动
+            httpx.Response(200, content=b"GEOIP-DATA-BYTES"),  # 重试成功
+        ]
+    )
+    ok = geo._download_one("geoip.dat", url, tmp_path, timeout=5.0)
+    assert ok is True
+    assert route.call_count == 2
+    assert (tmp_path / "geoip.dat").read_bytes() == b"GEOIP-DATA-BYTES"
+
+
+@respx.mock
+def test_download_one_returns_false_after_all_retries_fail(tmp_path: Path) -> None:
+    url = "https://example.test/geosite.dat"
+    route = respx.get(url).mock(side_effect=httpx.ConnectError("down"))
+    ok = geo._download_one("geosite.dat", url, tmp_path, timeout=5.0)
+    assert ok is False
+    assert route.call_count == 2
+    assert not (tmp_path / "geosite.dat").exists()  # 失败不留半文件
 
 
 def test_manifest_geosite_source_is_metacubex() -> None:
