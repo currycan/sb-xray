@@ -128,6 +128,16 @@ SERVICE_SPECS: Final[tuple[ServiceSpec, ...]] = (
 SPECS_BY_ENV: Final[dict[str, ServiceSpec]] = {s.env_var: s for s in SERVICE_SPECS}
 
 
+def service_env_vars() -> frozenset[str]:
+    """``*_OUT`` env vars declared in the central registry.
+
+    The single source of truth for the C4 superset invariant: any env var here
+    MUST also appear in ``routing.isp._SERVICE_SPEC`` so the xray rule tuples
+    cover every probed service (drift = a service with no xray routing rule).
+    """
+    return frozenset(s.env_var for s in SERVICE_SPECS)
+
+
 def per_service_enabled() -> bool:
     """Read ``ISP_PER_SERVICE_SB`` as a boolean; default off for safety."""
     import os
