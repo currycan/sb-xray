@@ -129,6 +129,12 @@ docker exec -it sb-xray bash
 | `CDNDOMAIN` | CDN 域名（Cloudflare 代理，Nginx Web 层监听此 SNI） |
 | `DECODE` | 远端密钥库解密密钥（由 `crypctl` 使用） |
 
+#### 密钥库 URL（可选）
+
+| 变量 | 镜像内默认 | 说明 |
+|:---|:---|:---|
+| `SECRETS_URL` | *(空)* | 加密 secret blob 的下载地址；仅 `DECODE` 部署（远端密钥库解密）需要设置，空值时跳过远端下载 |
+
 #### 核心可选
 
 > 📘 **列头说明**：下表及 ACME / X-UI / S-UI 面板各节使用「Dockerfile 默认」列——这些值通过 `Dockerfile ENV` 指令固化在镜像内，无论 compose 如何设置均作为兜底。`#### Supervisord 控制凭据` 及 `#### Dufs 文件服务` 等后续节改用「镜像内默认」——这些值的兜底由 Python 入口的 `os.environ.get(key, 默认值)` 提供，而非 `Dockerfile ENV`；行为等价，来源不同。
@@ -239,6 +245,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 |:---|:---|:---|
 | `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`（大小写不敏感，`WARN` 作为 `WARNING` 的别名）。**与给 xray/sing-box 用的 `LOG_LEVEL` 分离**，避免 xray 的 `warning` 字符串意外屏蔽阶段进度 INFO 日志。 |
 | `NO_COLOR` | *(空)* | 设为任意非空值 → 关闭 entrypoint 日志的 ANSI 彩色。容器 stdout 非 TTY 时自动关闭，无需手动配置。 |
+| `SHOW_CREDS` | `false` | 启动横幅是否明文显示 HTTP Basic Auth 凭据；默认 `false`（掩码，仅显示前 2 字符）；`true` 时输出明文，用于本地排障 |
 
 **格式**：`[ISO-8601 时区时间戳] [LEVEL] [模块名] 消息`
 
