@@ -19,6 +19,7 @@ regress shell compatibility.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -568,6 +569,27 @@ def _resolve_dufs_permissions() -> None:
             os.environ[key] = default
 
 
+# --- supervisord 控制凭据(F4: 与 public/dufs 凭据分离) --------------------
+
+_SUPERVISOR_DEFAULT_USER = "sb-xray"
+
+
+def _resolve_supervisor_credentials() -> None:
+    """Provide distinct supervisord control creds, separate from PUBLIC_*.
+
+    一处 PUBLIC_PASSWORD 泄漏不应同时交出 supervisord 控制权。未显式设置
+    ``SUPERVISOR_PASSWORD`` 时,从 ``PUBLIC_PASSWORD`` 用固定 salt 做 sha256
+    确定性派生 —— 与 public 不同值,且 watchtower 旧 env 集重建镜像也能稳定
+    生成(§2 镜像内默认)。显式设置优先。
+    """
+    if not os.environ.get("SUPERVISOR_USER", "").strip():
+        os.environ["SUPERVISOR_USER"] = _SUPERVISOR_DEFAULT_USER
+    if not os.environ.get("SUPERVISOR_PASSWORD", "").strip():
+        seed = os.environ.get("PUBLIC_PASSWORD", "")
+        digest = hashlib.sha256(f"sb-xray-supervisor::{seed}".encode()).hexdigest()
+        os.environ["SUPERVISOR_PASSWORD"] = digest[:32]
+
+
 def run_logrotate(
     *,
     conf: Path = _LOGROTATE_CONF,
@@ -619,6 +641,7 @@ def create_config(*, workdir: Path | None = None) -> None:
     os.environ["RANDOM_NUM"] = str(random.randint(0, 9))
     _apply_access_log_env()
     _resolve_dufs_permissions()
+    _resolve_supervisor_credentials()
 
     for src, dest in _FLAT_RENDERS:
         dest_path = _expand_dest(dest)

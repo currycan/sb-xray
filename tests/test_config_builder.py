@@ -1036,6 +1036,56 @@ def test_dufs_conf_logformat_tokens_survive_literally(
     assert "log-format:" in rendered
 
 
+def test_resolve_supervisor_credentials_derives_distinct_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F4: supervisord 控制密码必须与 PUBLIC_PASSWORD 不同值,
+    且未显式设置时从 PUBLIC_PASSWORD 确定性派生(§2 镜像内默认,
+    watchtower 旧 env 集重建也能稳定生成)。"""
+    monkeypatch.delenv("SUPERVISOR_USER", raising=False)
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    monkeypatch.setenv("PUBLIC_PASSWORD", "shared-secret-123")
+    cb._resolve_supervisor_credentials()
+    assert os.environ["SUPERVISOR_USER"] == "sb-xray"
+    assert os.environ["SUPERVISOR_PASSWORD"] != "shared-secret-123"
+    assert os.environ["SUPERVISOR_PASSWORD"]  # 非空
+    # 确定性:再解析一次同输入 → 同输出
+    derived = os.environ["SUPERVISOR_PASSWORD"]
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    cb._resolve_supervisor_credentials()
+    assert os.environ["SUPERVISOR_PASSWORD"] == derived
+
+
+def test_resolve_supervisor_credentials_respects_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """显式 SUPERVISOR_PASSWORD 原样保留。"""
+    monkeypatch.setenv("PUBLIC_PASSWORD", "pw")
+    monkeypatch.setenv("SUPERVISOR_PASSWORD", "explicit-sup-pw")
+    monkeypatch.setenv("SUPERVISOR_USER", "ctl")
+    cb._resolve_supervisor_credentials()
+    assert os.environ["SUPERVISOR_PASSWORD"] == "explicit-sup-pw"
+    assert os.environ["SUPERVISOR_USER"] == "ctl"
+
+
+def test_supervisord_conf_renders_separated_creds(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F4: supervisord.conf 渲染后,unix_http_server 与 supervisorctl 两段
+    都用 SUPERVISOR_PASSWORD,且 != PUBLIC_PASSWORD。"""
+    monkeypatch.delenv("SUPERVISOR_USER", raising=False)
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    monkeypatch.setenv("PUBLIC_PASSWORD", "public-pw-xyz")
+    monkeypatch.setenv("PUBLIC_USER", "admin")
+    cb._resolve_supervisor_credentials()
+    src = Path("templates/supervisord/supervisord.conf")
+    rendered = cb._envsubst(src.read_text(encoding="utf-8"))
+    sup_pw = os.environ["SUPERVISOR_PASSWORD"]
+    assert rendered.count(f"password={sup_pw}") == 2  # 两段都替换
+    assert "password=public-pw-xyz" not in rendered    # public 不再出现在控制段
+    assert "${PUBLIC_PASSWORD}" not in rendered          # 无残留占位符
+
+
 def test_http_conf_includes_internal_acl_in_admin_locations() -> None:
     """A1: /supervisor/、DUFS、XUI 三个管理面 location 必须 include
     network_internal.conf,否则内网 ACL 形同虚设(对公网开放)。"""
