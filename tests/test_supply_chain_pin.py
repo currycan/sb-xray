@@ -36,3 +36,14 @@ def test_build_sh_reads_and_passes_frontend_sha() -> None:
     assert "get_cached_version sub_store_frontend_sha" in src
     assert "_require_sha \"SUB_STORE_FRONTEND_SHA\"" in src
     assert "--build-arg SUB_STORE_FRONTEND_SHA=" in src
+
+
+def test_dockerfile_frontend_checks_out_pinned_sha() -> None:
+    src = _DOCKERFILE.read_text(encoding="utf-8")
+    assert "ARG SUB_STORE_FRONTEND_SHA" in src, "frontend stage must declare SHA build-arg"
+    # 必须在 clone 后显式 checkout 锁定 commit，而非信任可变 tag
+    assert "git checkout" in src and "${SUB_STORE_FRONTEND_SHA}" in src, (
+        "frontend stage must `git checkout ${SUB_STORE_FRONTEND_SHA}`"
+    )
+    # 空值即拒绝构建（与其它组件 _SHA256 build-arg 一致的 fail-closed 语义）
+    assert 'SUB_STORE_FRONTEND_SHA' in src and 'build-arg required' in src

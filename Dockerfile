@@ -75,12 +75,16 @@ RUN set -ex; \
 # --- Sub-Store 前端 ---
 WORKDIR /app/frontend
 ARG SUB_STORE_FRONTEND_VERSION="2.16.57"
+# B1 供应链：clone 后 git checkout 锁定 commit SHA，杜绝可变 tag 被上游移动
+ARG SUB_STORE_FRONTEND_SHA=""
 ENV SUB_STORE_WEBBASEPATH="sub-store"
 # pnpm store 缓存挂载 → 跨构建复用 npm 依赖下载
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     --mount=type=cache,target=/root/.npm,sharing=locked \
   set -ex; \
-  (git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend || (sleep 5 && git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend)); \
+  [ -n "${SUB_STORE_FRONTEND_SHA}" ] || { echo "ERROR: SUB_STORE_FRONTEND_SHA build-arg required"; exit 1; }; \
+  (git clone --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend || (sleep 5 && git clone --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend)); \
+  cd /app/frontend && git checkout ${SUB_STORE_FRONTEND_SHA}; \
   npm install -g pnpm; \
   cd /app/frontend && pnpm install --frozen-lockfile --ignore-scripts; \
   pnpm approve-builds "@parcel/watcher@2.5.6" "core-js@3.49.0" "esbuild@0.15.18" "vue-demi@0.14.10"; \
