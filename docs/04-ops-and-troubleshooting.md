@@ -367,6 +367,9 @@ docker compose restart
 | `ISP_FALLBACK_STRATEGY` | `direct` | `direct`(静默直连) / `block`(fail-closed,CN / HK / RU 建议) |
 | `ISP_SPEED_CACHE_TTL_MIN` | `60` | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
 | `ISP_SPEED_CACHE_ASYNC` | `true` | 缓存命中时是否后台线程异步刷新速度;`false` 仅用于调试 |
+| `ISP_SPEED_BOOT_BUDGET_SEC` | `45` | 启动测速墙钟预算（秒）；冷缓存实测超过该上界时放弃等待，主进程改用 STATUS_FILE 中 last-known `ISP_TAG` 渲染初始配置继续启动，测速线程在后台跑完并原子写回结果。`0` 禁用预算（同步等待，退回不设上界的行为） |
+
+> **冷启动延迟包络与降级**：首次启动（无缓存或缓存过期 TTL）时，ISP 测速串行实测每个节点（单节点耗时约 `ISP_SPEED_TIMEOUT_SEC` × `ISP_SPEED_SAMPLES`）。为防止该阶段阻塞后续证书 / 配置 / supervisord 拉起，启动测速受 `ISP_SPEED_BOOT_BUDGET_SEC`（默认 45 s）墙钟预算约束：超界即放弃等待，改用 STATUS_FILE 中 last-known 路由键继续 boot；若为无历史数据的真冷启动，路由键本轮保持未定，待下一次 `isp-retest` cron 补全。此外，`probe`（基础落地变量）/ `speed`（测速选路）/ `media`（流媒体可达性）三个 stage 均为**非致命**——任一抛异常只标记 `DEGRADED` 并继续启动，不像证书 / 密钥 / DH 参数那样 fail-fast 中止容器；启动汇总行的 `degraded=N` 计数即来源于此。缓存命中（TTL 内）时测速移入后台异步刷新，boot 几乎无额外延迟。
 
 #### v2 带宽采样器（流式 + 预热丢弃 + 时间窗 + 诊断）
 
