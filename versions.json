@@ -3,6 +3,7 @@
   "mihomo": "1.19.27",
   "http_meta": "1.1.0",
   "sub_store_frontend": "2.26.5",
+  "sub_store_frontend_sha": "9b2cb3f20e4eb0b0fc0bc243a6f0eeedecb1091c",
   "sub_store_backend": "2.31.5",
   "dufs": "0.46.0",
   "cloudflared": "2026.6.1",

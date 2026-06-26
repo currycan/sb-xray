@@ -166,6 +166,7 @@ if [ "$MODE" == "offline" ]; then
     MIHOMO_TAG=$(get_cached_version mihomo)
     HTTP_META_VERSION=$(get_cached_version http_meta)
     SUB_STORE_FRONTEND_VERSION=$(get_cached_version sub_store_frontend)
+    SUB_STORE_FRONTEND_SHA=$(get_cached_version sub_store_frontend_sha)
     SUB_STORE_BACKEND_VERSION=$(get_cached_version sub_store_backend)
     # SUI_TAG=$(get_cached_version s_ui)  # s-ui removed
     DUFS_TAG=$(get_cached_version dufs)
@@ -179,6 +180,10 @@ else
     MIHOMO_TAG=$(get_latest_release "MetaCubeX/mihomo")
     HTTP_META_VERSION=$(get_latest_release "xream/http-meta")
     SUB_STORE_FRONTEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store-Front-End")
+    # 解析 tag → commit SHA（ls-remote 拿 annotated/lightweight tag 指向的 commit）
+    SUB_STORE_FRONTEND_SHA=$(git ls-remote "https://github.com/sub-store-org/Sub-Store-Front-End" \
+      "refs/tags/${SUB_STORE_FRONTEND_VERSION#v}^{}" "refs/tags/${SUB_STORE_FRONTEND_VERSION#v}" \
+      2>/dev/null | awk 'NR==1{print $1}')
     SUB_STORE_BACKEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store")
     # SUI_TAG=$(get_latest_release "alireza0/s-ui")  # s-ui removed
     DUFS_TAG=$(get_latest_stable_tag "sigoden/dufs")
@@ -234,6 +239,7 @@ check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"
 check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"
 check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"
 check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION"
+_require_sha "SUB_STORE_FRONTEND_SHA" "$SUB_STORE_FRONTEND_SHA"
 check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"
 # check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"  # s-ui removed
 check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"
@@ -250,8 +256,9 @@ if [ "$MODE" == "refresh" ]; then
         --arg shoutrrr             "${SHOUTRRR_TAG#v}" \
         --arg mihomo               "${MIHOMO_TAG#v}" \
         --arg http_meta            "${HTTP_META_VERSION#v}" \
-        --arg sub_store_frontend   "${SUB_STORE_FRONTEND_VERSION#v}" \
-        --arg sub_store_backend    "${SUB_STORE_BACKEND_VERSION#v}" \
+        --arg sub_store_frontend     "${SUB_STORE_FRONTEND_VERSION#v}" \
+        --arg sub_store_frontend_sha "${SUB_STORE_FRONTEND_SHA}" \
+        --arg sub_store_backend      "${SUB_STORE_BACKEND_VERSION#v}" \
         --arg dufs                 "${DUFS_TAG#v}" \
         --arg cloudflared          "${CLOUDFLARED_VERSION#v}" \
         --arg x_ui                 "${XUI_TAG#v}" \
@@ -262,6 +269,7 @@ if [ "$MODE" == "refresh" ]; then
             mihomo: $mihomo,
             http_meta: $http_meta,
             sub_store_frontend: $sub_store_frontend,
+            sub_store_frontend_sha: $sub_store_frontend_sha,
             sub_store_backend: $sub_store_backend,
             # s_ui: $s_ui,  # s-ui removed
             dufs: $dufs,
@@ -429,7 +437,8 @@ BUILD_ARGS="${BUILD_ARGS} \
   --build-arg XUI_AMD64_SHA256=${XUI_AMD64_SHA} \
   --build-arg XUI_ARM64_SHA256=${XUI_ARM64_SHA} \
   --build-arg SING_BOX_AMD64_SHA256=${SING_BOX_AMD64_SHA} \
-  --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA}"
+  --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA} \
+  --build-arg SUB_STORE_FRONTEND_SHA=${SUB_STORE_FRONTEND_SHA}"
 
 # 镜像版本号注入（Dockerfile final stage 的 ARG VERSION/SHA → OCI label）
 BUILD_ARGS="${BUILD_ARGS} --build-arg VERSION=${TAG_VERSION} --build-arg SHA=${GIT_SHA}"
