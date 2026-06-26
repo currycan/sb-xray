@@ -233,7 +233,7 @@ flowchart TB
 | 行为 | 实现 |
 |---|---|
 | **事件类型识别** | 取 `X-Event` 请求头（Xray webhook 走这条）；缺失则读 body 里的 `event` 字段（容器内 `events.py` POST 到 `/xray` 时事件名包在 body 里），再退回 URL 路径（`/ban_bt` → `ban_bt`），最后 `unknown` |
-| **消息拼装** | 4 个内置 ban 事件 → 人话摘要：标题 = `"{SHOUTRRR_TITLE_PREFIX} 🚫 BT 下载已拦截"` 等中文标题，正文 = 「用户 X 尝试连接 Y」+ 来源/入站/时间；`isp.speed_test.result` → 标题 `📊 ISP 测速结果`，正文 = 带宽头部（代理模式头部为「带宽最快」即带宽领头者，直连/封禁模式为「选定线路」）/评级/直连基准 + 各线路逐行（含 ✓/✗ 与失败原因）；代理模式附一行机制说明「实际线路由 xray leastPing 按延迟每分钟实时选，带宽仅作节点池排序参考」——避免把带宽领头者误读为单一已定线路；`isp.retest.completed` → 标题 `🔄 ISP 重测 · 线路已切换`，正文 = 切换结论（`old → new`）+ 原因/重启状态 + 折入的测速摘要；`isp.retest.noop` → 标题 `🔁 ISP 重测 · 配置未变`，正文 = 测速摘要 + 结构性结论「节点池与路由类别未变，无需重建配置（未重启）」+ 本次最大带宽波动百分比（标注由 leastPing 在线吸收，**不是切换阈值**）；这里的波动百分比仅供观察，**不参与重启决策**（重启只看节点集合增删或路由类别翻转，纯带宽波动交由运行时 leastPing 在线重排）；**这两类 retest 卡发出时，同一重测周期内那次 `isp.speed_test.result` 的独立推送被抑制**（仍记日志不外推），测速摘要折进 retest 卡，使「测速 + 切换决策」合为一条通知；`substore.sub_fetch.failed` → 标题 `🔴 订阅拉取失败`，正文 = 失败订阅逐行（含是否机场 + 原因）+ 共 N/M 条失败；`secret.refresh.completed`（远端密钥库 `tmp.bin` 轮换后由 `secrets-refresh` cron 检测到凭据变化、热重配并重启时发出）→ 标题 `🔐 密钥已更新`，正文 = 凭据轮换结论（变更 / 移除的凭据键数量，不含明文）+ 重启状态；`secret.refresh.noop`（凭据无变化 / 离线降级 / 未解密 / 禁用）**边沿抑制**：仅记 stdout 不外推（每小时一次的常态 no-op，避免噪音告警，见下方 `notify=false` 静默行）；`secret.refresh.error`（拉取/解密/重启失败）未登记 formatter，仍走通用 `key: value` 外推（失败可操作，保留告警）；未登记的事件 → 标题 = `"{SHOUTRRR_TITLE_PREFIX} {event}"`，正文 = 每字段一行 `key: value`（剔除空值与 `event` 键、`ts` 转可读） |
+| **消息拼装** | 4 个内置 ban 事件 → 人话摘要：标题 = `"{SHOUTRRR_TITLE_PREFIX} 🚫 BT 下载已拦截"` 等中文标题，正文 = 「用户 X 尝试连接 Y」+ 来源/入站/时间；`isp.speed_test.result` → 标题 `📊 ISP 测速结果`，正文 = 带宽头部（代理模式头部为「带宽最快」即带宽领头者，直连/封禁模式为「选定线路」）/评级/直连基准 + 各线路逐行（含 ✓/✗ 与失败原因）；代理模式附一行机制说明「实际线路由 xray leastPing 按延迟每分钟实时选，带宽仅作节点池排序参考」——避免把带宽领头者误读为单一已定线路；`isp.retest.completed` → 标题 `🔄 ISP 重测 · 线路已切换`，正文 = 切换结论（`old → new`）+ 原因/重启状态 + 折入的测速摘要；`isp.retest.noop` → 标题 `🔁 ISP 重测 · 配置未变`，正文 = 测速摘要 + 结构性结论「节点池与路由类别未变，无需重建配置（未重启）」+ 本次最大带宽波动百分比（标注由 leastPing 在线吸收，**不是切换阈值**）；这里的波动百分比仅供观察，**不参与重启决策**（重启只看节点集合增删或路由类别翻转，纯带宽波动交由运行时 leastPing 在线重排）；**这两类 retest 卡发出时，同一重测周期内那次 `isp.speed_test.result` 的独立推送被抑制**（仍记日志不外推），测速摘要折进 retest 卡，使「测速 + 切换决策」合为一条通知；`substore.sub_fetch.failed` → 标题 `🔴 订阅拉取失败`，正文 = 失败订阅逐行（含是否机场 + 原因）+ 共 N/M 条失败；`secret.refresh.completed`（远端密钥库 `tmp.bin` 轮换后由 `secrets-refresh` cron 检测到凭据变化、热重配并重启时发出）→ 标题 `🔐 密钥已更新`，正文 = 凭据轮换结论（变更 / 移除的凭据键数量，不含明文）+ 重启状态；`secret.refresh.noop`（凭据无变化 / 离线降级 / 未解密 / 禁用）**边沿抑制**：仅记 stdout 不外推（每小时一次的常态 no-op，避免噪音告警，见下方 `notify=false` 静默行）；`secret.refresh.error`（拉取/解密/重启失败）未登记 formatter，仍走通用 `key: value` 外推（失败可操作，保留告警）；`routing.signature.rot` → 标题 `⚠️ 签名已失配`，正文 = 服务名 / probe URL / 分类结果（`UNKNOWN`）/ HTTP 状态码；**纯观测告警，路由仍 fail-safe 不变**（见 §9.2）；未登记的事件 → 标题 = `"{SHOUTRRR_TITLE_PREFIX} {event}"`，正文 = 每字段一行 `key: value`（剔除空值与 `event` 键、`ts` 转可读） |
 | **边沿触发静默** | **只在状态真正变化时才告警**，两条规则都记日志后直接 return（**不外推也不进 dry-run**）：① `isp.speed_test.result` 带 `notify: false` 时记 `speed_test result not notable — skipping push (notify=false)`——只有「线路成员变化 / 选定 tag 变化 / 评级档跳变 / 首次运行」才置 `notify=true`，纯带宽抖动保持静默，**缺 `notify` 键 → 照推**（向后兼容旧 payload）；② `secret.refresh.noop` 记 `secret refresh noop — skipping push (no credential change)`——`secrets-refresh` cron 每小时跑一次、绝大多数 tick 凭据无变化，只有 `secret.refresh.completed`（真实轮换）与 `secret.refresh.error`（失败）才外推 |
 | **多 URL 发送** | **同一事件的多条 URL 顺序发送**（`for url in urls`），每条独立 `try` + 10s 超时；单条失败 `continue`，不影响后续 |
 | **多事件并发** | `ThreadingHTTPServer`——不同事件各开线程处理，互不阻塞 |
@@ -541,6 +541,21 @@ HTTP 头 **`X-Event`** 标示事件类型——取值为 `ban_bt` / `ban_geoip_c
 | `watchtower.canary.failed` | 任一自检失败（退出码 1） | 节点角色 / 失败项 / `镜像构建` / 处置 runbook |
 
 🔬 `镜像构建` 取脚本发的 `built` 字段（版本 label）；脚本未带该字段时 formatter 回退到 `new`/`image`（镜像 digest），两者皆无才显示「未知」。无 digest 跳变时静默（不每天刷屏），首次运行只落盘 digest、不报「已更新」。
+
+### 9.2 B 类流媒体签名自检告警（容器内 isp-retest cron）
+
+📘 `isp-retest` cron 在每次重测结束时额外执行一轮签名自检：对每个携带 `ContentSignature` 的 B 类服务发起 GET 探测，若页面可达（HTTP 200–399）但分类结果为 `UNKNOWN`，说明 known-good marker 已不再出现在实际页面，B 类路由已静默降级为 fail-safe——这时发出 `routing.signature.rot` 告警。
+
+> 📘 **路由不受影响**：`routing.signature.rot` 是纯观测事件，不修改任何路由判定，routing 仍按 fail-safe 兜底继续运行。探测不可达（HTTP < 200）不属于签名 rot，不触发本事件。
+
+| 字段 | 含义 | 示例 |
+|------|------|------|
+| `service` | 服务标识符（`spec.slug`） | `netflix` / `disney` |
+| `probe_url` | 实际 GET 的探测 URL | `https://www.netflix.com/title/70143836` |
+| `verdict` | 分类结果（触发告警时恒为 `UNKNOWN`） | `UNKNOWN` |
+| `status` | 探测返回的 HTTP 状态码 | `200` |
+
+🔬 **触发机制**：每次 isp-retest cron 执行后调用 `run_signature_self_check()`（`scripts/sb_xray/routing/media.py`），对 `SERVICE_SPECS` 中所有带签名规则的服务逐一检查；每发现一个 rot 发一条独立事件。自检异常由 `_run_signature_self_check()` 包裹隔离，绝不影响 isp-retest 主流程退出码。该检查无需任何额外环境变量，随 isp-retest 默认生效。
 
 ---
 
