@@ -243,6 +243,49 @@ def test_common_subscription_has_eight_lines(env: None) -> None:
         assert "encryption=none" in ln
 
 
+def test_vmess_ps_is_raw_not_percent_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vmess ps フィールドは生のノード名(パーセントエンコードなし)でなければならない。
+
+    Regression guard for the Task-1 fix: vmess://base64(json) では ps が
+    JSON 値として格納され、クライアントは URL-decode せずそのまま表示する。
+    emoji/CJK が入った名前がリテラルで届くことを確認する。
+    """
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    # Use an emoji + CJK name to detect percent-encoding regression
+    monkeypatch.setenv("FLAG_PREFIX", "🇯🇵 ")
+    monkeypatch.setenv("NODE_NAME", "日本")
+    monkeypatch.setenv("NODE_SUFFIX", "")
+    url = sub.build_vmess_link()
+    payload = url[len("vmess://"):]
+    data = json.loads(base64.b64decode(payload + "==").decode("utf-8"))
+    # ps must be the raw assembled string, not percent-encoded
+    assert data["ps"] == "🇯🇵 Vmess ✈ 日本"
+    # Confirm it does NOT contain any percent-encoded sequences
+    assert "%" not in data["ps"]
+
+
+def test_uri_fragment_still_url_encoded_after_vmess_ps_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """J1: URI fragment builders (hysteria2/vless/etc.) must still URL-encode.
+
+    Ensures the vmess-ps-raw fix did NOT accidentally un-encode URI fragments.
+    emoji + CJK in the fragment must be percent-encoded; unquote() restores them.
+    """
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("FLAG_PREFIX", "🇯🇵 ")
+    monkeypatch.setenv("NODE_NAME", "日本")
+    monkeypatch.setenv("NODE_SUFFIX", "")
+    url = sub.build_hysteria2_link()
+    frag = url.split("#", 1)[1]
+    # Raw emoji/CJK must be percent-encoded in the fragment
+    assert "🇯🇵" not in frag
+    assert "日本" not in frag
+    assert "%" in frag
+    # But unquoting restores the original
+    assert urllib.parse.unquote(frag) == "🇯🇵 Hysteria2 ✈ 日本"
+
+
 def test_remark_special_chars_are_url_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
     """J1: 运维可控 NODE_NAME 含 #/&/换行 必须 URL-encode,否则破坏 fragment 解析或注入。"""
     for k, v in _FAKE_ENV.items():

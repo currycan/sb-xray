@@ -30,6 +30,16 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+def _remark_raw(protocol: str) -> str:
+    """`${FLAG_PREFIX}<proto> ✈ ${NODE_NAME}${NODE_SUFFIX}` — un-encoded.
+
+    Returns the assembled remark string as-is, suitable for JSON fields
+    (e.g. vmess ``ps``) where clients read the value verbatim and must NOT
+    receive percent-encoded text.
+    """
+    return f"{_env('FLAG_PREFIX')}{protocol} ✈ {_env('NODE_NAME')}{_env('NODE_SUFFIX')}"
+
+
 def _remark(protocol: str) -> str:
     """`${FLAG_PREFIX}<proto> ✈ ${NODE_NAME}${NODE_SUFFIX}` — URL-encoded.
 
@@ -38,8 +48,7 @@ def _remark(protocol: str) -> str:
     链接(J1)。统一经 ``urlquote`` 编码，emoji/中文/空格走百分号编码后客户端
     解码仍能还原原始备注(safe="-._~"，与 Bash/JS quote 默认一致)。
     """
-    raw = f"{_env('FLAG_PREFIX')}{protocol} ✈ {_env('NODE_NAME')}{_env('NODE_SUFFIX')}"
-    return urlquote(raw)
+    return urlquote(_remark_raw(protocol))
 
 
 def urlquote(value: str) -> str:
@@ -93,7 +102,7 @@ def build_vmess_link() -> str:
     """
     payload = {
         "v": "2",
-        "ps": _remark("Vmess"),
+        "ps": _remark_raw("Vmess"),
         "add": _env("CDNDOMAIN"),
         "port": _env("LISTENING_PORT"),
         "id": _env("XRAY_UUID"),
