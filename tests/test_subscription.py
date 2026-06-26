@@ -371,3 +371,23 @@ def test_valid_port_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
     for k, v in _FAKE_ENV.items():
         monkeypatch.setenv(k, v)
     assert ":8443" in sub.build_hysteria2_link()  # 数字端口正常
+
+
+# ------------------------------------------------------------------
+# J4: _part1_common_links 委托 _part1_links 契约锁定
+# ------------------------------------------------------------------
+
+
+def test_part1_common_delegates_to_part1(env: None) -> None:
+    # J4: _part1_common_links 必须与 _part1_links 完全等价（委托实现）
+    assert sub._part1_common_links() == sub._part1_links()
+
+
+def test_common_subscription_is_part1_plus_compat_part2(env: None) -> None:
+    common = sub.build_common_subscription()
+    lines = common.split("\n")
+    # 前 5 行 == part1，后 3 行 == part2 compat（共 8 协议）
+    assert lines[:5] == sub._part1_links()
+    assert len(lines) == 8
+    # compat 轨道用 encryption=none，不得出现 mlkem768 主轨加密
+    assert "mode=packet-up" in common

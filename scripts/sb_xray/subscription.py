@@ -384,13 +384,9 @@ def _part1_links() -> list[str]:
 
 
 def _part1_common_links() -> list[str]:
-    return [
-        build_hysteria2_link(),
-        build_tuic_link(),
-        build_anytls_link(),
-        build_vmess_link(),
-        build_vless_vision_link(),
-    ]
+    # J4: common 轨道 part1 与 v2rayn 轨道 part1 完全相同（同 5 协议、同顺序、
+    # 同 remark）。委托而非复制，避免两份实现漂移。差异只在 part2（compat）。
+    return _part1_links()
 
 
 def _part2_main_links() -> list[str]:
