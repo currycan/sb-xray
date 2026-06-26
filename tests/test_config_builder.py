@@ -972,12 +972,21 @@ def test_resolve_dufs_permissions_defaults_fail_closed(
 def test_resolve_dufs_permissions_respects_explicit_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """显式设置必须原样保留(运维可按需放开)。"""
+    """显式设置必须原样保留(运维可按需放开);未设键必须仍 fail-closed(防进程级 env 渗漏)。"""
+    # 明确清除未显式设置的权限键,防止进程级 env 渗漏干扰断言
+    for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE", "DUFS_ENABLE_CORS"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("DUFS_ALLOW_UPLOAD", "true")
     monkeypatch.setenv("DUFS_ALLOW_DELETE", "true")
     cb._resolve_dufs_permissions()
+    # 显式设置的键保留原值
     assert os.environ["DUFS_ALLOW_UPLOAD"] == "true"
     assert os.environ["DUFS_ALLOW_DELETE"] == "true"
+    # 未显式设置的写权限必须 fail-closed,不受其他测试 env 渗漏影响
+    assert os.environ["DUFS_ALLOW_ALL"] == "false"
+    assert os.environ["DUFS_ALLOW_SYMLINK"] == "false"
+    assert os.environ["DUFS_ALLOW_ARCHIVE"] == "false"
+    assert os.environ["DUFS_ENABLE_CORS"] == "false"
 
 
 def test_dufs_conf_renders_fail_closed_defaults(
@@ -1001,6 +1010,30 @@ def test_dufs_conf_renders_fail_closed_defaults(
     # 无残留未解析占位符
     assert "${DUFS_ALLOW" not in rendered
     assert "${DUFS_RENDER" not in rendered
+
+
+def test_dufs_conf_logformat_tokens_survive_literally(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A4 I2: DUFS_LOG_FORMAT 中的 dufs 原生 token($remote_addr 等)经 _envsubst 渲染后
+    必须原样保留——不得被二次展开或消除。"""
+    for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_UPLOAD", "DUFS_ALLOW_DELETE",
+              "DUFS_ALLOW_SEARCH", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE",
+              "DUFS_ENABLE_CORS", "DUFS_RENDER_INDEX", "DUFS_RENDER_TRY_INDEX",
+              "DUFS_RENDER_SPA", "DUFS_COMPRESS", "DUFS_LOG_FORMAT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LOGDIR", str(tmp_path / "log"))
+    cb._resolve_dufs_permissions()
+    # 使用绝对路径锚定模板,避免 cwd 依赖导致脆性
+    template_path = Path(__file__).parent.parent / "templates" / "dufs" / "conf.yml"
+    rendered = cb._envsubst(template_path.read_text(encoding="utf-8"))
+    # dufs 原生 token 必须字面量存活,不被 _envsubst 展开或消除
+    assert "$remote_addr" in rendered, "dufs token $remote_addr was stripped or re-expanded"
+    assert "$request" in rendered, "dufs token $request was stripped or re-expanded"
+    assert "$status" in rendered, "dufs token $status was stripped or re-expanded"
+    assert "$http_user_agent" in rendered, "dufs token $http_user_agent was stripped or re-expanded"
+    # 确认 log-format 行本身存在
+    assert "log-format:" in rendered
 
 
 def test_http_conf_includes_internal_acl_in_admin_locations() -> None:
