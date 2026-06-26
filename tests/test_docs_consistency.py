@@ -34,3 +34,14 @@ def test_claudemd_lists_all_entrypoint_subcommands() -> None:
     subs = _registered_subcommands() - {"run"}  # run 单独描述,非"非 run 子命令"
     missing = sorted(s for s in subs if f"`{s}`" not in claudemd)
     assert not missing, f"CLAUDE.md 架构段漏列子命令: {missing}"
+
+
+def test_doc04_enable_xui_row_notes_compose_false() -> None:
+    lines = _read("docs/04-ops-and-troubleshooting.md").splitlines()
+    # 定位 env 主表中含 ENABLE_XUI 且含降载开关默认值的那一行(:301 区)。
+    row = next(
+        ln for ln in lines
+        if "ENABLE_XUI" in ln and "Dockerfile ENV" in ln and "ENABLE_SHOUTRRR" in ln
+    )
+    # 该行必须同时点明 ENABLE_XUI 在 compose 默认 false,消除与 :27/:1090 的张力(C9)。
+    assert "compose" in row and "false" in row.lower()

@@ -298,7 +298,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 | `PORT_XDNS` | `5353` | XDNS 紧急通道 UDP 端口（默认关，见 `docs/09-feature-flags-and-capabilities.md §7`） |
 | `ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` | `false` | 实验性 feature flag；开启条件与效果详见 [特性开关与可选能力指南](./09-feature-flags-and-capabilities.md) |
 | `ENABLE_REVERSE` | 镜像默认 `false`；标准 compose 部署默认 **`true`** | VLESS reverse bridge 总开关。**权威口径见 §2.7「ENABLE_REVERSE 默认姿态」**（本篇为该口径 owner，05/09 引用此处）；效果详见 [特性开关与可选能力指南](./09-feature-flags-and-capabilities.md) |
-| `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（Dockerfile ENV 注册） | **小内存节点降载开关**；设 `false` 在 `createConfig` 后由 `python3 /scripts/entrypoint.py trim` 过滤对应 `[program:*]` 段；详见 §7（注：`ENABLE_SUI` 已废弃，s-ui 不再内置） |
+| `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（Dockerfile ENV 注册；`ENABLE_XUI` 在 `docker-compose.yml` 默认 `false`，需用时改 compose 为 `true`） | **小内存节点降载开关**；设 `false` 在 `createConfig` 后由 `python3 /scripts/entrypoint.py trim` 过滤对应 `[program:*]` 段；详见 §7（注：`ENABLE_SUI` 已废弃，s-ui 不再内置） |
 | `GOMEMLIMIT` / `GOGC` | _未设置_ | Go GC 硬上限 + 回收激进度；推荐小内存节点 `GOMEMLIMIT=320MiB` + `GOGC=50` |
 | `XDNS_DOMAIN` | _空_ | XDNS 紧急通道的 NS 域名（`ENABLE_XDNS=true` 时必填） |
 | `REVERSE_DOMAINS` | _空_ | VLESS Reverse 需要穿透的域名列表（逗号分隔，`ENABLE_REVERSE=true` 时生效） |
