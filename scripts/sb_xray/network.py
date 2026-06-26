@@ -45,6 +45,7 @@ _CC_TO_ZH: Final[dict[str, str]] = {
 }
 
 _DEFAULT_CACHE: Final[Path] = Path("/tmp/ipapi.json")
+_GEO_RETRY_ATTEMPTS: Final[int] = 2  # 首次 + 单次有界重试
 
 # 二级回退 geo 源。ipapi.is 失败时改用 ip-api.com 拿 ISO 国家码（免费档 HTTP-only）。
 # 只取 status/countryCode/country(中文)/query(本机 IP)——不要城市。
@@ -82,8 +83,28 @@ def probe_ip_sb() -> tuple[bool, bool]:
     return v4_ok, v6_ok
 
 
+def _fetch_ipapi_once() -> dict[str, Any] | None:
+    """Single ipapi.is GET. Returns parsed dict only if it carries a usable
+    country code, else None (so the caller can retry / skip caching)."""
+    try:
+        with httpx.Client(timeout=5.0, headers={"User-Agent": sbhttp.DEFAULT_UA}) as client:
+            resp = client.get(_IPAPI_URL)
+            resp.raise_for_status()
+            data = json.loads(resp.text)
+    except (httpx.HTTPError, json.JSONDecodeError):
+        return None
+    if isinstance(data, dict) and _ipapi_country_code(data):
+        return data
+    return None
+
+
 def _load_ipapi(cache_path: Path | None = None) -> dict[str, Any] | None:
-    """Fetch ipapi.is once, caching the raw JSON to ``cache_path``.
+    """Fetch ipapi.is once (caching the raw JSON), shared across one boot.
+
+    Only a response that carries a usable country code is cached — a 200 with
+    an incomplete body (no country_code) is NOT persisted, so a transient
+    partial response can't poison the whole boot. Fetch is retried once on
+    miss (``_GEO_RETRY_ATTEMPTS`` total attempts) before giving up.
 
     Shared by :func:`check_ip_type` and :func:`get_geo_info` /
     :func:`get_geo_cc` so a single entrypoint run makes **one** request:
@@ -93,13 +114,14 @@ def _load_ipapi(cache_path: Path | None = None) -> dict[str, Any] | None:
     """
     path = cache_path if cache_path is not None else _DEFAULT_CACHE
     if not path.exists():
-        try:
-            with httpx.Client(timeout=5.0, headers={"User-Agent": sbhttp.DEFAULT_UA}) as client:
-                resp = client.get(_IPAPI_URL)
-                resp.raise_for_status()
+        for _ in range(_GEO_RETRY_ATTEMPTS):
+            data = _fetch_ipapi_once()
+            if data is not None:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(resp.text, encoding="utf-8")
-        except httpx.HTTPError:
+                path.write_text(json.dumps(data), encoding="utf-8")
+                return data
+        # all attempts failed to yield a cacheable body
+        if not path.exists():
             return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))

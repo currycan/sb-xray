@@ -129,8 +129,9 @@ def test_ip_strategy_no_network() -> None:
 
 @respx.mock
 def test_check_ip_type_returns_asn_type(tmp_path: Path) -> None:
+    # Body must carry a country code for the response to be cached/returned.
     respx.get("https://api.ipapi.is/").mock(
-        return_value=httpx.Response(200, json={"asn": {"type": "isp"}})
+        return_value=httpx.Response(200, json={"asn": {"type": "isp", "country": "US"}})
     )
     assert net.check_ip_type(cache_path=tmp_path / "ipapi.json") == "isp"
 
@@ -233,3 +234,40 @@ def test_geo_and_iptype_share_single_fetch(
     assert net.get_geo_cc() == "US"  # cache reuse
     assert net.check_ip_type() == "hosting"  # cache reuse
     assert route.call_count == 1
+
+
+# ---- _load_ipapi country_code cache gate + bounded retry --------------------
+
+
+@respx.mock
+def test_load_ipapi_no_country_code_not_cached(tmp_path: Path) -> None:
+    cache = tmp_path / "ipapi.json"
+    # 200 但 body 缺 country_code → 不应落盘
+    respx.get("https://api.ipapi.is/").mock(return_value=httpx.Response(200, json={"ip": "1.2.3.4"}))
+    net._load_ipapi(cache)
+    assert not cache.exists()
+
+
+@respx.mock
+def test_load_ipapi_with_country_code_is_cached(tmp_path: Path) -> None:
+    cache = tmp_path / "ipapi.json"
+    body = {"ip": "1.2.3.4", "location": {"country_code": "US", "country": "United States"}}
+    respx.get("https://api.ipapi.is/").mock(return_value=httpx.Response(200, json=body))
+    data = net._load_ipapi(cache)
+    assert cache.exists()
+    assert data is not None and data["location"]["country_code"] == "US"
+
+
+@respx.mock
+def test_load_ipapi_retries_once_then_caches(tmp_path: Path) -> None:
+    cache = tmp_path / "ipapi.json"
+    route = respx.get("https://api.ipapi.is/").mock(
+        side_effect=[
+            httpx.Response(200, json={"ip": "1.2.3.4"}),  # 无 cc → 不缓存,重试
+            httpx.Response(200, json={"ip": "1.2.3.4", "location": {"country_code": "JP"}}),
+        ]
+    )
+    data = net._load_ipapi(cache)
+    assert route.call_count == 2
+    assert cache.exists()
+    assert data is not None and data["location"]["country_code"] == "JP"
