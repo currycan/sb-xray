@@ -99,7 +99,8 @@ def reload_nginx(
             check=False,
             timeout=10,
         )
+        logger.info("nginx 已 reload 以加载新渲染配置")
+        return True
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("nginx reload 失败: %s", exc)
-    logger.info("nginx 已 reload 以加载新渲染配置")
-    return True
+        return False

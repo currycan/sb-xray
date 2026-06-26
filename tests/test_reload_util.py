@@ -36,10 +36,19 @@ def test_reload_nginx_skips_when_socket_absent() -> None:
     runner.run.assert_not_called()
 
 
-def test_reload_nginx_swallows_runner_errors() -> None:
+def test_reload_nginx_swallows_timeout_error() -> None:
     runner = MagicMock()
     runner.run.side_effect = subprocess.TimeoutExpired(cmd="nginx", timeout=10)
     sock = _socket_path(exists=True)
 
-    # error swallowed → still reports an attempt was made
-    assert reload_util.reload_nginx(socket_path=sock, runner=runner) is True
+    # error swallowed but not reported as success
+    assert reload_util.reload_nginx(socket_path=sock, runner=runner) is False
+
+
+def test_reload_nginx_swallows_oserror() -> None:
+    runner = MagicMock()
+    runner.run.side_effect = OSError("permission denied")
+    sock = _socket_path(exists=True)
+
+    # OSError swallowed but not reported as success
+    assert reload_util.reload_nginx(socket_path=sock, runner=runner) is False
