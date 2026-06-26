@@ -675,6 +675,8 @@ docker compose restart sb-xray
 | 7 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
 
 > 📘 任务 1–6 用 `docker exec sb-xray crontab -l` 可见；任务 7 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
+>
+> 🔬 **托管行识别机制**：重装/收敛时，`cron.py` 以正则 `/scripts/entrypoint\.py <子命令>(?:\s|$)` 识别需剥除的托管行——子命令名后须接空白或行尾（token 边界），而非裸子串匹配。不含该模式的自定义 crontab 行在收敛过程中原样保留，重装操作幂等（不产生重复行）。
 
 ---
 
