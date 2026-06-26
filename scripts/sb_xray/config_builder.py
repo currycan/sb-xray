@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 # Matches ``${VAR}`` or ``$VAR`` (POSIX identifier: ``[A-Za-z_][A-Za-z0-9_]*``).
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
+# JSON 字符串字面量内会破坏 json.loads 的裸字符(未转义的 " \ 控制符)。
+_JSON_BREAKING = re.compile(r'["\\\n\r\t]')
+
 # Per-program ENABLE_* switches for daemon.ini. Opt-out semantics: a program is
 # kept unless its flag is explicitly set to "false" (case-insensitive). Used by
 # low-memory deployments (≤ 512 MB RAM) to trim ~220–320 MB of resident RSS.
@@ -97,14 +100,37 @@ def _render_flat(src: Path, dest: Path) -> None:
     dest.write_text(_envsubst(src.read_text(encoding="utf-8")), encoding="utf-8")
 
 
+def _suspect_json_breaking_envs(template_text: str) -> list[str]:
+    """模板中被引用、且当前值含 JSON-危险字符的 env 键名(J2 诊断用)。
+
+    ``_render_json`` 单遍 envsubst 直插 ``os.environ[name]`` 不做 JSON 转义;
+    含 ``"``/``\\``/换行 的 env 注入字符串字面量会让 ``json.loads`` 失败,而
+    异常本身只指向模板文件。此函数把嫌疑 env 列出,缩短排查回合。
+    """
+    names = {m.group(1) or m.group(2) for m in _VAR_RE.finditer(template_text)}
+    suspects = [
+        name
+        for name in names
+        if name in os.environ and _JSON_BREAKING.search(os.environ[name])
+    ]
+    return sorted(suspects)
+
+
 def _render_json(src: Path, dest: Path) -> None:
     """Render ``src`` then validate as JSON (entrypoint.sh ``_apply_tpl`` jq)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    rendered = _envsubst(src.read_text(encoding="utf-8"))
+    raw = src.read_text(encoding="utf-8")
+    rendered = _envsubst(raw)
     try:
         data = json.loads(rendered)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"invalid JSON after render: {src} -> {exc}") from exc
+        suspects = _suspect_json_breaking_envs(raw)
+        hint = (
+            f" — 嫌疑 env(值含 JSON-危险字符 \" \\ 或换行): {', '.join(suspects)}"
+            if suspects
+            else ""
+        )
+        raise RuntimeError(f"invalid JSON after render: {src} -> {exc}{hint}") from exc
     dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 

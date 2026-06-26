@@ -1199,3 +1199,46 @@ def test_providers_gist_owner_substituted_when_set(
         'url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/AllOne-Common"'
     )
     assert "gist.githubusercontent.com/acme/${GIST_CODE}/raw/AllOne-Common" in rendered
+
+
+# ---------------------------------------------------------------------------
+# J2: _render_json 失败时报出触发的 env 键名
+# ---------------------------------------------------------------------------
+
+
+def test_render_json_error_names_breaking_env(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """J2: 含换行的 env 注入 JSON 字符串字面量导致 json.loads 失败时,错误必须指名是哪个 env。
+
+    _JSON_BREAKING 检测的危险字符包括换行; 注入后 json.loads 抛
+    ``Invalid control character``,此时 RuntimeError 消息必须含 DEST_HOST。
+    (原始 brief 值 www.apple.com\",\"injected\":\"x 恰好产出合法 JSON —— 换行
+    才是此类测试的可靠触发点。)
+    """
+    monkeypatch.setenv("DEST_HOST", "host.example.com\n")
+    src = tmp_path / "t.json"
+    src.write_text('{"sni": "${DEST_HOST}"}', encoding="utf-8")
+    dest = tmp_path / "out.json"
+    with pytest.raises(RuntimeError, match="DEST_HOST"):
+        cb._render_json(src, dest)
+
+
+def test_render_json_error_names_env_with_backslash(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """J2: 末尾裸反斜杠转义了闭合引号,导致字符串未终止 (Unterminated string)。"""
+    monkeypatch.setenv("DOMAIN", "a\\")
+    src = tmp_path / "t.json"
+    src.write_text('{"d": "${DOMAIN}"}', encoding="utf-8")
+    dest = tmp_path / "out.json"
+    with pytest.raises(RuntimeError, match="DOMAIN"):
+        cb._render_json(src, dest)
+
+
+def test_suspect_envs_ignores_clean_values(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """干净 env(无 JSON-危险字符)不被列入嫌疑。"""
+    monkeypatch.setenv("DEST_HOST", "www.apple.com")
+    assert cb._suspect_json_breaking_envs('{"sni": "${DEST_HOST}"}') == []
