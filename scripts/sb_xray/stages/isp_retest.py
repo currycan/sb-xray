@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 from sb_xray.events import emit_event
+from sb_xray.stages.reload_util import reload_nginx as _reload_nginx
 from sb_xray.stages.reload_util import restart_daemons as _restart_daemons
 from sb_xray.stages.reload_util import restore_media_routing as _restore_media_routing
 
@@ -245,6 +246,7 @@ def run() -> int:
         return 1
 
     restarted = _restart_daemons()
+    _reload_nginx()
     completed_payload: dict[str, object] = {
         "reason": reason,
         "old_top_tag": old_top,
