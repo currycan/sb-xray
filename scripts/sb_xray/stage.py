@@ -25,7 +25,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Final, Literal, TextIO
+from typing import Final, TextIO
 
 _SYMBOL_START: Final[str] = "▶"
 _SYMBOL_OK: Final[str] = "✓"
@@ -96,10 +96,12 @@ class StageTimer(contextlib.AbstractContextManager["StageTimer"]):
         logger: logging.Logger,
         *,
         summary: PipelineSummary | None = None,
+        non_fatal: bool = False,
     ) -> None:
         self.info = info
         self._logger = logger
         self._summary = summary
+        self._non_fatal = non_fatal
         self._start_ns: int = 0
         self._status = StageStatus.OK
         self._message = ""
@@ -122,11 +124,11 @@ class StageTimer(contextlib.AbstractContextManager["StageTimer"]):
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
-    ) -> Literal[False]:
+    ) -> bool:
         duration_ms = (time.monotonic_ns() - self._start_ns) // 1_000_000
 
         if exc is not None:
-            self._status = StageStatus.FAILED
+            self._status = StageStatus.DEGRADED if self._non_fatal else StageStatus.FAILED
             self._message = f"{exc.__class__.__name__}: {exc}"
             self._logger.error(
                 "%s Stage %d/%d %s failed in %dms: %s",
@@ -167,7 +169,9 @@ class StageTimer(contextlib.AbstractContextManager["StageTimer"]):
         )
         if self._summary is not None:
             self._summary.record(self.result)
-        return False  # don't swallow exceptions
+        # non_fatal stages degrade rather than abort: swallow the exception so
+        # boot continues to exec_supervisord. Fatal stages (default) re-raise.
+        return self._non_fatal and exc is not None
 
     def skipped(self, message: str = "") -> None:
         """Mark this stage SKIPPED (logged as ``⋯`` on exit)."""
