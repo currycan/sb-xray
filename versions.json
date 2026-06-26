@@ -6,8 +6,8 @@
   "sub_store_backend": "2.31.5",
   "dufs": "0.46.0",
   "cloudflared": "2026.6.1",
-  "x_ui": "3.4.0",
-  "sing_box": "1.13.13",
+  "x_ui": "3.4.1",
+  "sing_box": "1.13.14",
   "xray": "26.3.27",
   "digests": {
     "mihomo_amd64_sha256": "36850c946615f5c712946b62dbbbd06f6941d6d8a7543b315198bcb24ada3ea9",
@@ -19,9 +19,9 @@
     "dufs_arm64_sha256": "a2c0a922f944952673ab27706b66f272a76760a8480dc6a067993ab002eca122",
     "cloudflared_amd64_sha256": "5861a10a438fe8ddcfebb3b830f83966cbf193edafce0fe2eeb198fbae1f7a22",
     "cloudflared_arm64_sha256": "59816ce9b16db71f5bc2a86d59b3632a96c8c3ee934bde2bc8641ee83a6070eb",
-    "xui_amd64_sha256": "7708a89492d11c276991bb02d800edb6e44f9e3532fe78d1cbb97b90b0b7c879",
-    "xui_arm64_sha256": "2853e19538a370ae09ee628ab89794a8a9a40ac324ccbfc9e78317e6089e13a5",
-    "sing_box_amd64_sha256": "bb99cabf47694625db421ee17898f36cdc1f9c2cb5decf65b12bac8d8437e842",
-    "sing_box_arm64_sha256": "d7fab87b921933eb281d8ee7bd5377cdd8228089f1f7c807c9363a6a2329286c"
+    "xui_amd64_sha256": "b070589cbc71788628086c35fd123905cb2158f4fc07223c728a18a2a5908551",
+    "xui_arm64_sha256": "839bb7ed465da58a499e428ec16ac18baa3d8a9566b84d2b5eb4dcf8251c066a",
+    "sing_box_amd64_sha256": "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697",
+    "sing_box_arm64_sha256": "4742df6a4314e8ecc41736849fca6d73b8f9e91b6e8b06ee794ff17ba180579e"
   }
 }
