@@ -535,6 +535,39 @@ def _apply_access_log_env() -> None:
     )
 
 
+# --- dufs 权限解析(A4: fail-closed 默认) ---------------------------------
+
+# 未设时的安全默认:写操作全关,只读浏览相关保持可用。Dockerfile 已声明
+# 同名 ENV(watchtower 旧 env 集也带,§2 向后兼容),此处是镜像内二次兜底,
+# 保证任何 reload 路径都不会渲染出字面量 ${DUFS_ALLOW_*} 或默认放开权限。
+_DUFS_PERMISSION_DEFAULTS: dict[str, str] = {
+    "DUFS_ALLOW_ALL": "false",
+    "DUFS_ALLOW_UPLOAD": "false",
+    "DUFS_ALLOW_DELETE": "false",
+    "DUFS_ALLOW_SYMLINK": "false",
+    "DUFS_ALLOW_ARCHIVE": "false",
+    "DUFS_ALLOW_SEARCH": "true",
+    "DUFS_ENABLE_CORS": "false",
+    "DUFS_RENDER_INDEX": "true",
+    "DUFS_RENDER_TRY_INDEX": "true",
+    "DUFS_RENDER_SPA": "true",
+    "DUFS_COMPRESS": "low",
+    "DUFS_LOG_FORMAT": '$remote_addr "$request" $status $http_user_agent',
+}
+
+
+def _resolve_dufs_permissions() -> None:
+    """Fill missing ``DUFS_*`` permission vars with fail-closed defaults.
+
+    conf.yml 用 ``${DUFS_ALLOW_*}`` 占位符;``_envsubst`` 对未设变量保留
+    字面量(产出非法 yaml),且默认不应放开写权限。此处保证渲染前每个键
+    都有安全值。显式设置优先(运维可放开)。
+    """
+    for key, default in _DUFS_PERMISSION_DEFAULTS.items():
+        if not os.environ.get(key, "").strip():
+            os.environ[key] = default
+
+
 def run_logrotate(
     *,
     conf: Path = _LOGROTATE_CONF,
@@ -585,6 +618,7 @@ def create_config(*, workdir: Path | None = None) -> None:
     logger.info("渲染所有模板...")
     os.environ["RANDOM_NUM"] = str(random.randint(0, 9))
     _apply_access_log_env()
+    _resolve_dufs_permissions()
 
     for src, dest in _FLAT_RENDERS:
         dest_path = _expand_dest(dest)
