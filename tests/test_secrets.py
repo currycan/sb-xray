@@ -92,3 +92,31 @@ def test_decrypt_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="decrypt failed"):
         sbsec.decrypt_remote_secrets(secret_file=tmp_path / "s.bin", tmp_path=tmp_path / "t.bin")
+
+
+# --------------------------------------------------------------------------- #
+# _download_blob — bounded single retry                                        #
+# --------------------------------------------------------------------------- #
+
+
+@respx.mock
+def test_download_blob_retries_once_then_succeeds(tmp_path: Path) -> None:
+    blob = tmp_path / "tmp.bin"
+    route = respx.get(sbsec._SECRETS_URL).mock(
+        side_effect=[
+            httpx.ConnectError("flap"),
+            httpx.Response(200, content=b"ENCRYPTED-BLOB"),
+        ]
+    )
+    sbsec._download_blob(blob)
+    assert route.call_count == 2
+    assert blob.read_bytes() == b"ENCRYPTED-BLOB"
+
+
+@respx.mock
+def test_download_blob_raises_after_all_retries(tmp_path: Path) -> None:
+    blob = tmp_path / "tmp.bin"
+    route = respx.get(sbsec._SECRETS_URL).mock(side_effect=httpx.ConnectError("down"))
+    with pytest.raises(RuntimeError, match="download failed"):
+        sbsec._download_blob(blob)
+    assert route.call_count == 2
