@@ -589,6 +589,54 @@ flowchart TD
 
 > ⚠️ CI 自动发的 `:latest` 不会自动同步 `docker-compose.yml`。若某次发布确实必须靠新 compose env 才能正确运行，应在发布说明标记 `requires-compose-sync` 并改走全量 `git pull && docker compose up -d`，不走 watchtower 自动分发。
 
+### 8.5 PR 质量门（ci.yml）
+
+📘 **概念卡**：每个 Pull Request 合并前，`.github/workflows/ci.yml`（`CI Quality Gate`）自动运行四道硬性检测——任一步骤非零退出即阻止合并，确保主干 Python 行为始终可验证。纯文档改动（`docs/**`）不影响 Python 行为，由 `paths-ignore` 跳过以节省 runner 时间。
+
+```mermaid
+flowchart LR
+    PR(["Pull Request"]):::entry --> Ruff{{"ruff check\nscripts/sb_xray tests"}}:::process
+    Ruff --> Mypy{{"mypy\n(strict)"}}:::process
+    Mypy --> Pytest{{"pytest --cov\nfail_under=85"}}:::process
+    Pytest --> Smoke{{"SKIP_COMPOSE=1\ntest_smoke.sh"}}:::process
+    Smoke --> OK(["合并放行"]):::terminal
+    Ruff -- "非零退出" --> Block(["拦截合并"]):::block
+    Mypy -- "非零退出" --> Block
+    Pytest -- "非零退出" --> Block
+    Smoke -- "非零退出" --> Block
+
+    classDef entry   fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef block   fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
+    classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:2px,color:#fff
+```
+
+四道门的职责与门控参数：
+
+| 步骤 | 命令 | 门控条件 |
+|---|---|---|
+| **Ruff lint** | `ruff check scripts/sb_xray tests` | 任意 lint 错误（E/F/W/I/B/UP/SIM/RUF，行宽 100） |
+| **Mypy 类型检查** | `mypy`（strict 模式） | 任意类型错误（仅检查 `scripts/sb_xray`） |
+| **Pytest 覆盖率** | `python3 -m pytest --cov` | 测试失败，**或**覆盖率低于 85%（`fail_under=85`） |
+| **Smoke 离线静态** | `SKIP_COMPOSE=1 ./scripts/test_smoke.sh` | 离线静态校验（模板语法 / env 完整性）非零退出 |
+
+🔬 **与 `daily-build.yml` 的职责分离**：`daily-build.yml`（§8.1–8.4）由 `push main` / 每日 schedule / 手动 dispatch 触发，负责多平台镜像构建与推送。`ci.yml` 仅在 `pull_request` 事件触发，负责 Python 代码质量回归，不构建也不推送镜像，两条流水线互不干扰。
+
+🔧 **手动触发**：`ci.yml` 亦支持 `workflow_dispatch`，可在 GitHub Actions 页面对任意分支手动运行四道门验证。
+
+🔧 **开发者本地复现**：
+
+```bash
+# 安装 dev 依赖（与 CI 同版本锁定）
+python3 -m pip install -e ".[dev]"
+
+# 依次运行四道门（任一失败即可定位）
+ruff check scripts/sb_xray tests        # 期望：无输出，退出码 0
+mypy                                    # 期望：Success: no issues found
+python3 -m pytest --cov                 # 期望：PASSED，覆盖率 ≥ 85%
+SKIP_COMPOSE=1 ./scripts/test_smoke.sh  # 期望：所有静态检查通过
+```
+
 ---
 
 ## 相关资源
