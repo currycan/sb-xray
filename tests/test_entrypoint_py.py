@@ -596,3 +596,18 @@ def test_show_pipeline_skips_reverse_bridge_when_disabled(
 
     assert rc == 0
     assert not (subscribe_dir / "reverse_bridge_client.json").exists()
+
+
+def test_cert_renew_command_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sb_xray.stages import cert_renew
+
+    called: dict[str, bool] = {}
+
+    def fake_run() -> int:
+        called["ran"] = True
+        return 0
+
+    monkeypatch.setattr(cert_renew, "run", fake_run)
+    rc = ep.main(["cert-renew"])
+    assert rc == 0
+    assert called["ran"] is True

@@ -169,6 +169,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
 
     sub.add_parser(
+        "cert-renew",
+        help="Renew TLS bundle if <7d validity; reload nginx on renewal (cron entry).",
+    )
+
+    sub.add_parser(
         "xray-run",
         help="Clean stale UDS sockets in /dev/shm, then exec xray (supervisord-managed).",
     )
@@ -757,6 +762,11 @@ def main(argv: list[str] | None = None) -> int:
         from sb_xray.stages import secrets_refresh
 
         return secrets_refresh.run()
+
+    if args.command == "cert-renew":
+        from sb_xray.stages import cert_renew
+
+        return cert_renew.run()
 
     if args.command == "xray-run":
         from sb_xray.stages import xray_run
