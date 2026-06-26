@@ -310,3 +310,31 @@ def test_remark_preserves_flag_emoji_roundtrip(monkeypatch: pytest.MonkeyPatch) 
     url = sub.build_tuic_link()
     frag = url.split("#", 1)[1]
     assert urllib.parse.unquote(frag) == "🇯🇵 TUIC ✈ jp ✈ isp"
+
+
+# ------------------------------------------------------------------
+# J1: port env validation — fail-loud (non-numeric / empty / OOB)
+# ------------------------------------------------------------------
+
+
+def test_nonnumeric_port_fails_loud_with_env_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """J1: LISTENING_PORT 非数字必须 fail-loud 并指名 env,而非生成无效 vmess。"""
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("LISTENING_PORT", "443; rm -rf")
+    with pytest.raises(RuntimeError, match="LISTENING_PORT"):
+        sub.build_vmess_link()
+
+
+def test_empty_port_fails_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("PORT_HYSTERIA2", "")
+    with pytest.raises(RuntimeError, match="PORT_HYSTERIA2"):
+        sub.build_hysteria2_link()
+
+
+def test_valid_port_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    assert ":8443" in sub.build_hysteria2_link()  # 数字端口正常
