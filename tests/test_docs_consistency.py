@@ -13,3 +13,10 @@ def test_readme_indexes_docs_10_and_11() -> None:
     # 文件系统里存在 10/11,readme 文档全集表必须可达,否则索引相对文件系统陈旧(C8)。
     assert "./docs/10-multi-wan-leak-prevention.md" in readme
     assert "./docs/11-openwrt-rebuild-and-cutover.md" in readme
+
+
+def test_claudemd_doc_range_covers_10_11() -> None:
+    claudemd = _read("CLAUDE.md")
+    # 文件系统已有 10/11,CLAUDE.md 权威范围声明不得停留在 00–09(C8)。
+    assert "00–09" not in claudemd, "CLAUDE.md 仍声明范围 00–09,与 docs/10、11 不符"
+    assert "00–11" in claudemd
