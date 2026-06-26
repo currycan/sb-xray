@@ -465,7 +465,7 @@ docker exec sb-xray crontab -l | grep isp-retest
 | `ENABLE_SOCKS5_PROXY` | `true` | **`CN_EXIT_MODE` 留空时的派生开关**：`true` 且 `CN_EXIT_SOCKS5_HOST` 有值 → 派生 `socks5` 模式（`config_builder.py:306`）。`CN_EXIT_MODE` 显式取值时本变量不参与判定 |
 | `REVERSE_CN_EXIT` | `false` | **`CN_EXIT_MODE` 留空时的派生开关**：socks5 不就绪且本变量 `true` → 派生 `reverse` 模式（`config_builder.py:310`）。`CN_EXIT_MODE` 显式取值时不参与判定 |
 | `ENABLE_REVERSE` | 镜像 `false` / compose `true` | 启用 `r-tunnel` 反向隧道（`reverse` / `balance` 前置开关）；双口径见下方权威说明 |
-| `REVERSE_DOMAINS` | `domain:home.lan` 等 4 个内网域名 | 经 `r-tunnel` 穿透的域名列表（逗号分隔）；与 §2.4 VLESS Reverse 为**同一变量**，`reverse` / `balance` 复用，纯回国可留空 |
+| `REVERSE_DOMAINS` | _空_（镜像默认；纯回国/无内网穿透无需设置） | 经 `r-tunnel` 穿透的域名列表（逗号分隔）；与 §2.4 VLESS Reverse 为**同一变量**，`reverse` / `balance` 复用；需内网穿透时由运维注入，例如 `domain:host.example.lan,domain:nas.example.lan` |
 
 > 📘 **`ENABLE_REVERSE` 默认姿态（权威口径 · 本篇为 owner，05/09 引用此处）**
 >
