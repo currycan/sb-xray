@@ -1175,3 +1175,27 @@ def test_http_conf_includes_internal_acl_in_admin_locations() -> None:
         start = http_conf.index(anchor)
         block = http_conf[start:start + 600]
         assert inc in block, f"{anchor} 缺少 internal-acl include"
+
+
+def test_providers_template_has_no_hardcoded_account() -> None:
+    """E1: providers.yaml must parameterize the gist owner, not hardcode it."""
+    src = Path("templates/providers/providers.yaml")
+    raw = src.read_text(encoding="utf-8")
+    assert "currycan" not in raw
+    assert "${GIST_OWNER}" in raw
+    # owner segment sits directly before the gist code segment
+    assert "gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/" in raw
+
+
+def test_providers_gist_owner_substituted_when_set(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GIST_OWNER in env is expanded; unset GIST_CODE stays literal (client fills)."""
+    import sb_xray.config_builder as cb
+
+    monkeypatch.setenv("GIST_OWNER", "acme")
+    monkeypatch.delenv("GIST_CODE", raising=False)
+    rendered = cb._envsubst(
+        'url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/AllOne-Common"'
+    )
+    assert "gist.githubusercontent.com/acme/${GIST_CODE}/raw/AllOne-Common" in rendered
