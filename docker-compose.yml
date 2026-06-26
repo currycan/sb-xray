@@ -74,8 +74,8 @@ services:
       - CN_EXIT_PROBE_INTERVAL=${CN_EXIT_PROBE_INTERVAL:-30s}
       # reverse / balance 所需：VLESS reverse bridge（XRAY_REVERSE_UUID 自动生成并持久化；落地机配置随 show 输出下载链接）
       - ENABLE_REVERSE=${ENABLE_REVERSE:-true}
-      # 通过 bridge 出的内网域名，逗号分隔；纯回国可在 .env 设 REVERSE_DOMAINS= 留空
-      - "REVERSE_DOMAINS=${REVERSE_DOMAINS:-domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan}"
+      # bridge 出的内网域名（逗号分隔，如 domain:myhost.internal）；默认空＝纯回国，无内网旁路
+      - "REVERSE_DOMAINS=${REVERSE_DOMAINS:-}"
       # socks5 / balance 所需：OpenWrt 的 Tailscale IP（.env 里 tsip）+ OpenClash SOCKS5 端口
       - ENABLE_SOCKS5_PROXY=${ENABLE_SOCKS5_PROXY:-true}
       - CN_EXIT_SOCKS5_HOST=${tsip}

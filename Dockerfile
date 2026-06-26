@@ -326,11 +326,11 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 
 # VLESS Reverse Proxy（M3，默认关闭）
 # ENABLE_REVERSE=true 时 entrypoint 往 REALITY 入站追加 reverse client UUID，
-# 并按 REVERSE_DOMAINS（逗号分隔，例如 "domain:home.lan,domain:nas.lan"）生成 routing 规则
+# 并按 REVERSE_DOMAINS（逗号分隔，如 "domain:myhost.internal"）生成 routing 规则
 # 落地机（bridge）配置：模板见 templates/reverse_bridge/client.json；
 # ENABLE_REVERSE=true 时 show 命令会渲染并输出占位符已填充的 reverse_bridge_client.json 下载链接
 ENV ENABLE_REVERSE="false"
-ENV REVERSE_DOMAINS="domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan"
+ENV REVERSE_DOMAINS=""
 
 # 订阅 provider / icon 账号段（§4：不入库具体账号；运维经 compose/.env 注入实际值）
 ENV GIST_OWNER=""
