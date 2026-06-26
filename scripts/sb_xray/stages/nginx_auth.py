@@ -47,6 +47,6 @@ def setup_basic_auth(
     encoded = _apr1(password)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"{user}:{encoded}\n", encoding="utf-8")
-    path.chmod(0o644)
+    path.chmod(0o640)
     logger.info("HTTP Basic Auth 已配置 (用户: %s)", user)
     return True
