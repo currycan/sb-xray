@@ -127,12 +127,15 @@ WORKDIR /app
 
 # ===== 安装 crypctl =====
 # NOTE: crypctl source is in a public repo (currycan/key/docker/crypctl)
+# B2 供应链：pin 到不可变 commit（CRYPCTL_REF），不再 checkout 浮动 HEAD
+ARG CRYPCTL_REF=""
 # Go 构建/模块缓存挂载 → 跨构建复用
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
   set -ex; \
+  [ -n "${CRYPCTL_REF}" ] || { echo "ERROR: CRYPCTL_REF build-arg required"; exit 1; }; \
   (git clone --filter=blob:none --no-checkout https://github.com/currycan/key.git /app/key || (sleep 5 && git clone --filter=blob:none --no-checkout https://github.com/currycan/key.git /app/key)); \
-  cd /app/key && git checkout HEAD -- docker/crypctl; \
+  cd /app/key && git checkout ${CRYPCTL_REF} -- docker/crypctl; \
   cd docker/crypctl && go build -ldflags="-s -w" -trimpath -o crypctl main.go; \
   upx --lzma --best crypctl; \
   mv crypctl /usr/local/bin/

@@ -47,3 +47,23 @@ def test_dockerfile_frontend_checks_out_pinned_sha() -> None:
     )
     # 空值即拒绝构建（与其它组件 _SHA256 build-arg 一致的 fail-closed 语义）
     assert 'SUB_STORE_FRONTEND_SHA' in src and 'build-arg required' in src
+
+
+def test_crypctl_ref_pinned_not_floating_head() -> None:
+    data = _versions()
+    ref = data.get("crypctl_sha", "")
+    assert _HEX40.match(ref), f"crypctl_sha must be a 40-hex commit SHA, got {ref!r}"
+    src = _DOCKERFILE.read_text(encoding="utf-8")
+    assert "ARG CRYPCTL_REF" in src, "crypctl stage must declare CRYPCTL_REF build-arg"
+    # 不得再 checkout HEAD（漂移源）；必须 checkout 注入的 ref
+    assert "git checkout HEAD -- docker/crypctl" not in src, (
+        "crypctl must not checkout floating HEAD"
+    )
+    assert "${CRYPCTL_REF}" in src
+
+
+def test_build_sh_wires_crypctl_ref() -> None:
+    src = _BUILD_SH.read_text(encoding="utf-8")
+    assert "get_cached_version crypctl_sha" in src
+    assert "_require_sha \"CRYPCTL_REF\"" in src
+    assert "--build-arg CRYPCTL_REF=" in src

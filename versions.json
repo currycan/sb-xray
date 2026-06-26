@@ -10,6 +10,8 @@
   "x_ui": "3.4.0",
   "sing_box": "1.13.13",
   "xray": "26.3.27",
+  "crypctl": "v26.2.6",
+  "crypctl_sha": "06622b85f940e917d681eead285e39c69fdb8e32",
   "digests": {
     "mihomo_amd64_sha256": "36850c946615f5c712946b62dbbbd06f6941d6d8a7543b315198bcb24ada3ea9",
     "mihomo_arm64_sha256": "87db0c6660a9557a901b5750f997967e71d8c0af07ea1d1dd4d04c28da7f7e6f",

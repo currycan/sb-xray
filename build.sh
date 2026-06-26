@@ -174,6 +174,7 @@ if [ "$MODE" == "offline" ]; then
     XUI_TAG=$(get_cached_version x_ui)
     SING_BOX_TAG=$(get_cached_version sing_box)
     XRAY_TAG=$(get_cached_version xray)
+    CRYPCTL_REF=$(get_cached_version crypctl_sha)
 else
     echo -e "${BLUE}刷新模式：从 GitHub API 获取最新版本信息...${NC}"
     SHOUTRRR_TAG=$(get_latest_release "containrrr/shoutrrr")
@@ -191,6 +192,9 @@ else
     XUI_TAG=$(get_latest_stable_tag "MHSanaei/3x-ui")
     SING_BOX_TAG=$(get_latest_stable_tag "SagerNet/sing-box")
     XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
+    CRYPCTL_TAG=$(get_latest_release "currycan/key")
+    CRYPCTL_REF=$(git ls-remote "https://github.com/currycan/key.git" \
+      "refs/tags/${CRYPCTL_TAG}^{}" "refs/tags/${CRYPCTL_TAG}" 2>/dev/null | awk 'NR==1{print $1}')
 fi
 
 # 处理版本号并构建 Docker 参数
@@ -247,6 +251,7 @@ check_version "Cloudflared"     "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSI
 check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"
 check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"
 check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"
+_require_sha "CRYPCTL_REF" "$CRYPCTL_REF"
 
 # 刷新模式：把新获取到的 versions 写回 versions.json（与 digests 同步更新）
 if [ "$MODE" == "refresh" ]; then
@@ -264,6 +269,8 @@ if [ "$MODE" == "refresh" ]; then
         --arg x_ui                 "${XUI_TAG#v}" \
         --arg sing_box             "${SING_BOX_TAG#v}" \
         --arg xray                 "${XRAY_TAG#v}" \
+        --arg crypctl              "${CRYPCTL_TAG}" \
+        --arg crypctl_sha          "${CRYPCTL_REF}" \
         '. + {
             shoutrrr: $shoutrrr,
             mihomo: $mihomo,
@@ -276,7 +283,9 @@ if [ "$MODE" == "refresh" ]; then
             cloudflared: $cloudflared,
             x_ui: $x_ui,
             sing_box: $sing_box,
-            xray: $xray
+            xray: $xray,
+            crypctl: $crypctl,
+            crypctl_sha: $crypctl_sha
         }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
     echo -e "  ${GREEN}✓ versions 段已写回 versions.json${NC}"
 fi
@@ -438,7 +447,8 @@ BUILD_ARGS="${BUILD_ARGS} \
   --build-arg XUI_ARM64_SHA256=${XUI_ARM64_SHA} \
   --build-arg SING_BOX_AMD64_SHA256=${SING_BOX_AMD64_SHA} \
   --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA} \
-  --build-arg SUB_STORE_FRONTEND_SHA=${SUB_STORE_FRONTEND_SHA}"
+  --build-arg SUB_STORE_FRONTEND_SHA=${SUB_STORE_FRONTEND_SHA} \
+  --build-arg CRYPCTL_REF=${CRYPCTL_REF}"
 
 # 镜像版本号注入（Dockerfile final stage 的 ARG VERSION/SHA → OCI label）
 BUILD_ARGS="${BUILD_ARGS} --build-arg VERSION=${TAG_VERSION} --build-arg SHA=${GIT_SHA}"
