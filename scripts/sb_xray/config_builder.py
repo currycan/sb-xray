@@ -593,18 +593,34 @@ def _resolve_supervisor_credentials() -> None:
 
 # --- 订阅 token 认证 map(G4: 空 token fail-closed) ------------------------
 
+# 允许字符集：与 random_gen.generate("path") 的 _PATH_ALPHABET 一致([a-z0-9])，
+# 并兼容手动设置时常用的连字符(-)。凡含 nginx 语法破坏字符(" \n;{}\ 等)的
+# token 一律拒绝，fail-closed(强制 Basic Auth)，防止注入 nginx map 块。
+_SUBSCRIBE_TOKEN_RE: re.Pattern[str] = re.compile(r'^[a-z0-9A-Z_\-]{1,256}$')
+
 
 def _resolve_subscribe_token_map() -> None:
-    """Build the nginx ``$auth_type`` token-map body, fail-closed on empty.
+    """Build the nginx ``$auth_type`` token-map body, fail-closed on empty/invalid.
 
     nginx.conf 用 ``${NGINX_SUBSCRIBE_TOKEN_MAP}`` 占位符承载 map 的可变行。
-    ``SUBSCRIBE_TOKEN`` 非空 → 生成 ``"<token>" "off";`` 让 token 持有者免
-    Basic Auth;为空 → 占位符为空串,map 仅剩 ``default "Restricted"``,任何
-    请求都强制 Basic Auth(绝不退化为 ``"" "off"`` 的全绕过)。
+    ``SUBSCRIBE_TOKEN`` 非空且通过注入安全校验 → 生成 ``"<token>" "off";`` 让
+    token 持有者免 Basic Auth;为空或含 nginx 语法破坏字符 → 占位符为空串,map
+    仅剩 ``default "Restricted"``,任何请求都强制 Basic Auth(绝不退化为
+    ``"" "off"`` 的全绕过)。
+
+    允许字符集：``[a-zA-Z0-9_-]``(覆盖 random_gen "path" 生成的 [a-z0-9] 及
+    手动配置时常见的大写字母、连字符、下划线)。含双引号、换行、空白、分号、
+    花括号、反斜杠等 nginx 特殊字符的 token 被视为恶意输入,fail-closed。
     """
     token = os.environ.get("SUBSCRIBE_TOKEN", "").strip()
     if token:
-        os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = f'"{token}" "off";'
+        if _SUBSCRIBE_TOKEN_RE.fullmatch(token):
+            os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = f'"{token}" "off";'
+        else:
+            os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = ""
+            logger.warning(
+                "SUBSCRIBE_TOKEN 含非法字符,注入防护 fail-closed(强制 Basic Auth)"
+            )
     else:
         os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = ""
         logger.warning(

@@ -1102,6 +1102,28 @@ def test_resolve_supervisor_credentials_empty_public_password(
     assert sup_pw != os.environ.get("PUBLIC_PASSWORD", "")
 
 
+def test_resolve_subscribe_token_map_malicious_token_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G4 injection guard: token 含 nginx 语法破坏字符时 fail-closed,注入不写入 map。"""
+    monkeypatch.setenv("SUBSCRIBE_TOKEN", 'abc" "on"; map $x $y { default')
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert token_map == ""
+    assert '"off"' not in token_map
+
+
+def test_resolve_subscribe_token_map_whitespace_only_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G4: 纯空白 token strip 后为空 → fail-closed,不产出 off 映射。"""
+    monkeypatch.setenv("SUBSCRIBE_TOKEN", "   ")
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert token_map == ""
+    assert '"off"' not in token_map
+
+
 def test_resolve_subscribe_token_map_fail_closed_when_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
