@@ -846,6 +846,22 @@ def test_check_ip_no_unused_db_arrays() -> None:
         assert arr not in db_line, f"declare -A 行残留未用数组 {arr}"
 
 
+# ---- openwrt-init.sh 网卡迭代硬化（H4） -------------------------------------
+
+
+def test_setup_iface_loop_uses_glob_not_ls() -> None:
+    """禁止 `for _i in $(ls /sys/class/net)`（SC2045，网卡名分词/特殊字符会断）；
+    改 glob 遍历 + basename 取名。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "$(ls /sys/class/net" not in src, "不得遍历 ls 输出（SC2045）"
+    assert "for _p in /sys/class/net/*" in src, "须用 glob 遍历网卡目录"
+    assert '_i=$(basename "$_p")' in src, "须经 basename 从 glob 路径取网卡名"
+    # glob 无匹配守卫：POSIX sh 无 nullglob，未展开时 [ -e ] 跳过
+    loop = src[src.index("for _p in /sys/class/net/*"):]
+    loop = loop[: loop.index("done") + 4]
+    assert "[ -e " in loop, "glob 无匹配时须 [ -e ] 守卫跳过未展开的字面量"
+
+
 def test_check_ip_score_coerced_to_integer() -> None:
     """score 经整数比较前必须强制取整——API 回小数(12.5)会令 bash [[ -lt ]] 语法报错。
     三处取分（scamalytics/ip2location/abuseipdb）统一经 _int_or_zero 过滤。"""

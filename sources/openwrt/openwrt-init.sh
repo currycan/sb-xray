@@ -1101,7 +1101,9 @@ setup_lan_ipv6() {
     done
     # runtime 立即生效：关 accept_ra + 清残留公网 GUA（仅 2000::/3，保留 ULA；
     # 全是 IPv6 操作，不触碰 IPv4/SSH）
-    for _i in $(ls /sys/class/net 2>/dev/null); do
+    for _p in /sys/class/net/*; do
+        [ -e "$_p" ] || continue
+        _i=$(basename "$_p")
         sysctl -w "net.ipv6.conf.$_i.accept_ra=0" >/dev/null 2>&1
     done
     ip -o -6 addr show scope global 2>/dev/null | while read -r _x _dev _fam _addr _rest; do
