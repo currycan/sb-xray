@@ -9,7 +9,7 @@
 1. [构建环境准备](#1-构建环境准备)
 2. [自动构建脚本](#2-自动构建脚本buildsh)
 3. [三阶段 Dockerfile 架构](#3-三阶段-dockerfile-架构)
-4. [组件版本管理](#4-组件版本管理)（[4.2 供应链 pin](#42-供应链-pin不可变-ref-绑定)）
+4. [组件版本管理](#4-组件版本管理)（[4.2 供应链 pin](#42-供应链-pin不可变-ref-绑定)）（[4.3 镜像 digest pin 与 GOPROXY](#43-镜像-digest-pin-与-goproxy)）
 5. [手动精细构建](#5-手动精细构建)
 6. [常见构建问题 FAQ](#6-常见构建问题-faq)
 7. [Git Release 版本发布](#7-git-release-版本发布releasesh)
@@ -162,7 +162,7 @@ flowchart TD
 
 **环境特性**: `CGO_ENABLED=1`（启用 CGO 以支持 SQLite）
 
-🔬 **GOPROXY 默认走国内镜像**：Golang 主构建层声明 `ARG GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"`（国内构建友好）。CI 可用 `--build-arg GOPROXY=https://proxy.golang.org,direct` 覆盖。这只影响 `go build`（crypctl）拉取依赖的来源，不改产物。
+🔬 **GOPROXY**：Golang 主构建层默认 `ARG GOPROXY="https://proxy.golang.org,direct"`，与 CI 对齐。国内环境可通过 `--build-arg GOPROXY="https://goproxy.cn,direct"` opt-in 国内镜像。详见 §4.3。
 
 **构建产物**:
 
@@ -259,7 +259,35 @@ jq '{sub_store_frontend_sha, crypctl_sha, acme_sh, acme_sh_sha256}' versions.jso
 # 期望：四个字段均非空；sub_store_frontend_sha / crypctl_sha 为 40 位 hex
 ```
 
-### 4.3 版本覆盖
+### 4.3 镜像 digest pin 与 GOPROXY
+
+📘 **Dockerfile `FROM` 镜像 digest pin**：所有 `FROM` 行（含 `node:alpine`、`golang:1-alpine`、最终 `nginx` 基镜像）均以 `name:tag@sha256:<64-hex>` 形式 digest-pin。`docker-compose.yml` 中的 watchtower 镜像（`nickfedor/n`）同样 digest-pin。本项目自身的输出镜像 `currycan/sb-xray:latest` 有意保持浮动，使 watchtower 可持续跟进 `:latest`（见 §2 watchtower 纪律）。digest 值随 `versions.json` 一起在 CI 每日刷新时更新。
+
+📘 **`GOPROXY` 默认与 CI 对齐**：Go 构建层（crypctl）的 `GOPROXY` 默认值为 `https://proxy.golang.org,direct`，与 CI（`daily-build.yml`）保持一致。国内环境可通过 `--build-arg GOPROXY="https://goproxy.cn,direct"` 按需 opt-in；`GOSUMDB` 始终保持启用，不得禁用（校验和保护）。
+
+🔬 **守护测试（B4/B5）**：`tests/test_build_supply_chain.py` 在 CI 质量门中强制验证以上三项不变量：
+
+| 测试 | 检查项 |
+|:---|:---|
+| `test_every_dockerfile_from_is_digest_pinned` | `Dockerfile` 所有 `FROM` 均携带 `@sha256:<64-hex>` |
+| `test_watchtower_image_is_digest_pinned` | `docker-compose.yml` 中所有第三方 `image:` 均 digest-pin；`currycan/sb-xray` 豁免 |
+| `test_dockerfile_goproxy_default_matches_ci` | Dockerfile `ARG GOPROXY` 默认值与 CI 构建参数完全一致 |
+| `test_dockerfile_goproxy_default_is_official_first` | 默认值以 `https://proxy.golang.org` 开头，`goproxy.cn` 不得出现在默认值中 |
+| `test_gosumdb_not_disabled` | Dockerfile 中不存在 `GOSUMDB=off` |
+
+🔧 **自检 digest pin**：
+
+```bash
+# 验证 Dockerfile 所有 FROM 均已 digest-pin
+grep "^FROM" Dockerfile
+# 期望：每行均包含 @sha256:
+
+# 验证 GOPROXY 默认值
+grep 'ARG GOPROXY' Dockerfile
+# 期望：https://proxy.golang.org,direct
+```
+
+### 4.4 版本覆盖
 
 可通过环境变量强制指定版本：
 
