@@ -5,11 +5,17 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
+from typing import Final
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PATH = Path("/etc/nginx/dhparam/dhparam.pem")
 _DEFAULT_BITS = 4096
+# 4096-bit DH on a constrained VPS can legitimately take >2min; 300s is a
+# generous ceiling that still bounds a hung openssl so the boot stage can't
+# wedge supervisord forever (G1). On timeout we re-raise — dhparam is a
+# fail-fast crypto stage, the restart loop recovers.
+_DHPARAM_TIMEOUT_SEC: Final[float] = 300.0
 
 
 def ensure_dhparam(
@@ -35,6 +41,7 @@ def ensure_dhparam(
     rc = subprocess.run(
         ["openssl", "dhparam", "-dsaparam", "-out", str(path), str(bits)],
         check=False,
+        timeout=_DHPARAM_TIMEOUT_SEC,
     ).returncode
     if rc != 0:
         raise RuntimeError(f"openssl dhparam exited with code {rc}")
