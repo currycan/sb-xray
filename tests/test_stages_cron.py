@@ -317,6 +317,21 @@ def test_managed_line_anchors_to_full_command_token() -> None:
     assert not sbcron._is_managed_line("0 2 * * * /usr/bin/true")
 
 
+def test_managed_line_does_not_match_subcommand_prefix_collision() -> None:
+    """geo-update-extended 以托管子命令 geo-update 为前缀,但不是托管行,不得被误删。"""
+    assert not sbcron._is_managed_line(
+        "0 2 * * * /scripts/entrypoint.py geo-update-extended >> /log 2>&1"
+    )
+    # 同理 isp-retest 前缀碰撞
+    assert not sbcron._is_managed_line(
+        "0 3 * * * /scripts/entrypoint.py isp-retest-v2 >> /log 2>&1"
+    )
+    # 真正的托管行仍为 True
+    assert sbcron._is_managed_line(
+        "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+    )
+
+
 def test_install_preserves_custom_line_containing_marker_substring(tmp_path: Path) -> None:
     target = tmp_path / "crontab"
     target.write_text(

@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import socket
 from pathlib import Path
 from typing import Final
@@ -33,12 +34,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CRON = Path("/var/spool/cron/crontabs/root")
 _GEO_ENTRY = "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
-_GEO_MARKER = "geo-update"
-_ISP_MARKER = "isp-retest"
-_SUBSTORE_MARKER = "substore-check"
 _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
-_SECRET_MARKER = "secrets-refresh"
-_LOGROTATE_MARKER = "log-rotate"
 _LOGROTATE_DEFAULT_CRON = "0 * * * *"  # hourly size-based; LOG_ROTATE_CRON="" disables
 
 # 本模块托管的 entrypoint.py 子命令——剥行/重装时只针对这些命令尾锚定,
@@ -54,17 +50,19 @@ _ENTRYPOINT = "/scripts/entrypoint.py"
 # 迁移期旧 shell 入口(纯字面量,无对应子命令)。
 _LEGACY_MANAGED: Final[tuple[str, ...]] = ("/scripts/geo_update.sh",)
 
+# 预编译正则:要求子命令后接空白或行尾,防止前缀碰撞误删 (F1)。
+_MANAGED_RE: Final = re.compile(
+    r"/scripts/entrypoint\.py\s+(" + "|".join(re.escape(s) for s in _MANAGED_SUBCOMMANDS) + r")(?:\s|$)"
+)
+
 
 def _is_managed_line(line: str) -> bool:
     """True 当且仅当该行是本模块托管的 cron 行。
 
-    锚到 ``/scripts/entrypoint.py <subcmd>`` 完整命令形态(token 边界),
-    而非裸 marker 子串——后者会把含同名字面量的运维自定义行误删 (F1)。
+    使用 ``_MANAGED_RE`` 正则锚到 token 边界(子命令后接空白或行尾),
+    而非裸子串——后者会把子命令名作前缀的自定义命令误删 (F1)。
     """
-    for sub in _MANAGED_SUBCOMMANDS:
-        if f"{_ENTRYPOINT} {sub}" in line:
-            return True
-    return any(legacy in line for legacy in _LEGACY_MANAGED)
+    return bool(_MANAGED_RE.search(line)) or any(legacy in line for legacy in _LEGACY_MANAGED)
 
 
 def _hours_to_cron_spec(hours: int, minute: int = 0) -> str:
