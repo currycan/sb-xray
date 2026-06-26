@@ -23,8 +23,17 @@ without a second xray process.
 
 from __future__ import annotations
 
+import functools
+import re
 from dataclasses import dataclass, field
 from typing import Final
+
+
+@functools.cache
+def _compile_patterns(patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    """Compile a tuple of regex strings once; LRU-cached so the same tuple
+    (identity by value, since tuples are hashable) is never compiled twice."""
+    return tuple(re.compile(p) for p in patterns)
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,12 @@ class ContentSignature:
     real_substrings: tuple[str, ...] = ()
     blocked_substrings: tuple[str, ...] = ()
     blocked_url_patterns: tuple[str, ...] = ()
+
+    @property
+    def compiled_url_patterns(self) -> tuple[re.Pattern[str], ...]:
+        """Pre-compiled ``blocked_url_patterns`` — compiled once per distinct
+        pattern tuple (module-level LRU cache) instead of per probe call."""
+        return _compile_patterns(self.blocked_url_patterns)
 
 
 @dataclass(frozen=True)

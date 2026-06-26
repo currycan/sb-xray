@@ -27,7 +27,6 @@ not send these services out ``direct`` (censorship + account risk).
 from __future__ import annotations
 
 import os
-import re
 
 from sb_xray import http as sbhttp
 from sb_xray.events import emit_event
@@ -54,7 +53,7 @@ def _classify(result: sbhttp.FetchResult, sig: ContentSignature) -> str:
     body = result.body
     if any(s in body for s in sig.blocked_substrings):
         return _BLOCKED
-    if any(re.search(p, result.final_url) for p in sig.blocked_url_patterns):
+    if any(p.search(result.final_url) for p in sig.compiled_url_patterns):
         return _BLOCKED
     if sig.real_substrings and any(s in body for s in sig.real_substrings):
         return _REAL
