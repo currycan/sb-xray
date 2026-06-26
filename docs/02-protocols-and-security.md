@@ -580,6 +580,58 @@ flowchart LR
 
 ---
 
+### 1.15 管理面访问控制（内网 ACL）
+
+> 📘 **三个管理面 location 均限制为内网访问**，公网请求不经 Basic Auth 而是直接被拒绝。
+
+Nginx 配置中 `/supervisor/`、`${DUFS_PATH_PREFIX}/`、`/${XUI_WEBBASEPATH}/` 三个 location 均 `include /etc/nginx/network_internal.conf`：
+
+```
+allow 127.0.0.0/8;
+allow 10.0.0.0/8;
+allow 192.168.0.0/16;
+allow 172.16.0.0/12;
+allow fc00::/7;
+deny all;
+```
+
+这意味着这三个管理面接口**只能从容器内部（supervisorctl、本地进程）或同网段内网客户端**访问；来自公网的请求由 `deny all` 直接拦截，不进入 Basic Auth 流程。
+
+```mermaid
+flowchart LR
+    PublicReq(["公网请求"]) -->|deny all| Blocked(["403 拒绝"])
+    InternalReq(["内网 / 127.x / 10.x<br/>192.168.x / 172.16-31.x"]) --> ACL{{"network_internal.conf"}}
+    ACL -->|allow| AdminPanel(["管理面板\n/supervisor/ · dufs · x-ui"])
+    class PublicReq entry
+    class Blocked block
+    class InternalReq process
+    class ACL gateway
+    class AdminPanel xray
+    classDef entry   fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef block   fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
+    classDef process fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef gateway fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef xray    fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+```
+
+---
+
+### 1.16 订阅端点 Token 注入防护（fail-closed）
+
+> 📘 **`SUBSCRIBE_TOKEN` 为空或含非法字符时，订阅端点强制 Basic Auth——不存在无凭据绕过路径。**
+
+nginx `map` 块用 `${NGINX_SUBSCRIBE_TOKEN_MAP}` 占位符承载可变行，由 `config_builder._resolve_subscribe_token_map` 在渲染前写入：
+
+| `SUBSCRIBE_TOKEN` 状态 | `NGINX_SUBSCRIBE_TOKEN_MAP` 内容 | 实际效果 |
+|:---|:---|:---|
+| 非空且字符合法（`[a-zA-Z0-9_-]{1,256}`） | `"<token>" "off";` | 持 token 请求免 Basic Auth |
+| **空（未设置）** | **`""`（空串）** | **任何请求强制 Basic Auth** |
+| **含非法字符**（空格、双引号、分号、换行等） | **`""`（空串，打 WARNING）** | **同上，fail-closed** |
+
+🔬 **防注入机制**：token 值注入 nginx `map` 块前，`config_builder` 用 `re.compile(r'^[a-zA-Z0-9_\-]{1,256}$')` 做全串匹配。含 nginx 语法破坏字符（双引号会破坏 `map` 键、分号截断指令、换行逃出 `map` 块）的 token 一律拒绝，占位符置空串，map 仅保留 `default "Restricted"`——任何 `?token=` 参数均回落到 Basic Auth，不存在利用注入绕过认证的路径。
+
+---
+
 ## 2. MLKEM 后量子密码学
 
 在 Xray 的 VLESS 协议及 XHTTP 隧道中，本项目率先启用了 **MLKEM768 后量子端到端加密机制**。

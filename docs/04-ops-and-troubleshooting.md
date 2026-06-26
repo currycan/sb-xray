@@ -172,14 +172,26 @@ docker exec -it sb-xray bash
 | `SUI_SUB_PORT` | `3096` | S-UI 订阅内部端口 |
 | `SUI_LOG_LEVEL` | `info` | 日志级别 |
 
+#### Supervisord 控制凭据
+
+| 变量 | 镜像内默认 | 说明 |
+|:---|:---|:---|
+| `SUPERVISOR_USER` | `sb-xray` | supervisord XML-RPC 控制接口用户名；**与 `PUBLIC_USER` 独立**，避免面板凭据泄漏同时交出进程控制权 |
+| `SUPERVISOR_PASSWORD` | *(派生)* | 未显式设置时，由 `PUBLIC_PASSWORD` 经固定 salt 做 SHA-256 确定性派生（取前 32 位十六进制字符）；**与 PUBLIC_PASSWORD 不同值**。派生逻辑在 `config_builder._resolve_supervisor_credentials`，salt 冻结（`sb-xray-supervisor::`），改 salt 会轮转所有存量部署的派生密码 |
+
+> 🔬 **盐值冻结不变量**：salt 字符串 `sb-xray-supervisor::` 硬编码在 `config_builder.py` 注释中，禁止修改——修改会导致所有未显式设置 `SUPERVISOR_PASSWORD` 的节点在镜像升级后生成不同密码，中断 supervisorctl 远程控制会话。如需强制轮换，显式在 compose 设置 `SUPERVISOR_PASSWORD`。
+
 #### Dufs 文件服务
 
-| 变量 | Dockerfile 默认 | 说明 |
+| 变量 | 镜像内默认 | 说明 |
 |:---|:---|:---|
 | `DUFS_PATH_PREFIX` | `/dufs` | URL 前缀 |
 | `DUFS_SERVE_PATH` | `/data` | 文件存储根目录 |
-| `DUFS_ALLOW_UPLOAD` | `true` | 允许上传 |
-| `DUFS_ALLOW_DELETE` | `true` | 允许删除 |
+| `DUFS_ALLOW_UPLOAD` | `false` | 允许上传文件；**镜像内默认关闭**（Nginx 内网 ACL 限制访问面，但建议保持默认以最小化写权限） |
+| `DUFS_ALLOW_DELETE` | `false` | 允许删除文件；**镜像内默认关闭** |
+| `DUFS_ALLOW_SYMLINK` | `false` | 允许跟随符号链接；**镜像内默认关闭**（防止 serve-path 内的 symlink 越界读取宿主文件） |
+| `DUFS_ALLOW_ARCHIVE` | `false` | 允许打包下载目录；**镜像内默认关闭** |
+| `DUFS_ENABLE_CORS` | `false` | 放开跨域（CORS）；**镜像内默认关闭**（开启后任意网页可发起跨源请求） |
 
 🔬 **深挖：Dufs 配置来源与 `DUFS_*` env 优先级**
 
@@ -480,21 +492,29 @@ docker exec sb-xray crontab -l | grep isp-retest
 
 ```mermaid
 flowchart TD
-    A["访问请求"] --> B{"携带 Token?"}
-    B -- "是" --> C{"Token 正确?"}
-    C -- "是" --> D["允许访问"]
-    C -- "否" --> E["要求 HTTP 基础认证"]
-    B -- "否" --> E
+    A["访问请求"] --> T{"SUBSCRIBE_TOKEN<br/>已配置且字符合法?"}
+    T -- "否（空/非法字符）" --> E
+    T -- "是" --> B{"携带 ?token=?"}
+    B -- "是，值匹配" --> D["允许访问（免 Basic Auth）"]
+    B -- "否或值不匹配" --> E["要求 HTTP 基础认证"]
     E -- "凭据正确" --> D
     E -- "凭据错误" --> F["返回 404"]
 
-    style D fill:#55efc4,stroke:#00b894,stroke-width:2px
-    style F fill:#ff7675,stroke:#d63031,stroke-width:2px
+    class D process
+    class F block
+    class T,B decision
+    class E gateway
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef block    fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef gateway  fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
 ```
+
+> 📘 **Fail-closed 不变量**：`SUBSCRIBE_TOKEN` 为空、或含 nginx 语法破坏字符（双引号、换行、空白、分号、花括号、反斜杠等）时，nginx `map` 块仅保留 `default "Restricted"`——任何 `?token=` 参数（含空串）都**不能**绕过 Basic Auth。订阅端点永远不会在无凭据的状态下开放。
 
 ### 3.2 认证方式一：Token 认证（推荐）
 
-Token 在容器首次启动时**自动生成**。
+Token 在容器首次启动时**自动生成**（`[a-z0-9]` 32 位字符，见 §2.4）。
 
 **查看当前 Token**：
 
@@ -508,12 +528,14 @@ docker exec sb-xray grep SUBSCRIBE_TOKEN /.env/sb-xray
 https://your-domain.com/sb-xray/MihomoPro.yaml?token=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
 ```
 
-**自定义 Token**（可选）：
+**自定义 Token**（可选，允许字符集 `[a-zA-Z0-9_-]`，最长 256 字符）：
 
 ```yaml
 environment:
   - SUBSCRIBE_TOKEN=your_custom_secure_token_32_chars
 ```
+
+> ⚠️ 自定义 Token 含空格、双引号、分号等字符时，`config_builder` 会检测到非法字符并 fail-closed——该 Token 不生效，订阅端点强制 Basic Auth，容器日志打 WARNING。
 
 ### 3.3 认证方式二：HTTP 基础认证（备用）
 
