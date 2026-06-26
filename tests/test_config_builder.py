@@ -946,3 +946,18 @@ def test_cn_exit_mode_balance_noop_without_host(env: Path, tmp_path: Path) -> No
     assert "balancers" not in data["routing"]
     cn_ip = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
     assert cn_ip["outboundTag"] == "block"
+
+
+def test_http_conf_includes_internal_acl_in_admin_locations() -> None:
+    """A1: /supervisor/、DUFS、XUI 三个管理面 location 必须 include
+    network_internal.conf,否则内网 ACL 形同虚设(对公网开放)。"""
+    http_conf = Path("templates/nginx/http.conf").read_text(encoding="utf-8")
+    inc = "include /etc/nginx/network_internal.conf;"
+    # 必须恰好出现在三个管理面 location 内(共 3 次)
+    assert http_conf.count(inc) == 3, f"期望 3 处 internal-acl include,实得 {http_conf.count(inc)}"
+    # 每个管理面 location 块内都要有 include —— 用 location 锚点切片验证
+    for anchor in ("location /supervisor/ {", "location ${DUFS_PATH_PREFIX}/ {",
+                   "location /${XUI_WEBBASEPATH}/ {"):
+        start = http_conf.index(anchor)
+        block = http_conf[start:start + 600]
+        assert inc in block, f"{anchor} 缺少 internal-acl include"
