@@ -591,6 +591,27 @@ def _resolve_supervisor_credentials() -> None:
         os.environ["SUPERVISOR_PASSWORD"] = digest[:32]
 
 
+# --- 订阅 token 认证 map(G4: 空 token fail-closed) ------------------------
+
+
+def _resolve_subscribe_token_map() -> None:
+    """Build the nginx ``$auth_type`` token-map body, fail-closed on empty.
+
+    nginx.conf 用 ``${NGINX_SUBSCRIBE_TOKEN_MAP}`` 占位符承载 map 的可变行。
+    ``SUBSCRIBE_TOKEN`` 非空 → 生成 ``"<token>" "off";`` 让 token 持有者免
+    Basic Auth;为空 → 占位符为空串,map 仅剩 ``default "Restricted"``,任何
+    请求都强制 Basic Auth(绝不退化为 ``"" "off"`` 的全绕过)。
+    """
+    token = os.environ.get("SUBSCRIBE_TOKEN", "").strip()
+    if token:
+        os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = f'"{token}" "off";'
+    else:
+        os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = ""
+        logger.warning(
+            "SUBSCRIBE_TOKEN 未设置,订阅端点 token-bypass 关闭(强制 Basic Auth)"
+        )
+
+
 def run_logrotate(
     *,
     conf: Path = _LOGROTATE_CONF,
@@ -643,6 +664,7 @@ def create_config(*, workdir: Path | None = None) -> None:
     _apply_access_log_env()
     _resolve_dufs_permissions()
     _resolve_supervisor_credentials()
+    _resolve_subscribe_token_map()
 
     for src, dest in _FLAT_RENDERS:
         dest_path = _expand_dest(dest)

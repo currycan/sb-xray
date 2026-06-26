@@ -1102,6 +1102,44 @@ def test_resolve_supervisor_credentials_empty_public_password(
     assert sup_pw != os.environ.get("PUBLIC_PASSWORD", "")
 
 
+def test_resolve_subscribe_token_map_fail_closed_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G4: SUBSCRIBE_TOKEN 为空时,token-map 绝不能生成 '\"\" off' 映射,
+    否则无 ?token= 的请求会命中空串 key 而绕过 Basic Auth。"""
+    monkeypatch.delenv("SUBSCRIBE_TOKEN", raising=False)
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert '"off"' not in token_map
+    assert '"" "off"' not in token_map
+
+
+def test_resolve_subscribe_token_map_active_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非空 token → 生成该 token 的 off 映射,允许 token 持有者免 Basic Auth。"""
+    monkeypatch.setenv("SUBSCRIBE_TOKEN", "s3cr3t-tok")
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert '"s3cr3t-tok" "off";' in token_map
+
+
+def test_nginx_conf_token_map_fail_closed_render(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空 SUBSCRIBE_TOKEN 渲染 nginx.conf 后,$auth_type map 体内
+    不得出现任何 'off' 映射(只剩 default Restricted)。"""
+    monkeypatch.delenv("SUBSCRIBE_TOKEN", raising=False)
+    cb._resolve_subscribe_token_map()
+    src = Path("templates/nginx/nginx.conf")
+    rendered = cb._envsubst(src.read_text(encoding="utf-8"))
+    start = rendered.index("map $arg_token $auth_type {")
+    block = rendered[start:rendered.index("}", start)]
+    assert '"off"' not in block
+    assert 'default "Restricted";' in block
+    assert "${NGINX_SUBSCRIBE_TOKEN_MAP}" not in rendered  # 占位符已展开(空串)
+
+
 def test_http_conf_includes_internal_acl_in_admin_locations() -> None:
     """A1: /supervisor/、DUFS、XUI 三个管理面 location 必须 include
     network_internal.conf,否则内网 ACL 形同虚设(对公网开放)。"""
