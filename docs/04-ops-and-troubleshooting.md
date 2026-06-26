@@ -360,6 +360,7 @@ docker compose restart
 | `ISP_LEADER_HYSTERESIS` | `1.15` | 上报主选（`FASTEST_PROXY_TAG`）的跨轮滞回余量：挑战者需超过上轮 leader 该倍数才换主，抑制抖动翻转告警 |
 | `ISP_8K_SMOOTH_MBPS` | `60` | `IS_8K_SMOOTH` 判定阈值（Mbps），与内部评级梯子 8K 档对齐；旧值 100 对跨境单连接几乎不可达 |
 | `SUBSTORE_CHECK_CRON` | `30 4 * * *` | 每日产出全部 remote 订阅做拉取自检的 cron 表达式；任一订阅失败（HTTP 非 2xx 或 0 节点）即发 `substore.sub_fetch.failed` 告警；置空 `""` 禁用 |
+| `CERT_RENEW_CRON` | 每日 `03:xx`（分钟按 hostname jitter） | TLS 证书每日续签 cron 开关。**镜像内默认开**：不设置此变量即按默认每日运行，无需配 compose env。值为完整 5 字段 cron 表达式时按该表达式调度；置空 `""` 禁用。续签逻辑：调用 `entrypoint.py cert-renew`，实际向 CA 申请仅当证书剩余有效期 <7 天时触发；申请成功后自动执行 `nginx -s reload` 使新证书立即生效（无需重启容器）；跳过时零操作。日志写 `/var/log/cert_renew.log`，并发 `cert.renew.completed` 事件（见 §4.6） |
 | `SECRET_REFRESH_INTERVAL_HOURS` | `1` | `secrets-refresh` cron 间隔（小时）：周期下载比对远端 `tmp.bin`，凭据变化才重解密 `/.env/secret` 并热重配；`0` 禁用。与镜像发布解耦，使密钥轮换有上界生效延迟（见 §2.3） |
 | `SECRET_REFRESH_ENABLED` | `true` | 即使 cron 已安装，也可通过此开关让 `secrets-refresh` 子命令 no-op |
 | `ISP_PER_SERVICE_SB` | `false` | 开启后 sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 生成独立 `isp-auto-<service>` urltest balancer,各自用该服务的真实域名探测;xray 因 observatory 单例不受影响 |
@@ -661,7 +662,7 @@ docker compose restart sb-xray
 
 ### 5.6 定时任务（cron）总表
 
-系统运行期共有 **6 个定时任务**，分属两个调度来源：前 5 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 6 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
+系统运行期共有 **7 个定时任务**，分属两个调度来源：前 6 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 7 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
 
 | # | 任务 | 默认表达式 | 控制变量 | 调度来源 | 用途 |
 |:---:|:---|:---|:---|:---|:---|
@@ -670,9 +671,10 @@ docker compose restart sb-xray
 | 3 | `substore-check` | `30 4 * * *` | `SUBSTORE_CHECK_CRON`（空串禁用） | root crontab | 拉取自检全部 remote 订阅，失败发 `substore.sub_fetch.failed` 告警（见 §2.6） |
 | 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，发 `secret.refresh.completed` 事件（见 §2.3） |
 | 5 | `log-rotate` | `0 * * * *` | `LOG_ROTATE_CRON`（空串禁用） | root crontab | 按大小轮转 `/var/log` 下日志（logrotate），防止 nginx/xray/sing-box 日志撑满磁盘（见 §6.7） |
-| 6 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
+| 6 | `cert-renew` | `xx 3 * * *`（分钟按 hostname jitter） | `CERT_RENEW_CRON`（**镜像内默认开**，空串禁用） | root crontab | 每日检查 TLS 证书有效期；剩余 <7 天时通过 acme.sh 向 CA 申请续签并执行 `nginx -s reload` 使新证书立即生效；有效期充足时零操作。日志写 `/var/log/cert_renew.log`，发 `cert.renew.completed` 事件 |
+| 7 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
 
-> 📘 任务 1–5 用 `docker exec sb-xray crontab -l` 可见；任务 6 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
+> 📘 任务 1–6 用 `docker exec sb-xray crontab -l` 可见；任务 7 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
 
 ---
 
