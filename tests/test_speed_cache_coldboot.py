@@ -285,3 +285,73 @@ def test_current_isp_tags_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     """_current_isp_tags derives proxy-<slug> from each *_ISP_IP prefix."""
     _back_nodes(monkeypatch, "CN2", "HK")
     assert speed_test._current_isp_tags() == {"proxy-cn2-isp", "proxy-hk-isp"}
+
+
+# ---------------------------------------------------------------------------
+# C2: run_isp_speed_tests_budgeted — wall-clock budget cap + last-known fallback
+# ---------------------------------------------------------------------------
+
+from sb_xray import speed_test as st  # noqa: E402 — module alias for budgeted tests
+
+
+def test_budgeted_falls_back_to_last_known_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C2: when a cold-cache measurement overruns the wall-clock budget, the
+    budgeted wrapper stops waiting, loads last-known ISP_TAG from STATUS_FILE,
+    and returns None — boot is never blocked for the full measurement."""
+    status = tmp_path / "status"
+    status.write_text(
+        "export ISP_TAG='proxy-kr-isp'\n"
+        "export _ISP_SPEEDS_JSON='{\"proxy-kr-isp\": 88.0}'\n"
+        "export IS_8K_SMOOTH='true'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STATUS_FILE", str(status))
+    monkeypatch.setenv("ISP_SPEED_BOOT_BUDGET_SEC", "1")
+    monkeypatch.delenv("ISP_TAG", raising=False)
+    monkeypatch.delenv("_ISP_SPEEDS_JSON", raising=False)
+
+    def _slow(**_kw: object) -> None:
+        time.sleep(5.0)  # far exceeds the 1s budget
+        return None
+
+    monkeypatch.setattr(st, "run_isp_speed_tests", _slow)
+
+    t0 = time.monotonic()
+    out = st.run_isp_speed_tests_budgeted()
+    elapsed = time.monotonic() - t0
+
+    assert out is None
+    assert elapsed < 3.0  # returned well before the 5s sleep finished
+    assert os.environ["ISP_TAG"] == "proxy-kr-isp"
+    assert os.environ["_ISP_SPEEDS_JSON"] == '{"proxy-kr-isp": 88.0}'
+    assert os.environ["IS_8K_SMOOTH"] == "true"
+
+
+def test_budgeted_returns_real_outcome_within_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fast path: when the measurement completes inside the budget the real
+    outcome is returned and no fallback happens."""
+    monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))
+    monkeypatch.setenv("ISP_SPEED_BOOT_BUDGET_SEC", "10")
+    sentinel = object()
+
+    def _fast(**_kw: object) -> object:
+        return sentinel
+
+    monkeypatch.setattr(st, "run_isp_speed_tests", _fast)
+    assert st.run_isp_speed_tests_budgeted() is sentinel
+
+
+def test_budgeted_zero_budget_is_synchronous(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ISP_SPEED_BOOT_BUDGET_SEC=0 disables the budget (legacy synchronous
+    behaviour) — the wrapper simply delegates to run_isp_speed_tests."""
+    monkeypatch.setenv("STATUS_FILE", str(tmp_path / "status"))
+    monkeypatch.setenv("ISP_SPEED_BOOT_BUDGET_SEC", "0")
+    sentinel = object()
+    monkeypatch.setattr(st, "run_isp_speed_tests", lambda **_kw: sentinel)
+    assert st.run_isp_speed_tests_budgeted() is sentinel

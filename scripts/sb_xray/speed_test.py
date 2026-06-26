@@ -1243,6 +1243,71 @@ def run_isp_speed_tests(
     return outcome
 
 
+def _apply_last_known_routing() -> None:
+    """Load last-known routing rows from STATUS_FILE into os.environ.
+
+    C2 cold-boot fallback: when the live measurement overruns the boot wall-clock
+    budget, the main process still needs *some* ISP_TAG / _ISP_SPEEDS_JSON so the
+    config templates render against the previous good decision instead of an empty
+    one. The async measurement thread keeps running and will atomically persist a
+    fresh outcome to STATUS_FILE (and the periodic isp-retest cron re-measures
+    anyway), so this is a graceful stopgap, never a permanent state.
+    """
+    snap = _read_status_snapshot()
+    for key in ("ISP_TAG", "_ISP_SPEEDS_JSON", "IS_8K_SMOOTH"):
+        value = snap.get(key, "")
+        if value:
+            os.environ[key] = value
+    isp_tag = snap.get("ISP_TAG", "")
+    os.environ["HAS_ISP_NODES"] = "true" if isp_tag not in ("", "direct", "block") else ""
+
+
+def run_isp_speed_tests_budgeted(
+    *,
+    samples: int | None = None,
+    url: str = _SPEED_TEST_URL,
+) -> SpeedOutcome | None:
+    """Boot-time speed test with a wall-clock budget cap (C2).
+
+    Runs :func:`run_isp_speed_tests` on a daemon thread and waits at most
+    ``ISP_SPEED_BOOT_BUDGET_SEC`` (default 45s, ``0`` disables the cap and runs
+    synchronously for full backward compatibility). On overrun the wait is
+    abandoned — the measurement thread keeps running and persists its outcome to
+    STATUS_FILE atomically — and the main process loads the last-known routing
+    rows so config generation never stalls behind a cold-cache measurement.
+
+    Returns the real :class:`SpeedOutcome` (or ``None`` on a cache hit) when the
+    measurement finishes inside the budget; returns ``None`` on a budget overrun.
+    """
+    import threading
+
+    raw = os.environ.get("ISP_SPEED_BOOT_BUDGET_SEC", "45").strip()
+    try:
+        budget = float(raw) if raw else 45.0
+    except ValueError:
+        budget = 45.0
+    if budget <= 0:
+        return run_isp_speed_tests(samples=samples, url=url)
+
+    box: dict[str, SpeedOutcome | None] = {"outcome": None}
+
+    def _runner() -> None:
+        box["outcome"] = run_isp_speed_tests(samples=samples, url=url)
+
+    t = threading.Thread(target=_runner, name="isp-speed-boot", daemon=True)
+    t.start()
+    t.join(budget)
+    if t.is_alive():
+        logger.warning(
+            "ISP 测速超过启动墙钟预算 %.0fs，改用 STATUS_FILE 中 last-known 选路继续 boot"
+            "（测速线程后台继续，结果将原子写回 STATUS_FILE）",
+            budget,
+        )
+        _apply_last_known_routing()
+        return None
+    return box["outcome"]
+
+
 def _try_speed_cache_hit() -> bool:
     """Phase 5 cold-boot cache.
 
