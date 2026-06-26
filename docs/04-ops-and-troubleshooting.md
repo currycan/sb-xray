@@ -669,7 +669,7 @@ docker compose restart sb-xray
 
 | # | 任务 | 默认表达式 | 控制变量 | 调度来源 | 用途 |
 |:---:|:---|:---|:---|:---|:---|
-| 1 | `geo-update` | `xx 3 * * *`（分钟按 hostname jitter） | `ISP_RETEST_JITTER`（默认 `true`，`false` 回退分钟 0） | root crontab | 强制刷新 GeoIP/GeoSite 规则库并重启 xray（见 §5.1） |
+| 1 | `geo-update` | `<m> 3 * * *`（分钟按 hostname 派生 0–59；`ISP_RETEST_JITTER=false` 时为 0） | `ISP_RETEST_JITTER`（默认 `true`，`false` 回退分钟 0） | root crontab | 强制刷新 GeoIP/GeoSite 规则库并重启 xray（见 §5.1） |
 | 2 | `isp-retest` | `0 */6 * * *`（按 hostname 打散分钟位） | `ISP_RETEST_INTERVAL_HOURS`（默认 `6`，`0` 禁用） | root crontab | 周期性带宽重测，线路集/类别变化时热重配 balancer 并重启 xray/sing-box，重启后执行 `nginx -s reload` 使重渲 nginx 配置即时生效（见 §2.6） |
 | 3 | `substore-check` | `30 4 * * *` | `SUBSTORE_CHECK_CRON`（空串禁用） | root crontab | 拉取自检全部 remote 订阅，失败发 `substore.sub_fetch.failed` 告警（见 §2.6） |
 | 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，重启后执行 `nginx -s reload` 使重渲 nginx 配置即时生效，发 `secret.refresh.completed` 事件（见 §2.3） |
