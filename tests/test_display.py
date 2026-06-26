@@ -138,6 +138,7 @@ def test_show_info_links_token_block_only_when_token_set(
     monkeypatch.setenv("SUBSCRIBE_TOKEN", "secret-token")
     monkeypatch.setenv("PUBLIC_USER", "admin")
     monkeypatch.setenv("PUBLIC_PASSWORD", "s3cret")
+    monkeypatch.delenv("SHOW_CREDS", raising=False)
     display.show_info_links()
     out = capsys.readouterr().out
     assert "?token=secret-token" in out
