@@ -27,6 +27,7 @@ import logging
 import os
 import socket
 from pathlib import Path
+from typing import Final
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,31 @@ _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
 _SECRET_MARKER = "secrets-refresh"
 _LOGROTATE_MARKER = "log-rotate"
 _LOGROTATE_DEFAULT_CRON = "0 * * * *"  # hourly size-based; LOG_ROTATE_CRON="" disables
+
+# 本模块托管的 entrypoint.py 子命令——剥行/重装时只针对这些命令尾锚定,
+# 避免对裸 marker 子串匹配误删运维自定义行 (F1)。
+_MANAGED_SUBCOMMANDS: Final[tuple[str, ...]] = (
+    "geo-update",
+    "isp-retest",
+    "substore-check",
+    "secrets-refresh",
+    "log-rotate",
+)
+_ENTRYPOINT = "/scripts/entrypoint.py"
+# 迁移期旧 shell 入口(纯字面量,无对应子命令)。
+_LEGACY_MANAGED: Final[tuple[str, ...]] = ("/scripts/geo_update.sh",)
+
+
+def _is_managed_line(line: str) -> bool:
+    """True 当且仅当该行是本模块托管的 cron 行。
+
+    锚到 ``/scripts/entrypoint.py <subcmd>`` 完整命令形态(token 边界),
+    而非裸 marker 子串——后者会把含同名字面量的运维自定义行误删 (F1)。
+    """
+    for sub in _MANAGED_SUBCOMMANDS:
+        if f"{_ENTRYPOINT} {sub}" in line:
+            return True
+    return any(legacy in line for legacy in _LEGACY_MANAGED)
 
 
 def _hours_to_cron_spec(hours: int, minute: int = 0) -> str:
@@ -177,16 +203,7 @@ def install_crontab(
 
     cron_file.parent.mkdir(parents=True, exist_ok=True)
     existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
-    lines = [
-        ln
-        for ln in existing.splitlines()
-        if _GEO_MARKER not in ln
-        and "geo_update.sh" not in ln
-        and _ISP_MARKER not in ln
-        and _SUBSTORE_MARKER not in ln
-        and _SECRET_MARKER not in ln
-        and _LOGROTATE_MARKER not in ln
-    ]
+    lines = [ln for ln in existing.splitlines() if not _is_managed_line(ln)]
     lines.append(geo_entry)
     if isp_entry is not None:
         lines.append(isp_entry)

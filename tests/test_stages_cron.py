@@ -300,3 +300,32 @@ def test_logrotate_replaces_stale_entry(
     content = target.read_text(encoding="utf-8")
     assert content.count("log-rotate") == 1
     assert "0 * * * *" in content
+
+
+def test_managed_line_anchors_to_full_command_token() -> None:
+    """子串匹配会误判;托管行判定须锚到 /scripts/entrypoint.py <subcmd>。"""
+    # 真托管行 → True
+    assert sbcron._is_managed_line(
+        "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+    )
+    assert sbcron._is_managed_line("0 */1 * * * /scripts/entrypoint.py secrets-refresh")
+    # 旧 shell 入口(迁移期)→ True
+    assert sbcron._is_managed_line("0 3 * * * /scripts/geo_update.sh >> /var/log/x.log 2>&1")
+    # 运维自定义行,参数里偶然含 marker 字面量 → 不得误删
+    assert not sbcron._is_managed_line("0 2 * * * /usr/bin/backup --tag isp-retest-archive")
+    assert not sbcron._is_managed_line("# note: geo-update runs daily")
+    assert not sbcron._is_managed_line("0 2 * * * /usr/bin/true")
+
+
+def test_install_preserves_custom_line_containing_marker_substring(tmp_path: Path) -> None:
+    target = tmp_path / "crontab"
+    target.write_text(
+        "0 2 * * * /usr/bin/backup --tag isp-retest-archive\n"
+        "# geo-update note kept\n",
+        encoding="utf-8",
+    )
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "/usr/bin/backup --tag isp-retest-archive" in content
+    assert "# geo-update note kept" in content
+    assert content.count("/scripts/entrypoint.py geo-update") == 1
