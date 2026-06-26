@@ -98,3 +98,11 @@ def test_build_sh_wires_acme_sh() -> None:
     assert "_require_sha \"ACME_SH_SHA256\"" in src
     assert "--build-arg ACME_SH_VERSION=" in src
     assert "--build-arg ACME_SH_SHA256=" in src
+
+
+def test_build_sh_offline_guards_supply_pins() -> None:
+    src = _BUILD_SH.read_text(encoding="utf-8")
+    # 离线模式必须校验三个新 pin 字段齐全（缺失即拒绝构建，提示跑 refresh）
+    assert "SUPPLY_PIN_KEYS" in src
+    for key in ("sub_store_frontend_sha", "crypctl_sha", "acme_sh_sha256"):
+        assert key in src, f"{key} must be guarded in build.sh offline mode"

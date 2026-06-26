@@ -9,7 +9,7 @@
 1. [构建环境准备](#1-构建环境准备)
 2. [自动构建脚本](#2-自动构建脚本buildsh)
 3. [三阶段 Dockerfile 架构](#3-三阶段-dockerfile-架构)
-4. [组件版本管理](#4-组件版本管理)
+4. [组件版本管理](#4-组件版本管理)（[4.2 供应链 pin](#42-供应链-pin不可变-ref-绑定)）
 5. [手动精细构建](#5-手动精细构建)
 6. [常见构建问题 FAQ](#6-常见构建问题-faq)
 7. [Git Release 版本发布](#7-git-release-版本发布releasesh)
@@ -235,7 +235,31 @@ jq -r 'to_entries[] | select(.key != "digests") | "\(.key): \(.value)"' versions
 
 > **per-arch 资源名陷阱**：amd64 的 mihomo 用 **`-compatible`** 资源（兼容老 CPU），digest 的计算来源必须与 Dockerfile 下载用**完全相同**的资源名，否则校验失败。详见 [Q8](#q8-amd64-构建在-mihomo-sha256-校验处失败)。
 
-### 4.2 版本覆盖
+### 4.2 供应链 pin：不可变 ref 绑定
+
+📘 **三个从源码构建的组件**（Sub-Store 前端、crypctl、acme.sh）各自 pin 到不可变的上游 ref，而非浮动 tag 或 HEAD。
+
+| 组件 | Pin 类型 | `versions.json` 字段 | Build-arg |
+|:---|:---|:---|:---|
+| **Sub-Store 前端** | 40 位 git commit SHA | `sub_store_frontend_sha` | `SUB_STORE_FRONTEND_SHA` |
+| **crypctl** | 40 位 git commit SHA | `crypctl_sha` | `CRYPCTL_REF` |
+| **acme.sh** | release tag（版本号）+ 64 位 tar.gz SHA256 | `acme_sh` / `acme_sh_sha256` | `ACME_SH_VERSION` / `ACME_SH_SHA256` |
+
+🔬 **Pin 不变量与 fail-closed 保障**：
+
+- **Sub-Store 前端**：Dockerfile 阶段一在 `git clone` 后执行 `git checkout ${SUB_STORE_FRONTEND_SHA}`，切到精确 commit 后再 `pnpm build`，不信任可变 tag。
+- **crypctl**：Dockerfile 阶段二 `git checkout ${CRYPCTL_REF}` 切到精确 commit 后 `go build`，不再 checkout 浮动 HEAD。
+- **acme.sh**：以 release tar.gz 形式下载，下载后 `sha256sum -c` 强制校验；`ENV AUTO_UPGRADE=0` 永久禁用运行时静默自升级。
+- **离线 fail-closed**：`build.sh` 在离线模式读取 `versions.json` 时，`SUPPLY_PIN_KEYS` 循环遍历以上四个字段，任一缺失即 `exit 1` 并提示运行 `./build.sh refresh`，确保 pin 无法被静默跳过。
+
+🔧 **自检 pin 是否完整**：
+
+```bash
+jq '{sub_store_frontend_sha, crypctl_sha, acme_sh, acme_sh_sha256}' versions.json
+# 期望：四个字段均非空；sub_store_frontend_sha / crypctl_sha 为 40 位 hex
+```
+
+### 4.3 版本覆盖
 
 可通过环境变量强制指定版本：
 

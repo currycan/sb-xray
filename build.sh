@@ -366,6 +366,16 @@ if [ "$MODE" == "offline" ]; then
         echo -e "${YELLOW}  请运行 \`./build.sh refresh\` 从 GitHub API 拉取并写回 digests${NC}" >&2
         exit 1
     fi
+
+    # 供应链 pin（commit SHA / 版本号，非 digests map）— 任一缺失即拒绝离线构建
+    SUPPLY_PIN_KEYS="sub_store_frontend_sha crypctl_sha acme_sh acme_sh_sha256"
+    for key in $SUPPLY_PIN_KEYS; do
+        if [ -z "$(get_cached_version "$key")" ]; then
+            echo -e "${RED}✗ versions.json 缺少供应链 pin 字段：${key}${NC}" >&2
+            echo -e "${YELLOW}  请运行 \`./build.sh refresh\` 重新解析并写回${NC}" >&2
+            exit 1
+        fi
+    done
 else
     # ---------- 刷新模式：从 GitHub API 获取 digests，写回 versions.json ----------
     check_gh_rate_limit 7
