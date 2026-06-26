@@ -144,6 +144,21 @@ def _speed_summary(outcome: object) -> dict[str, Any] | None:
     return summary
 
 
+def _run_signature_self_check() -> None:
+    """Fire the B-class signature-rot self-check, fully isolated.
+
+    Runs on the retest cron (a node-local periodic process — the right place to
+    probe real services from this IP). Any failure is swallowed: a rotted-marker
+    check must never fail the retest itself (routing already fails safe).
+    """
+    try:
+        from sb_xray.routing.media import run_signature_self_check
+
+        run_signature_self_check()
+    except Exception:  # pragma: no cover — defensive isolation
+        logger.exception("isp-retest: signature self-check failed (ignored)")
+
+
 def _write_status_timestamps(*, delta_pct: float, top_tag: str) -> None:
     # Import locally to avoid speed_test import-cycle at module top.
     from sb_xray.speed_test import _write_status_line
@@ -190,6 +205,7 @@ def run() -> int:
     )
 
     _write_status_timestamps(delta_pct=delta_pct, top_tag=new_top)
+    _run_signature_self_check()
 
     if not reload_needed:
         logger.info(

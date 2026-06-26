@@ -343,3 +343,43 @@ def test_restore_media_routing_swallows_probe_failure(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("sb_xray.routing.media.check_all", _boom)
     isp_retest._restore_media_routing()  # must not raise — C layer is the net
+
+
+def test_run_invokes_signature_self_check(
+    status_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_status(status_file, speeds={"proxy-us": 50.0}, isp_tag="proxy-us")
+    _install_speed_test_stub(
+        monkeypatch,
+        status_file,
+        new_speeds={"proxy-us": 50.0},
+        new_isp_tag="proxy-us",
+    )
+    monkeypatch.setattr(isp_retest, "_write_status_timestamps", MagicMock())
+    monkeypatch.setattr(isp_retest, "emit_event", MagicMock())
+    check = MagicMock(return_value=0)
+    monkeypatch.setattr("sb_xray.routing.media.run_signature_self_check", check)
+
+    rc = isp_retest.run()
+
+    assert rc == 0
+    check.assert_called_once_with()
+
+
+def test_self_check_failure_does_not_break_retest(
+    status_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_status(status_file, speeds={"proxy-us": 50.0}, isp_tag="proxy-us")
+    _install_speed_test_stub(
+        monkeypatch,
+        status_file,
+        new_speeds={"proxy-us": 50.0},
+        new_isp_tag="proxy-us",
+    )
+    monkeypatch.setattr(isp_retest, "_write_status_timestamps", MagicMock())
+    monkeypatch.setattr(isp_retest, "emit_event", MagicMock())
+    boom = MagicMock(side_effect=RuntimeError("probe blew up"))
+    monkeypatch.setattr("sb_xray.routing.media.run_signature_self_check", boom)
+
+    # A crashing self-check must never fail the retest cron.
+    assert isp_retest.run() == 0
