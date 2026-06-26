@@ -45,3 +45,15 @@ def test_doc04_enable_xui_row_notes_compose_false() -> None:
     )
     # 该行必须同时点明 ENABLE_XUI 在 compose 默认 false,消除与 :27/:1090 的张力(C9)。
     assert "compose" in row and "false" in row.lower()
+
+
+def test_doc04_default_isp_matches_dockerfile_env() -> None:
+    dockerfile = _read("Dockerfile")
+    speed = _read("scripts/sb_xray/speed_test.py")
+    doc04 = _read("docs/04-ops-and-troubleshooting.md")
+    # 镜像默认锁 LA_ISP(Dockerfile),但代码读取兜底为空=auto-detect(speed_test)——有意分歧。
+    assert 'ENV DEFAULT_ISP="LA_ISP"' in dockerfile
+    assert 'os.environ.get("DEFAULT_ISP", "")' in speed
+    # docs/04 必须同时讲清:Dockerfile 默认 LA_ISP + 显式置空=测速自动选路。
+    isp_row = next(ln for ln in doc04.splitlines() if "`DEFAULT_ISP`" in ln and "LA_ISP" in ln)
+    assert "显式置空" in isp_row and "Dockerfile 默认" in isp_row
