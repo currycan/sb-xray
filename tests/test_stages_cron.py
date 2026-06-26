@@ -344,3 +344,15 @@ def test_install_preserves_custom_line_containing_marker_substring(tmp_path: Pat
     assert "/usr/bin/backup --tag isp-retest-archive" in content
     assert "# geo-update note kept" in content
     assert content.count("/scripts/entrypoint.py geo-update") == 1
+
+
+def test_all_managed_lines_reinstall_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target, isp_hours=6, secret_hours=1)
+    sbcron.install_crontab(cron_file=target, isp_hours=6, secret_hours=1)
+    content = target.read_text(encoding="utf-8")
+    for sub in ("geo-update", "isp-retest", "substore-check", "secrets-refresh", "log-rotate"):
+        assert content.count(f"/scripts/entrypoint.py {sub}") == 1, sub
