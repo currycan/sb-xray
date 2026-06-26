@@ -4,7 +4,7 @@
 # 第一阶段: Sub-Store 构建层
 # 从源码构建 Sub-Store 的前端和后端
 # ==========================================
-FROM node:alpine AS sub-store-builder
+FROM node:alpine@sha256:725aeba2364a9b16beae49e180d83bd597dbd0b15c47f1f28875c290bfd255b9 AS sub-store-builder
 
 ARG TARGETARCH
 
@@ -101,7 +101,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 # 第三阶段: 主构建层 (Golang)
 # 构建 Go 语言二进制文件 (x-ui, s-ui 后端, crypctl) 并安装其他工具
 # ==========================================
-FROM golang:1-alpine AS builder
+FROM golang:1-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS builder
 
 ARG TARGETARCH
 
@@ -249,7 +249,7 @@ RUN set -ex; \
 # 基础镜像: currycan/nginx:1.29.4
 # 合并所有构建产物和运行时环境
 # ==========================================
-FROM docker.io/currycan/nginx:1.29.4
+FROM docker.io/currycan/nginx:1.29.4@sha256:fb9d207b1b70ce701c69cdc8cf171a582dbcda7c575f4b39180934f34af493b7
 
 # Create a non-root user and group
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup

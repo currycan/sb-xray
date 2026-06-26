@@ -139,7 +139,7 @@ services:
   # 全自动镜像更新（方案 B + L1 canary 护栏，详见 .superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
   # ⚠ 镜像用 nickfedor/watchtower（containrrr/watchtower 已停摆，与现代 Docker daemon 不兼容会 panic）
   watchtower:
-    image: docker.io/nickfedor/watchtower:latest
+    image: docker.io/nickfedor/watchtower:latest@sha256:5a6262b7a66a353bd2cdb1e0cace6c5b7cb4d475d1080d6a57fe4ec82fe455b6
     container_name: watchtower
     # 通知标题用容器 hostname；设为节点域名以便多节点环境一眼可辨（否则显示容器 hash）
     hostname: ${domain:-sb-xray}
