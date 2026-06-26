@@ -131,6 +131,8 @@ docker exec -it sb-xray bash
 
 #### 核心可选
 
+> 📘 **列头说明**：下表及 ACME / X-UI / S-UI 面板各节使用「Dockerfile 默认」列——这些值通过 `Dockerfile ENV` 指令固化在镜像内，无论 compose 如何设置均作为兜底。`#### Supervisord 控制凭据` 及 `#### Dufs 文件服务` 等后续节改用「镜像内默认」——这些值的兜底由 Python 入口的 `os.environ.get(key, 默认值)` 提供，而非 `Dockerfile ENV`；行为等价，来源不同。
+
 | 变量 | Dockerfile 默认 | 说明 |
 |:---|:---|:---|
 | `LISTENING_PORT` | `443` | Nginx 主监听端口 |
@@ -180,6 +182,10 @@ docker exec -it sb-xray bash
 | `SUPERVISOR_PASSWORD` | *(派生)* | 未显式设置时，由 `PUBLIC_PASSWORD` 经固定 salt 做 SHA-256 确定性派生（取前 32 位十六进制字符）；**与 PUBLIC_PASSWORD 不同值**。派生逻辑在 `config_builder._resolve_supervisor_credentials`，salt 冻结（`sb-xray-supervisor::`），改 salt 会轮转所有存量部署的派生密码 |
 
 > 🔬 **盐值冻结不变量**：salt 字符串 `sb-xray-supervisor::` 硬编码在 `config_builder.py` 注释中，禁止修改——修改会导致所有未显式设置 `SUPERVISOR_PASSWORD` 的节点在镜像升级后生成不同密码，中断 supervisorctl 远程控制会话。如需强制轮换，显式在 compose 设置 `SUPERVISOR_PASSWORD`。
+
+#### Nginx HTTP Basic Auth 凭据文件
+
+🔬 **`.htpasswd` 文件权限**：启动阶段 `nginx_auth` 将 `/etc/nginx/.htpasswd`（apr1 哈希凭据文件）写入后立即设置权限 `0640`（owner rw / group r / other 无读权限）。Nginx worker 进程通过 group 成员身份读取该文件；容器内其他进程（非同组）无法读取哈希值。排障提示：首次启动出现 `403` 时，先确认 `nginx_auth` stage 已正常完成（容器日志含 `nginx_auth: ok`），再核查文件存在且权限为 `0640`（`docker exec sb-xray stat -c '%a %n' /etc/nginx/.htpasswd` 期望输出 `640 /etc/nginx/.htpasswd`）。
 
 #### Dufs 文件服务
 
