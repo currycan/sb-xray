@@ -41,6 +41,29 @@ STATE=/tmp/cn-mon
 THRESH="${MON_THRESHOLD:-3}"
 mkdir -p "$STATE"
 
+# 并发去重：cron 周期调用，tailscale ping/pgrep 慢时两轮可能重叠改写计数。
+# 非阻塞自锁——上一轮还在跑则本轮直接退。缺 flock 优雅降级裸跑。
+MON_LOCK="${MON_LOCK:-$STATE/.lock}"
+if command -v flock >/dev/null 2>&1; then
+    if exec 9>"$MON_LOCK" 2>/dev/null; then
+        flock -n 9 || { echo "[cn-mon] 上一轮检查仍在运行，跳过本轮"; exit 0; }
+    else
+        printf '[cn-mon] 警告：无法打开锁文件 %s，裸跑无并发保护\n' "$MON_LOCK" >&2
+    fi
+else
+    printf '[cn-mon] 警告：flock 不可用，裸跑无并发保护\n' >&2
+fi
+
+# 原子计数写：同目录 tmp 落盘后 mv 覆盖，杜绝并发读到截断计数。
+# trap 兜底：进程被杀时清除可能残留的 tmp 文件（_cnt_write 用 $$ 命名，唯一）。
+_cnt_tmp=
+trap 'rm -f "$_cnt_tmp"' EXIT
+_cnt_write() {
+    _cnt_tmp="$1.$$"
+    printf '%s\n' "$2" > "$_cnt_tmp" && mv -f "$_cnt_tmp" "$1"
+    _cnt_tmp=
+}
+
 notify() {
     [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] || return 0
     curl -s --max-time 10 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
@@ -56,7 +79,7 @@ record() {
         [ -f "$_af" ] && { notify "✅ 回国恢复：$_desc"; rm -f "$_af"; }
         rm -f "$_cf"
     else
-        _c=$(cat "$_cf" 2>/dev/null || echo 0); _c=$((_c + 1)); echo "$_c" > "$_cf"
+        _c=$(cat "$_cf" 2>/dev/null || echo 0); _c=$((_c + 1)); _cnt_write "$_cf" "$_c"
         if [ "$_c" -ge "$THRESH" ] && [ ! -f "$_af" ]; then
             notify "⚠️ 回国告警：${_desc}（连续 ${_c} 次探测失败）"; touch "$_af"
         fi

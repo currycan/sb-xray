@@ -144,6 +144,26 @@ def test_monitor_unknown_option_fails_fast() -> None:
     assert "未知参数" in proc.stderr
 
 
+# ---- cn-bridge-monitor 并发硬化（H2） ---------------------------------------
+
+
+def test_monitor_uses_nonblocking_flock_with_degrade() -> None:
+    """cron 周期调用 + tailscale ping 可能拖慢：须非阻塞自锁防两轮重叠改写计数；
+    缺 flock（极简镜像）优雅降级裸跑，不中断探活。"""
+    src = _MONITOR.read_text(encoding="utf-8")
+    assert "flock -n" in src, "去抖计数须用非阻塞 flock -n 防并发"
+    assert "command -v flock" in src, "须探测 flock 以便缺失时降级"
+    assert "MON_LOCK" in src, "应有独立锁文件变量 MON_LOCK"
+
+
+def test_monitor_atomic_counter_write() -> None:
+    """per-key 计数写须 tmp+mv 原子落盘，杜绝并发读到截断计数。"""
+    src = _MONITOR.read_text(encoding="utf-8")
+    assert "_cnt_write" in src, "计数写须收口到 _cnt_write helper"
+    assert 'mv -f "$_cnt_tmp" "$1"' in src or 'mv -f "$_tmp" "$2"' in src, "_cnt_write 须 mv 原子替换计数文件"
+    assert 'echo "$_c" > "$_cf"' not in src, "record 不得裸 echo 直写计数文件"
+
+
 def test_bridge_unknown_command_fails_fast() -> None:
     # cn-bridge 的位置参数是子命令：未知值必须报错而非进交互菜单。
     # 注：节点清单检查在子命令解析之前，开发机上以 ERROR 退出同样满足 fail-fast。
