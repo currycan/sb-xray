@@ -16,3 +16,10 @@ def test_reverse_domains_default_empty_compose() -> None:
 def test_reverse_domains_default_empty_dockerfile() -> None:
     assert ".lan" not in _DOCKERFILE
     assert 'ENV REVERSE_DOMAINS=""' in _DOCKERFILE
+
+
+def test_compose_comments_no_env_specific_tokens() -> None:
+    # E3: no node count / canary id leaked in committed comments
+    assert "dc99-3" not in _COMPOSE
+    assert "16 台" not in _COMPOSE
+    assert "16台" not in _COMPOSE

@@ -141,7 +141,7 @@ services:
   watchtower:
     image: docker.io/nickfedor/watchtower:latest
     container_name: watchtower
-    # 通知标题用容器 hostname；设为节点域名以便 16 台一眼可辨（否则显示容器 hash）
+    # 通知标题用容器 hostname；设为节点域名以便多节点环境一眼可辨（否则显示容器 hash）
     hostname: ${domain:-sb-xray}
     restart: always
     volumes:
@@ -151,7 +151,7 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
       # 白名单：只更新带 com.centurylinklabs.watchtower.enable=true 的容器，绝不触碰节点上其它容器
       - WATCHTOWER_LABEL_ENABLE=true
-      # 错峰 schedule（6 段 cron，时区=上方 TZ）：默认北京 04:00 低峰；canary（dc99-3）.env 覆盖为 0 0 3 * * *
+      # 错峰 schedule（6 段 cron，时区＝上方 TZ）：默认低峰整点；canary 节点经 .env 覆盖 WATCHTOWER_SCHEDULE 到更早时段先行验证
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
       # 自动更新通知，复用 sb-xray 同源 shoutrrr（Telegram）。注：仅 schedule 模式发，run-once/sbx-update 不发（设计 §4.5）
       # 通知：watchtower 自带通知为英文且不可定制（仅 Go template，维护成本不值），故关闭。
