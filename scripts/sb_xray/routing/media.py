@@ -31,7 +31,7 @@ import re
 
 from sb_xray import http as sbhttp
 from sb_xray.network import get_fallback_proxy, is_restricted_region
-from sb_xray.routing.service_spec import SPECS_BY_ENV, ContentSignature
+from sb_xray.routing.service_spec import SPECS_BY_ENV, ContentSignature, ServiceSpec
 
 # Streaming-unlock classify verdicts.
 _REAL = "REAL"
@@ -60,6 +60,19 @@ def _classify(result: sbhttp.FetchResult, sig: ContentSignature) -> str:
     return _UNKNOWN
 
 
+def classify_signature(spec: ServiceSpec) -> str:
+    """Fetch ``spec.probe_url`` and return a raw verdict string.
+
+    Reusable B-class kernel shared by ``_streaming_unlock`` (live routing) and
+    the C3 self-check (signature-rot detection). A spec with no signature can
+    never produce REAL, so it short-circuits to UNKNOWN without any HTTP — the
+    same fail-safe stance ``_streaming_unlock`` already takes.
+    """
+    if spec.signature is None:
+        return _UNKNOWN
+    return _classify(sbhttp.fetch(spec.probe_url), spec.signature)
+
+
 def _account_sensitive() -> str:
     """A-class decision: no probe. Restricted region or non-residential →
     fallback; only an unrestricted home-broadband IP earns ``direct``."""
@@ -78,9 +91,7 @@ def _streaming_unlock(env_var: str) -> str:
     if _is_residential():
         return "direct"
     spec = SPECS_BY_ENV[env_var]
-    if spec.signature is None:  # defensive: a streaming spec must carry one
-        return get_fallback_proxy()
-    verdict = _classify(sbhttp.fetch(spec.probe_url), spec.signature)
+    verdict = classify_signature(spec)
     return "direct" if verdict == _REAL else get_fallback_proxy()
 
 

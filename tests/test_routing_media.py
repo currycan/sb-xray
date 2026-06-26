@@ -225,3 +225,29 @@ def test_streaming_specs_have_real_signature() -> None:
     for env_var in ("NETFLIX_OUT", "DISNEY_OUT", "YOUTUBE_OUT"):
         sig = SPECS_BY_ENV[env_var].signature
         assert sig is not None and sig.real_substrings
+
+
+# ---- classify_signature: reusable B-class verdict kernel (C3 self-check) ----
+
+
+@respx.mock
+def test_classify_signature_real() -> None:
+    spec = SPECS_BY_ENV["YOUTUBE_OUT"]
+    respx.get(spec.probe_url).mock(
+        return_value=httpx.Response(200, text="<script>ytcfg.set({});</script>")
+    )
+    assert media.classify_signature(spec) == media._REAL
+
+
+@respx.mock
+def test_classify_signature_unknown_on_blank_page() -> None:
+    spec = SPECS_BY_ENV["NETFLIX_OUT"]
+    respx.get(spec.probe_url).mock(return_value=httpx.Response(200, text="<html>nothing</html>"))
+    assert media.classify_signature(spec) == media._UNKNOWN
+
+
+def test_classify_signature_none_signature_is_unknown() -> None:
+    # An A-class spec carries no signature → never REAL, no HTTP issued.
+    spec = SPECS_BY_ENV["CHATGPT_OUT"]
+    assert spec.signature is None
+    assert media.classify_signature(spec) == media._UNKNOWN
