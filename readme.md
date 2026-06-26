@@ -121,6 +121,8 @@ flowchart TD
 | 🛰️ **Tailscale 架构**  | [**👉 07. Tailscale 代理架构设计与配置**](./docs/07-tailscale-proxy-architecture.md) | 一台 OpenWrt 四个角色（cn-exit 回国 / exit node 出国分流 / subnet router 内网穿透 / 本机直连）的架构原理、流量图解、kernel TUN 与 OpenClash/fake-ip 配置详解，以及路由黑洞等真实踩坑实录。 |
 | 🔁 **Reverse Bridge 架构** | [**👉 08. Xray Reverse Bridge 回国架构设计与配置**](./docs/08-xray-reverse-bridge.md) | 用 Xray 反向代理做海外回国：portal/bridge 角色、`r-tunnel` 虚拟出站、`CN_EXIT_MODE` 四档开关与 socks5+r-tunnel 主备故障转移（balance）的架构原理、流量图解与踩坑实录。 |
 | 🎚️ **特性开关与可选能力** | [**👉 09. 特性开关与可选能力指南**](./docs/09-feature-flags-and-capabilities.md) | 全部 `ENABLE_*` 特性开关的「做什么 / 何时用 / 怎么开 / 如何验证 / 故障排查」五段式索引，并独家详述无独立主文档的能力（XICMP/XDNS 紧急通道、订阅端点、XHTTP/3）。 |
+| 🧱 **多 WAN 防泄漏专题** | [**👉 10. 多 WAN 出口与防泄漏**](./docs/10-multi-wan-leak-prevention.md) | 下游 WiFi 路由多上联拓扑中 IPv6 旁路与 DNS 旁路两条泄露路径的成因、防泄漏规则配置与排障。 |
+| 🔧 **OpenWrt 重建与切换** | [**👉 11. OpenWrt 重建与割接**](./docs/11-openwrt-rebuild-and-cutover.md) | OpenWrt 节点三种重建场景（全新初始化 / 黄金备份恢复 / 整机切换接管）的分步操作手册；切换对 VPS 侧零改动，支持并行验证与分级回退。 |
 | 📜 **版本发布日志**     | [**👉 CHANGELOG（Keep a Changelog 格式）**](./CHANGELOG.md)                    | Added / Changed / Fixed / Removed / Security / Migration notes 全分类列表，附生产 E2E 验证证据与 30 秒回滚命令。|
 
 ---
