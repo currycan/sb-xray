@@ -163,6 +163,7 @@ flowchart LR
 | 变量 | 必填 | 说明 / 默认 |
 |------|------|-------------|
 | `SBX_DOMAIN` / `SBX_CDN_DOMAIN` / `SBX_CODE` | 可选 | 写入 `.env` 的 `domain`（空 = hostname，须 `.com` FQDN）/ `cdndomain` / `code` |
+| `SBX_SECRETS_URL` | 可选 | 写入 `.env` 的 `secrets_url`：远程密钥库加密 blob 地址（与 `SBX_CODE`/DECODE 配对）。**启用 DECODE 解密的节点须设**；留空则不写，走镜像内 `SECRETS_URL` 空默认（DECODE-gate SKIP，不解密远端） |
 
 ### 回国（CN-exit）—— 给 `OPENWRT_TS_IP` 即触发
 

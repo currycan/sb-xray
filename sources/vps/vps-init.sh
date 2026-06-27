@@ -180,6 +180,7 @@ load_config() {
     SBX_DOMAIN="${SBX_DOMAIN:-}"
     SBX_CDN_DOMAIN="${SBX_CDN_DOMAIN:-}"
     SBX_CODE="${SBX_CODE:-}"
+    SBX_SECRETS_URL="${SBX_SECRETS_URL:-}"
     SBX_COMPOSE_URL="${SBX_COMPOSE_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/docker-compose.yml}"
     INSTALL_SSRPOLIPO="${INSTALL_SSRPOLIPO:-1}"
     SSRPOLIPO_COMPOSE_URL="${SSRPOLIPO_COMPOSE_URL:-}"
@@ -531,6 +532,8 @@ deploy_sbx() {
     upsert_env domain "$SBX_DOMAIN"
     upsert_env cdndomain "$SBX_CDN_DOMAIN"
     upsert_env code "$SBX_CODE"
+    # 远程密钥库 blob 地址：与 DECODE(code)配对,启用解密的节点须设;空则不写,走镜像内空默认
+    [ -n "$SBX_SECRETS_URL" ] && upsert_env secrets_url "$SBX_SECRETS_URL"
 
     # CN-exit 节点：初始化即写全回国 env（OPENWRT_TS_IP 是 CN-exit 节点的标志输入）。
     # 非 CN-exit 节点（OPENWRT_TS_IP 空）跳过，compose 默认值生效，保持通用。
