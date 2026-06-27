@@ -129,6 +129,8 @@ WORKDIR /app
 # ===== 安装 crypctl =====
 # NOTE: crypctl source is in a public repo (currycan/key/docker/crypctl)
 # B2 供应链：pin 到不可变 commit（CRYPCTL_REF），不再 checkout 浮动 HEAD
+# 构建期回归守卫：secrets.py 用 `crypctl --key-env DECODE`，pin 的 commit 必须含该
+# flag（曾因 pin 到早于该 feature 的旧 commit 导致解密失败）；构建末尾断言、缺则 fail-closed。
 ARG CRYPCTL_REF=""
 # Go 构建/模块缓存挂载 → 跨构建复用
 RUN --mount=type=cache,target=/root/.cache/go-build \
@@ -139,7 +141,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
   cd /app/key && git checkout ${CRYPCTL_REF} -- docker/crypctl; \
   cd docker/crypctl && go build -ldflags="-s -w" -trimpath -o crypctl main.go; \
   upx --lzma --best crypctl; \
-  mv crypctl /usr/local/bin/
+  mv crypctl /usr/local/bin/; \
+  /usr/local/bin/crypctl decrypt --help 2>&1 | grep -q -- '--key-env' || { echo "ERROR: crypctl @ ${CRYPCTL_REF} 缺 --key-env flag(pin 到了早于该 feature 的旧 commit);secrets.py 依赖它"; exit 1; }
 
 # --- Dufs ---
 ARG DUFS_VERSION="0.45.0"
