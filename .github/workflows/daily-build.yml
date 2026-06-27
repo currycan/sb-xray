@@ -65,6 +65,11 @@ jobs:
       xui_arm64_sha256: ${{ steps.versions.outputs.xui_arm64_sha256 }}
       sing_box_amd64_sha256: ${{ steps.versions.outputs.sing_box_amd64_sha256 }}
       sing_box_arm64_sha256: ${{ steps.versions.outputs.sing_box_arm64_sha256 }}
+      # P0-4/P2-1 供应链 pin：前端 commit SHA 随版本解析；crypctl/acme 为手工安全 pin，从 versions.json 透传保留
+      sub_store_frontend_sha: ${{ steps.versions.outputs.sub_store_frontend_sha }}
+      crypctl_ref: ${{ steps.versions.outputs.crypctl_ref }}
+      acme_sh: ${{ steps.versions.outputs.acme_sh }}
+      acme_sh_sha256: ${{ steps.versions.outputs.acme_sh_sha256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -122,30 +127,46 @@ jobs:
           XRAY=$(get_stable_tag "XTLS/Xray-core")
           echo "::endgroup::"
 
-          # 构建新版本 JSON（顺序与 build.sh 中 check_version 保持一致）
-          NEW_VERSIONS=$(jq -n \
+          # P0-4 B1：前端 pin 到 tag 对应的 commit SHA（随版本解析，保持 version↔SHA 一致）。
+          # Dockerfile 用 `git clone --branch <ver>` 后 `git checkout <SHA>`，SHA 须为该 tag 的 commit。
+          SUB_FRONT_SHA=""
+          if [ -n "$SUB_FRONT" ]; then
+            SUB_FRONT_SHA=$(gh api "repos/sub-store-org/Sub-Store-Front-End/commits/${SUB_FRONT}" --jq '.sha' 2>/dev/null || echo "")
+          fi
+          # 解析失败则回退 versions.json 现值（与 EMPTY_KEYS 回退的版本配套，保持 version↔SHA 一致）
+          [ -n "$SUB_FRONT_SHA" ] || SUB_FRONT_SHA=$(jq -r '.sub_store_frontend_sha // ""' versions.json)
+
+          # crypctl / acme 为手工安全 pin（B2/B3），daily-build 不自动 bump，从 versions.json 透传保留
+          CRYPCTL_REF_VAL=$(jq -r '.crypctl_sha // ""' versions.json)
+          ACME_SH_VAL=$(jq -r '.acme_sh // ""' versions.json)
+          ACME_SH_SHA256_VAL=$(jq -r '.acme_sh_sha256 // ""' versions.json)
+
+          # 构建新版本 JSON：以现有 versions.json 为基底，仅覆盖版本字段 + 前端 SHA，
+          # 保留 crypctl/acme pin、xray/shoutrrr digest、provenance —— 否则 update-versions
+          # 会把这些 P0-4/P2-1 字段从 versions.json 抹掉，破坏供应链 pin 与契约测试。
+          NEW_VERSIONS=$(jq \
             --arg shoutrrr "$SHOUTRRR" \
             --arg mihomo "$MIHOMO" \
             --arg http_meta "$HTTP_META" \
             --arg sub_store_frontend "$SUB_FRONT" \
+            --arg sub_store_frontend_sha "$SUB_FRONT_SHA" \
             --arg sub_store_backend "$SUB_BACK" \
             --arg dufs "$DUFS" \
             --arg cloudflared "$CLOUDFLARED" \
             --arg x_ui "$X_UI" \
             --arg sing_box "$SING_BOX" \
             --arg xray "$XRAY" \
-            '{
-              shoutrrr: $shoutrrr,
-              mihomo: $mihomo,
-              http_meta: $http_meta,
-              sub_store_frontend: $sub_store_frontend,
-              sub_store_backend: $sub_store_backend,
-              dufs: $dufs,
-              cloudflared: $cloudflared,
-              x_ui: $x_ui,
-              sing_box: $sing_box,
-              xray: $xray
-            }')
+            '.shoutrrr = $shoutrrr
+             | .mihomo = $mihomo
+             | .http_meta = $http_meta
+             | .sub_store_frontend = $sub_store_frontend
+             | .sub_store_frontend_sha = $sub_store_frontend_sha
+             | .sub_store_backend = $sub_store_backend
+             | .dufs = $dufs
+             | .cloudflared = $cloudflared
+             | .x_ui = $x_ui
+             | .sing_box = $sing_box
+             | .xray = $xray' versions.json)
 
           # 检查是否有空版本 (API 失败或格式校验不通过)
           EMPTY_KEYS=$(echo "$NEW_VERSIONS" | jq -r 'to_entries[] | select(.value == "") | .key')
@@ -193,6 +214,11 @@ jobs:
           echo "x_ui=$(jq -r .x_ui /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "sing_box=$(jq -r .sing_box /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
           echo "xray=$(jq -r .xray /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          # 供应链 pin 输出（前端 SHA 随版本解析；crypctl/acme 透传保留）
+          echo "sub_store_frontend_sha=$(jq -r .sub_store_frontend_sha /tmp/new_versions.json)" >> "$GITHUB_OUTPUT"
+          echo "crypctl_ref=$CRYPCTL_REF_VAL" >> "$GITHUB_OUTPUT"
+          echo "acme_sh=$ACME_SH_VAL" >> "$GITHUB_OUTPUT"
+          echo "acme_sh_sha256=$ACME_SH_SHA256_VAL" >> "$GITHUB_OUTPUT"
 
           # ============================================================
           # 下载完整性：从 GitHub Release API 抓取 .assets[].digest
@@ -261,7 +287,7 @@ jobs:
             --arg xui_arm64_sha256         "$XUI_ARM64_SHA" \
             --arg sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA" \
             --arg sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA" \
-            '.digests = {
+            '.digests = (.digests + {
               mihomo_amd64_sha256: $mihomo_amd64_sha256,
               mihomo_arm64_sha256: $mihomo_arm64_sha256,
               http_meta_bundle_sha256: $http_meta_bundle_sha256,
@@ -275,7 +301,7 @@ jobs:
               xui_arm64_sha256: $xui_arm64_sha256,
               sing_box_amd64_sha256: $sing_box_amd64_sha256,
               sing_box_arm64_sha256: $sing_box_arm64_sha256
-            }' /tmp/new_versions.json > "$_merged" && mv "$_merged" /tmp/new_versions.json
+            })' /tmp/new_versions.json > "$_merged" && mv "$_merged" /tmp/new_versions.json
 
       - name: Upload versions artifact
         if: steps.versions.outputs.changed == 'true'
@@ -361,6 +387,10 @@ jobs:
             XUI_ARM64_SHA256=${{ needs.check.outputs.xui_arm64_sha256 }}
             SING_BOX_AMD64_SHA256=${{ needs.check.outputs.sing_box_amd64_sha256 }}
             SING_BOX_ARM64_SHA256=${{ needs.check.outputs.sing_box_arm64_sha256 }}
+            SUB_STORE_FRONTEND_SHA=${{ needs.check.outputs.sub_store_frontend_sha }}
+            CRYPCTL_REF=${{ needs.check.outputs.crypctl_ref }}
+            ACME_SH_VERSION=${{ needs.check.outputs.acme_sh }}
+            ACME_SH_SHA256=${{ needs.check.outputs.acme_sh_sha256 }}
 
       - name: Export digest
         run: |
