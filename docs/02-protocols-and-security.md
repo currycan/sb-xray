@@ -580,38 +580,36 @@ flowchart LR
 
 ---
 
-### 1.15 管理面访问控制（内网 ACL）
+### 1.15 管理面访问控制（各服务自带认证）
 
-> 📘 **三个管理面 location 均限制为内网访问**，公网请求不经 Basic Auth 而是直接被拒绝。
+> 📘 **三个管理面（`/supervisor/`、dufs、x-ui）公网可达，由各自服务的认证把守**，nginx 不额外加网段限制；如需收紧为内网，见下方 🔧。
 
-Nginx 配置中 `/supervisor/`、`${DUFS_PATH_PREFIX}/`、`/${XUI_WEBBASEPATH}/` 三个 location 均 `include /etc/nginx/network_internal.conf`：
+| 管理面 | 路径 | 认证方式 | 默认暴露面 |
+|---|---|---|---|
+| supervisord 控制台 | `/supervisor/` | supervisord `[unix_http_server]` 用户名/密码（`SUPERVISOR_USER` / `SUPERVISOR_PASSWORD`，与 `PUBLIC_PASSWORD` 分离派生） | 经其 Basic Auth，凭据被破即可控进程 |
+| x-ui 面板 | `/${XUI_WEBBASEPATH}/` | x-ui 内置登录页（用户名 / 密码） | 经其登录页 |
+| dufs 文件服务 | `${DUFS_PATH_PREFIX}/` | **无内置认证**；`allow-upload` / `allow-delete` 镜像内默认 `false` | 匿名**只读**浏览 / 下载 `DUFS_SERVE_PATH`（无写 / 删） |
 
-```
-allow 127.0.0.0/8;
-allow 10.0.0.0/8;
-allow 192.168.0.0/16;
-allow 172.16.0.0/12;
-allow fc00::/7;
-deny all;
-```
-
-这意味着这三个管理面接口**只能从容器内部（supervisorctl、本地进程）或同网段内网客户端**访问；来自公网的请求由 `deny all` 直接拦截，不进入 Basic Auth 流程。
+> 🔧 **收紧为内网（可选）**：镜像随附 `/etc/nginx/network_internal.conf`（`allow` RFC1918 + 回环 + IPv6 ULA，末尾 `deny all`）。在对应 location 内加一行 `include /etc/nginx/network_internal.conf;` 即把该管理面限制为内网 / 同主机访问，公网请求由 `deny all` 直接拦截（不进入上游认证）。
+>
+> 注意其 `allow` 段**不含** Tailscale CGNAT 段 `100.64.0.0/10`——经 Tailscale 直连（源 IP 为 `100.64.x`）的请求会被 `deny all` 拦截；若要放行 Tailscale，需额外 `allow 100.64.0.0/10;`。
 
 ```mermaid
 flowchart LR
-    PublicReq(["公网请求"]) -->|deny all| Blocked(["403 拒绝"])
-    InternalReq(["内网 / 127.x / 10.x<br/>192.168.x / 172.16-31.x"]) --> ACL{{"network_internal.conf"}}
-    ACL -->|allow| AdminPanel(["管理面板\n/supervisor/ · dufs · x-ui"])
-    class PublicReq entry
-    class Blocked block
-    class InternalReq process
-    class ACL gateway
-    class AdminPanel xray
-    classDef entry   fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
-    classDef block   fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
-    classDef process fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
-    classDef gateway fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
-    classDef xray    fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    Req(["请求（公网 / 内网均可达）"]) --> P{{"nginx location"}}
+    P --> Sup(["/supervisor/<br/>supervisord Basic Auth"])
+    P --> Xui(["x-ui<br/>内置登录页"])
+    P --> Dufs(["dufs<br/>匿名只读"])
+    class Req entry
+    class P gateway
+    class Sup process
+    class Xui xray
+    class Dufs external
+    classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef gateway  fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef xray     fill:#a29bfe,stroke:#6c5ce7,stroke-width:2px,color:#fff
+    classDef external fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
 ```
 
 ---

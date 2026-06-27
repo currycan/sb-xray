@@ -199,7 +199,7 @@ docker exec -it sb-xray bash
 |:---|:---|:---|
 | `DUFS_PATH_PREFIX` | `/dufs` | URL 前缀 |
 | `DUFS_SERVE_PATH` | `/data` | 文件存储根目录 |
-| `DUFS_ALLOW_UPLOAD` | `false` | 允许上传文件；**镜像内默认关闭**（Nginx 内网 ACL 限制访问面，但建议保持默认以最小化写权限） |
+| `DUFS_ALLOW_UPLOAD` | `false` | 允许上传文件；**镜像内默认关闭**（dufs 无内置认证、默认匿名只读，强烈建议保持默认以避免公网写入；访问面收紧见 docs/02 §1.15） |
 | `DUFS_ALLOW_DELETE` | `false` | 允许删除文件；**镜像内默认关闭** |
 | `DUFS_ALLOW_SYMLINK` | `false` | 允许跟随符号链接；**镜像内默认关闭**（防止 serve-path 内的 symlink 越界读取宿主文件） |
 | `DUFS_ALLOW_ARCHIVE` | `false` | 允许打包下载目录；**镜像内默认关闭** |
