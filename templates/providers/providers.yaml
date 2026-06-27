@@ -1,4 +1,5 @@
-# Set GIST_OWNER (GitHub account) and GIST_CODE (Gist ID) env vars for provider subscriptions.
+# GIST_OWNER: GitHub account; GIST_CODE: GitHub Gist ID for provider subscriptions. 未设(空默认)时
+# providers.py 会跳过下列含字面 ${GIST_CODE} 的块,订阅不含死链 URL。
 proxy-providers:
   AllOne:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/AllOne-Common", override: {additional-prefix: "[AllOne] ", skip-cert-verify: false, udp: true, up: 2500 Mbps, down: 2500 Mbps}}
 
