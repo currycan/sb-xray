@@ -588,7 +588,7 @@ flowchart LR
 |---|---|---|---|
 | supervisord 控制台 | `/supervisor/` | supervisord `[unix_http_server]` 用户名/密码（`SUPERVISOR_USER` / `SUPERVISOR_PASSWORD`，与 `PUBLIC_PASSWORD` 分离派生） | 经其 Basic Auth，凭据被破即可控进程 |
 | x-ui 面板 | `/${XUI_WEBBASEPATH}/` | x-ui 内置登录页（用户名 / 密码） | 经其登录页 |
-| dufs 文件服务 | `${DUFS_PATH_PREFIX}/` | **无内置认证**；`allow-upload` / `allow-delete` 镜像内默认 `false` | 匿名**只读**浏览 / 下载 `DUFS_SERVE_PATH`（无写 / 删） |
+| dufs 文件服务 | `${DUFS_PATH_PREFIX}/` | **HTTP Basic Auth**（`daemon.ini` 以 `-a ${PUBLIC_USER}:${PUBLIC_PASSWORD}@/:rw` 注入，与 public 凭据集共享）；未认证请求返回 `401` | 经 Basic Auth 后可读写 `DUFS_SERVE_PATH`（`allow-all` 实际生效，`DUFS_ALLOW_ALL=false` 关不掉，详见 docs/04 dufs 深挖） |
 
 > 🔧 **收紧为内网（可选）**：镜像随附 `/etc/nginx/network_internal.conf`（`allow` RFC1918 + 回环 + IPv6 ULA，末尾 `deny all`）。在对应 location 内加一行 `include /etc/nginx/network_internal.conf;` 即把该管理面限制为内网 / 同主机访问，公网请求由 `deny all` 直接拦截（不进入上游认证）。
 >
@@ -599,7 +599,7 @@ flowchart LR
     Req(["请求（公网 / 内网均可达）"]) --> P{{"nginx location"}}
     P --> Sup(["/supervisor/<br/>supervisord Basic Auth"])
     P --> Xui(["x-ui<br/>内置登录页"])
-    P --> Dufs(["dufs<br/>匿名只读"])
+    P --> Dufs(["dufs<br/>HTTP Basic Auth"])
     class Req entry
     class P gateway
     class Sup process
