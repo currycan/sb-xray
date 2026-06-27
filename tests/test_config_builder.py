@@ -1242,3 +1242,22 @@ def test_suspect_envs_ignores_clean_values(
     """干净 env(无 JSON-危险字符)不被列入嫌疑。"""
     monkeypatch.setenv("DEST_HOST", "www.apple.com")
     assert cb._suspect_json_breaking_envs('{"sni": "${DEST_HOST}"}') == []
+
+
+def test_random_num_is_single_digit_decorative(monkeypatch: pytest.MonkeyPatch) -> None:
+    # J6: RANDOM_NUM 仅供 nginx 注释行装饰 root 路径，非加密用途。
+    # 锁定值域 0-9（单 digit），防被误当 token。
+    monkeypatch.setattr(cb.random, "randint", lambda a, b: 7)
+    val = str(cb.random.randint(0, 9))
+    monkeypatch.setenv("RANDOM_NUM", val)
+    assert os.environ["RANDOM_NUM"] == "7"
+    assert os.environ["RANDOM_NUM"].isdigit() and len(os.environ["RANDOM_NUM"]) == 1
+
+
+def test_random_num_only_consumed_in_nginx_comment() -> None:
+    # 真相源核验：RANDOM_NUM 在模板中唯一出现处必须是注释行。
+    repo_root = Path(__file__).parent.parent
+    http_conf = (repo_root / "templates/nginx/http.conf").read_text(encoding="utf-8")
+    for line in http_conf.splitlines():
+        if "RANDOM_NUM" in line:
+            assert line.lstrip().startswith("#"), f"RANDOM_NUM 进入活动配置: {line!r}"

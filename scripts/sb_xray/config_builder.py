@@ -702,6 +702,9 @@ def create_config(*, workdir: Path | None = None) -> None:
         workdir = Path(os.environ.get("WORKDIR", "/tmp/sb-xray"))
 
     logger.info("渲染所有模板...")
+    # J6: RANDOM_NUM 是装饰用途的单 digit（0-9），仅供 nginx http.conf 中
+    # 被注释掉的 `root /home/wwwroot/html${RANDOM_NUM}` 占位填充。不参与任何
+    # 加密/认证/路由决策，故用 random.randint 而非 secrets——非安全敏感。
     os.environ["RANDOM_NUM"] = str(random.randint(0, 9))
     _apply_access_log_env()
     _resolve_dufs_permissions()
