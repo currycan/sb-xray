@@ -10,7 +10,7 @@ def _subs_payload() -> dict:
     return {
         "status": "success",
         "data": [
-            {"name": "ssrdog", "source": "remote", "proxy": "socks5://1.2.3.4:7891"},
+            {"name": "provider-c", "source": "remote", "proxy": "socks5://1.2.3.4:7891"},
             {"name": "node-jp", "source": "remote", "proxy": ""},
             {"name": "node-fmt", "source": "remote"},
             {"name": "manual-local", "source": "local"},
@@ -21,7 +21,7 @@ def _subs_payload() -> dict:
 def test_list_remote_subs_filters_local_and_malformed():
     subs = sc._list_remote_subs(_subs_payload())
     names = [s["name"] for s in subs]
-    assert names == ["ssrdog", "node-jp", "node-fmt"]  # local dropped
+    assert names == ["provider-c", "node-jp", "node-fmt"]  # local dropped
 
 
 def test_list_remote_subs_handles_bad_shape():
@@ -66,7 +66,7 @@ def test_check_all_mixes_ok_and_failures():
             return httpx.Response(200, json=_subs_payload())
         # /download/<name>
         name = request.url.path.rsplit("/", 1)[-1]
-        if name == "ssrdog":
+        if name == "provider-c":
             return httpx.Response(200, json=[{"name": "n1"}] * 28)  # airport ok
         if name == "node-jp":
             return httpx.Response(403)  # blocked
@@ -76,9 +76,9 @@ def test_check_all_mixes_ok_and_failures():
 
     results = sc.check_all(api_base="http://t", client=_mock_client(handler))
     by_name = {r.name: r for r in results}
-    assert set(by_name) == {"ssrdog", "node-jp", "node-fmt"}
-    assert by_name["ssrdog"].ok is True and by_name["ssrdog"].is_airport is True
-    assert by_name["ssrdog"].node_count == 28
+    assert set(by_name) == {"provider-c", "node-jp", "node-fmt"}
+    assert by_name["provider-c"].ok is True and by_name["provider-c"].is_airport is True
+    assert by_name["provider-c"].node_count == 28
     assert by_name["node-jp"].ok is False and by_name["node-jp"].reason == "HTTP 403"
     assert by_name["node-fmt"].ok is False and by_name["node-fmt"].reason == "0 节点"
 
@@ -90,14 +90,14 @@ def test_check_all_url_encodes_non_ascii_names():
         if request.url.path == "/api/subs":
             return httpx.Response(
                 200,
-                json={"data": [{"name": "优速通", "source": "remote", "proxy": "socks5://x:1"}]},
+                json={"data": [{"name": "provider-b", "source": "remote", "proxy": "socks5://x:1"}]},
             )
         seen.append(request.url.path)
         return httpx.Response(200, json=[{"name": "n"}])
 
     sc.check_all(api_base="http://t", client=_mock_client(handler))
     # the raw (decoded) path that httpx exposes should carry the name
-    assert any("优速通" in p for p in seen)
+    assert any("provider-b" in p for p in seen)
 
 
 def test_check_all_subs_endpoint_error_returns_empty():
@@ -127,7 +127,7 @@ def test_run_check_emits_event_only_on_failure(monkeypatch):
         sc,
         "check_all",
         lambda **_: [
-            sc.SubResult("ssrdog", True, False, "HTTP 403", 0),
+            sc.SubResult("provider-c", True, False, "HTTP 403", 0),
             sc.SubResult("node-jp", False, True, "", 50),
         ],
     )
@@ -138,7 +138,7 @@ def test_run_check_emits_event_only_on_failure(monkeypatch):
     assert name == "substore.sub_fetch.failed"
     assert payload["failed"] == 1
     assert payload["total"] == 2
-    assert payload["items"] == [{"name": "ssrdog", "airport": True, "reason": "HTTP 403"}]
+    assert payload["items"] == [{"name": "provider-c", "airport": True, "reason": "HTTP 403"}]
 
 
 def test_run_check_silent_when_all_ok(monkeypatch):
