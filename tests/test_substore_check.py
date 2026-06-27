@@ -155,3 +155,36 @@ def test_run_check_silent_when_no_remote_subs(monkeypatch):
     monkeypatch.setattr(sc, "check_all", lambda **_: [])
     assert sc.run_check_and_report() == 0
     assert emitted == []
+
+
+def test_check_all_concurrent_preserves_order_and_results() -> None:
+    """pool.map 保顺序；并发不改结果集；airport 分类正确。"""
+    subs = {
+        "data": [
+            {"name": "a", "source": "remote"},
+            {"name": "b", "source": "remote", "proxy": "socks5://1.2.3.4:7891"},
+            {"name": "c", "source": "remote"},
+        ]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/subs":
+            return httpx.Response(200, json=subs)
+        # /download/<name> — b 返回 0 节点（失败），a/c 返回 1 节点
+        name = request.url.path.rsplit("/", 1)[-1]
+        body: list[object] = [] if name == "b" else [{"n": 1}]
+        return httpx.Response(200, json=body)
+
+    with _mock_client(handler) as client:
+        results = sc.check_all(api_base="http://t", client=client, max_concurrency=4)
+
+    # 顺序必须跟随输入 subs（a, b, c），并发不得打乱
+    assert [r.name for r in results] == ["a", "b", "c"]
+    assert results[0].ok and not results[1].ok and results[2].ok
+    assert results[1].reason == "0 节点"
+    assert results[1].is_airport is True
+
+
+def test_check_all_concurrent_default_concurrency_constant() -> None:
+    """_MAX_CONCURRENCY 模块常量存在且为 6。"""
+    assert sc._MAX_CONCURRENCY == 6

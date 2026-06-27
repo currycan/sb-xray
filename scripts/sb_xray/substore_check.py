@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Final, NamedTuple
 from urllib.parse import quote
 
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_API_BASE: Final[str] = "http://127.0.0.1:3000"
 _PRODUCE_TARGET: Final[str] = "JSON"
 _HTTP_TIMEOUT: Final[float] = 30.0
+_MAX_CONCURRENCY: Final[int] = 6  # J5: 并发上限，封顶总墙钟 ≈ ceil(N/6)×30s
 
 
 class SubResult(NamedTuple):
@@ -81,12 +83,19 @@ def _produce_one(client: httpx.Client, api_base: str, name: str, is_airport: boo
 
 
 def check_all(
-    *, api_base: str | None = None, client: httpx.Client | None = None
+    *,
+    api_base: str | None = None,
+    client: httpx.Client | None = None,
+    max_concurrency: int = _MAX_CONCURRENCY,
 ) -> list[SubResult]:
-    """Produce every remote sub once and return per-sub results.
+    """Produce every remote sub once and return per-sub results (concurrent).
 
-    Returns all results (ok + failed); callers filter. Returns ``[]`` if
-    the subs listing endpoint itself is unreachable / errors.
+    Uses :class:`~concurrent.futures.ThreadPoolExecutor` with up to
+    *max_concurrency* workers (default :data:`_MAX_CONCURRENCY` = 6).
+    Total wall-clock time ≈ ceil(N / max_concurrency) × 30 s.
+
+    Returns all results (ok + failed) in input order; callers filter.
+    Returns ``[]`` if the subs listing endpoint itself is unreachable / errors.
     """
     api_base = (api_base or os.environ.get("SUB_STORE_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
     own_client = client is None
@@ -100,12 +109,19 @@ def check_all(
         except (httpx.HTTPError, ValueError) as exc:
             logger.error("substore-check: 列举订阅失败 (%s)", type(exc).__name__)
             return []
-        results: list[SubResult] = []
-        for sub in subs:
-            name = str(sub.get("name") or "")
-            if not name:
-                continue
-            results.append(_produce_one(client, api_base, name, _is_airport(sub)))
+        names_airports = [(str(sub.get("name") or ""), _is_airport(sub)) for sub in subs]
+        names_airports = [(n, a) for n, a in names_airports if n]
+        if not names_airports:
+            return []
+        workers = max(1, min(max_concurrency, len(names_airports)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # pool.map preserves input order — SubResult sequence is stable
+            results = list(
+                pool.map(
+                    lambda na: _produce_one(client, api_base, na[0], na[1]),
+                    names_airports,
+                )
+            )
         return results
     finally:
         if own_client:
