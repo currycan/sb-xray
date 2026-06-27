@@ -301,6 +301,9 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
   rm -rf /tmp/*
 
 ENV WORKDIR=/sb-xray
+# GIST_CODE 为 GitHub Gist 订阅 ID,空默认是安全状态：
+# 未设时 providers.py 跳过含字面 ${GIST_CODE} 的 provider 块(不渲染死链 URL)。
+ENV GIST_CODE=""
 ENV LOGDIR=/var/log/
 # Go 四件套(xray / sing-box / x-ui)共享 GC 软上限(§2b 镜像内默认生效)。
 # watchtower 用旧 env 集重建容器时不读 compose,无此默认则丢失针对 ≤512MB
