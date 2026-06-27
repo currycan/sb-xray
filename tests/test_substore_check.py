@@ -90,14 +90,17 @@ def test_check_all_url_encodes_non_ascii_names():
         if request.url.path == "/api/subs":
             return httpx.Response(
                 200,
-                json={"data": [{"name": "provider-b", "source": "remote", "proxy": "socks5://x:1"}]},
+                json={"data": [{"name": "供应商甲", "source": "remote", "proxy": "socks5://x:1"}]},
             )
-        seen.append(request.url.path)
+        seen.append(str(request.url))  # str(url) 保留 percent-encode 形式
         return httpx.Response(200, json=[{"name": "n"}])
 
     sc.check_all(api_base="http://t", client=_mock_client(handler))
-    # the raw (decoded) path that httpx exposes should carry the name
-    assert any("provider-b" in p for p in seen)
+    # 非 ASCII name 须被 percent-encode 后出现在请求 URL 中（_produce_one 用 quote(name, safe='') 构建 URL）
+    from urllib.parse import quote as _quote
+
+    encoded = _quote("供应商甲", safe="")
+    assert any(encoded in u for u in seen)
 
 
 def test_check_all_subs_endpoint_error_returns_empty():
