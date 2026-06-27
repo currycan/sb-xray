@@ -12,7 +12,6 @@ or through the residential ISP proxy?" has two different answers:
 
 Unified decision order per service (highest priority first, short-circuit on hit):
 
-    L0  (gemini only) GEMINI_DIRECT override: true→direct, false→fallback
     L1  is_restricted_region(GEOIP_INFO) → fallback        ← top-level safety net
     L2  IP_TYPE == "isp" (home broadband) → "direct"
     L3  non-residential, by class:
@@ -134,11 +133,6 @@ def check_claude() -> str:
 
 
 def check_gemini() -> str:
-    override = os.environ.get("GEMINI_DIRECT", "")
-    if override == "true":
-        return "direct"
-    if override == "false":
-        return get_fallback_proxy()
     return _account_sensitive()
 
 

@@ -492,10 +492,7 @@ flowchart TB
 flowchart TD
     Start(["逐服务决策入口"]) --> Cache{"STATUS_FILE 已有探测成绩?"}
     Cache -- "命中（重启复用）" --> ActCache["直接应用缓存结果<br/>极速上线"]
-    Cache -- "初次部署 / 缓存失效" --> L0{"gemini 且设了 GEMINI_DIRECT?"}
-
-    L0 -- "已设" --> ActOverride["尊重用户外参<br/>true→direct，false→fallback"]
-    L0 -- "未设 / 非 gemini" --> L1{"节点 GEOIP 处于受限区?"}
+    Cache -- "初次部署 / 缓存失效" --> L1{"节点 GEOIP 处于受限区?"}
 
     L1 -- "是：审查 / 高风险地区" --> Fallback["走住宅代理 isp-auto<br/>安全网，绝不直连"]
     L1 -- "否" --> L2{"IP 信誉为家庭宽带 ISP?"}
@@ -511,8 +508,8 @@ flowchart TD
     Verdict -- "BLOCKED / 不确定 / 不可达" --> Fallback
 
     class Start entry
-    class Cache,L0,L1,L2,Class,Verdict decision
-    class ActCache,Direct,ActOverride process
+    class Cache,L1,L2,Class,Verdict decision
+    class ActCache,Direct process
     class Fallback block
     class Probe sing
     classDef entry    fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff

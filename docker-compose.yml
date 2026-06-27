@@ -43,8 +43,6 @@ services:
       # - LOG_ROTATE_CRON=0 * * * *
       - DUFS_PATH_PREFIX=/myfiles
       - XUI_WEBBASEPATH=3xadmin
-      # Gemini直连, true=直连, false=使用代理, 空=自动判断
-      - GEMINI_DIRECT=
       #  ✈ 高速, 空=不添加额外节点后缀
       - NODE_SUFFIX=
       # ISP代理, US_ISP/LA_ISP/KR_ISP, 空=自动判断
