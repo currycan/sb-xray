@@ -1342,7 +1342,7 @@ def run_isp_speed_tests_budgeted(
         budget = float(raw) if raw else 45.0
     except ValueError:
         logger.warning(
-            "ISP_SPEED_BOOT_BUDGET_SEC=%r は数値に変換できません — 45.0s にフォールバックします",
+            "ISP_SPEED_BOOT_BUDGET_SEC=%r 无法解析为数值 — 回退到 45.0s",
             raw,
         )
         budget = 45.0

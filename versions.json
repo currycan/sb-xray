@@ -10,7 +10,7 @@
   "x_ui": "3.4.1",
   "sing_box": "1.13.14",
   "xray": "26.3.27",
-  "crypctl": "v26.2.6",
+  "crypctl": "v26.2.6+fe6a800",
   "crypctl_sha": "fe6a8008124474f9c85f9375358e3cc8ee3489e4",
   "acme_sh": "3.1.3",
   "acme_sh_sha256": "efd12b265252f8875269960b6b31830731ccce2b3e6ff8e7ecfbee21fde35ab4",
