@@ -194,9 +194,12 @@ else
     XUI_TAG=$(get_latest_stable_tag "MHSanaei/3x-ui")
     SING_BOX_TAG=$(get_latest_stable_tag "SagerNet/sing-box")
     XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
-    CRYPCTL_TAG=$(get_latest_release "currycan/key")
-    CRYPCTL_REF=$(git ls-remote "https://github.com/currycan/key.git" \
-      "refs/tags/${CRYPCTL_TAG}^{}" "refs/tags/${CRYPCTL_TAG}" 2>/dev/null | awk 'NR==1{print $1}')
+    # crypctl 是手工安全 pin：pin 的 commit 在 tag 之后才含 secrets.py 依赖的
+    # `--key-env`，get_latest_release 只会拿到旧 tag（缺该 flag）→ 重新引入回归。
+    # refresh 不自动 bump crypctl，从 versions.json 透传保留（与 daily-build.yml
+    # check job 的 crypctl 透传一致；手工换 pin 时直接改 versions.json）。
+    CRYPCTL_TAG=$(get_cached_version crypctl)
+    CRYPCTL_REF=$(get_cached_version crypctl_sha)
     ACME_SH_VERSION=$(get_latest_release "acmesh-official/acme.sh")
     ACME_SH_SHA256=$(curl -fsSL --retry 3 \
       "https://github.com/acmesh-official/acme.sh/archive/refs/tags/${ACME_SH_VERSION}.tar.gz" \
