@@ -180,3 +180,59 @@ def test_run_completed_reconfigures_and_restarts(
     name, payload = events[-1]
     assert name == "secret.refresh.completed"
     assert payload["changed"] == 1 and payload["removed"] == 1 and payload["restarted"] is True
+
+
+def test_reconfigure_calls_nginx_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """credentials-changed reconfigure must nginx -s reload after restart."""
+    sf = tmp_path / "secret"
+    sf.write_text("X_ISP_SECRET='new'\n", encoding="utf-8")
+    monkeypatch.setenv("SECRET_FILE", str(sf))
+    monkeypatch.delenv("SECRET_REFRESH_ENABLED", raising=False)
+    monkeypatch.setenv("X_ISP_SECRET", "old")
+
+    monkeypatch.setattr(
+        sr,
+        "refresh_remote_secrets",
+        lambda **_kw: secrets.SecretRefresh(
+            RefreshStatus.UPDATED,
+            changed_keys=frozenset({"X_ISP_SECRET"}),
+            removed_keys=frozenset(),
+        ),
+    )
+    speed, build, create = MagicMock(), MagicMock(), MagicMock()
+    restart = MagicMock(return_value=True)
+    media = MagicMock()
+    nginx = MagicMock(return_value=True)
+    monkeypatch.setattr("sb_xray.speed_test.run_isp_speed_tests", speed)
+    monkeypatch.setattr("sb_xray.routing.isp.build_client_and_server_configs", build)
+    monkeypatch.setattr("sb_xray.config_builder.create_config", create)
+    monkeypatch.setattr(sr, "restart_daemons", restart)
+    monkeypatch.setattr(sr, "restore_media_routing", media)
+    monkeypatch.setattr(sr, "reload_nginx", nginx)
+    monkeypatch.setattr(sr, "emit_event", lambda n, p: None)
+
+    rc = sr.run()
+
+    assert rc == 0
+    nginx.assert_called_once_with()
+
+
+def test_noop_does_not_call_nginx_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """noop path (unchanged secrets) must NOT call reload_nginx."""
+    monkeypatch.delenv("SECRET_REFRESH_ENABLED", raising=False)
+    monkeypatch.setattr(
+        sr,
+        "refresh_remote_secrets",
+        lambda **_kw: secrets.SecretRefresh(RefreshStatus.UNCHANGED),
+    )
+    nginx = MagicMock()
+    monkeypatch.setattr(sr, "reload_nginx", nginx)
+    monkeypatch.setattr(sr, "restart_daemons", MagicMock())
+    monkeypatch.setattr(sr, "emit_event", lambda n, p: None)
+
+    rc = sr.run()
+
+    assert rc == 0
+    nginx.assert_not_called()

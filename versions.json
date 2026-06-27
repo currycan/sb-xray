@@ -2,13 +2,18 @@
   "shoutrrr": "0.8.0",
   "mihomo": "1.19.27",
   "http_meta": "1.1.0",
-  "sub_store_frontend": "2.26.8",
+  "sub_store_frontend": "2.26.5",
+  "sub_store_frontend_sha": "9b2cb3f20e4eb0b0fc0bc243a6f0eeedecb1091c",
   "sub_store_backend": "2.31.6",
   "dufs": "0.46.0",
   "cloudflared": "2026.6.1",
   "x_ui": "3.4.1",
   "sing_box": "1.13.14",
   "xray": "26.3.27",
+  "crypctl": "v26.2.6",
+  "crypctl_sha": "06622b85f940e917d681eead285e39c69fdb8e32",
+  "acme_sh": "3.1.3",
+  "acme_sh_sha256": "efd12b265252f8875269960b6b31830731ccce2b3e6ff8e7ecfbee21fde35ab4",
   "digests": {
     "mihomo_amd64_sha256": "36850c946615f5c712946b62dbbbd06f6941d6d8a7543b315198bcb24ada3ea9",
     "mihomo_arm64_sha256": "87db0c6660a9557a901b5750f997967e71d8c0af07ea1d1dd4d04c28da7f7e6f",
@@ -22,6 +27,72 @@
     "xui_amd64_sha256": "b070589cbc71788628086c35fd123905cb2158f4fc07223c728a18a2a5908551",
     "xui_arm64_sha256": "839bb7ed465da58a499e428ec16ac18baa3d8a9566b84d2b5eb4dcf8251c066a",
     "sing_box_amd64_sha256": "f48703461a15476951ac4967cdad339d986f4b8096b4eb3ff0829a500502d697",
-    "sing_box_arm64_sha256": "4742df6a4314e8ecc41736849fca6d73b8f9e91b6e8b06ee794ff17ba180579e"
+    "sing_box_arm64_sha256": "4742df6a4314e8ecc41736849fca6d73b8f9e91b6e8b06ee794ff17ba180579e",
+    "xray_amd64_sha256": "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae",
+    "xray_arm64_sha256": "4d30283ae614e3057f730f67cd088a42be6fdf91f8639d82cb69e48cde80413c",
+    "shoutrrr_amd64_sha256": "18060f39eacf6949662f011ab651957a39dc840a26695724e295b714e97a7cc7",
+    "shoutrrr_arm64_sha256": "c0147767fca91faf5870c4b4271b7043054294b634cc507c2f2128a57d7a7023"
+  },
+  "provenance": {
+    "xray": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "upstream .dgst 校验+录入 versions.json；UPX --lzma 压缩后 shipped 字节有意不可复现"
+    },
+    "shoutrrr": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "upstream checksums.txt 校验+录入 versions.json；未 UPX，字节可复现"
+    },
+    "sing_box": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256，未 UPX"
+    },
+    "mihomo": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256（amd64 用 -compatible 资源），未 UPX"
+    },
+    "dufs": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "versions.json SHA256；UPX 压缩后字节不可复现"
+    },
+    "cloudflared": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "versions.json SHA256；UPX 压缩后字节不可复现"
+    },
+    "xui": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256，未 UPX"
+    },
+    "http_meta": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json bundle+tpl SHA256"
+    },
+    "sub_store_backend": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "versions.json SHA256"
+    },
+    "sub_store_frontend": {
+      "pinned": true,
+      "reproducible": true,
+      "note": "git checkout pin 至 versions.json 记录的 commit/SHA（B1）"
+    },
+    "crypctl": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "git pin 至记录 SHA 后 go build + UPX；UPX 后字节不可复现（B2）"
+    },
+    "acme": {
+      "pinned": true,
+      "reproducible": false,
+      "note": "pin release tag 校验，AUTO_UPGRADE=0（B3）；运行时不自更新"
+    }
   }
 }

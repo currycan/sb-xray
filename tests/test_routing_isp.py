@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from sb_xray.routing import isp
+from sb_xray.routing import isp, service_spec
 
 # ---- process_single_isp -----------------------------------------------------
 
@@ -353,3 +353,45 @@ def test_tiktok_rule_precedes_social_media_in_service_spec() -> None:
 def test_xray_service_rules_emit_tiktok_before_social_media() -> None:
     rules = isp.build_xray_service_rules(outbounds={})
     assert rules.index("geosite:tiktok") < rules.index("geosite:category-social-media-!cn")
+
+
+# ---- C4: dual-service-registry drift guard ---------------------------------
+
+
+def _isp_env_vars() -> set[str]:
+    return {env for _domains, env, _mark in isp._SERVICE_SPEC}
+
+
+def test_isp_service_spec_supersets_central_registry() -> None:
+    # C4: service_spec.SERVICE_SPECS is the single source of truth. Every
+    # service registered there MUST be covered by isp.py's xray rule tuples,
+    # else a service silently has no xray routing rule (dual-registry drift,
+    # same failure class as the historical tiktok dead-rule).
+    central = service_spec.service_env_vars()
+    isp_envs = _isp_env_vars()
+    missing = central - isp_envs
+    assert missing == set(), f"central registry env vars missing from isp._SERVICE_SPEC: {missing}"
+
+
+def test_service_env_vars_matches_registry() -> None:
+    assert service_spec.service_env_vars() == frozenset(
+        s.env_var for s in service_spec.SERVICE_SPECS
+    )
+
+
+# ---- G5: gemini dual geosite rule order + outbound regression ---------------
+
+
+def test_gemini_emits_both_wide_and_narrow_google_rules() -> None:
+    rules = isp.build_xray_service_rules(outbounds={"GEMINI_OUT": "proxy-us"})
+    # Wide geosite:google + narrow geosite:google-gemini BOTH route to GEMINI_OUT
+    # by design (keep all Google traffic on one egress with Gemini). G5.
+    assert '"geosite:google"' in rules
+    assert '"geosite:google-gemini"' in rules
+    wide = rules.index("geosite:google\"")
+    narrow = rules.index("geosite:google-gemini")
+    assert wide < narrow
+    google_rules = [
+        d for d, env, _m in isp._SERVICE_SPEC if env == "GEMINI_OUT"
+    ]
+    assert google_rules == [("geosite:google",), ("geosite:google-gemini",)]

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from sb_xray.events import emit_event
 from sb_xray.secrets import parse_env_file, refresh_remote_secrets
-from sb_xray.stages.reload_util import restart_daemons, restore_media_routing
+from sb_xray.stages.reload_util import reload_nginx, restart_daemons, restore_media_routing
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,7 @@ def run() -> int:
         return 1
 
     restarted = restart_daemons()
+    reload_nginx()
     payload: dict[str, object] = {
         "status": result.status.value,
         "changed": len(result.changed_keys),

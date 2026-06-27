@@ -76,9 +76,9 @@ proxy-groups:
   - {name: 媒体-手动,   type: select,    filter: *FilterMedia, include-all: true, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Clubhouse_1.png}
   - {name: 媒体-自动,   <<: *MediaUT,    filter: *FilterMedia, include-all: true, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Clubhouse_1.png}
   # ==================== AI 服务 ====================
-  - {name: Claude,     <<: *SelectAI,   icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/ClaudeCode.png}
-  - {name: Gemini,     <<: *SelectAI,   icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/gemini.png}
-  - {name: 人工智能,    <<: *SelectAI,    icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/AI.png}
+  - {name: Claude,     <<: *SelectAI,   icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/ClaudeCode.png}
+  - {name: Gemini,     <<: *SelectAI,   icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/gemini.png}
+  - {name: 人工智能,    <<: *SelectAI,    icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/AI.png}
   # ==================== 媒体服务 ====================
   - {name: TikTok,     <<: *SelectISP,   icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/TikTok.png}
   - {name: YouTube,    <<: *SelectFAST,  icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/YouTube.png}
@@ -92,7 +92,7 @@ proxy-groups:
   # ==================== 社交平台 ====================
   - {name: 推特社交,    <<: *SelectISP,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/X.png}
   - {name: 电报消息,    <<: *SelectISP,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Telegram_X.png}
-  - {name: WhatsApp,   <<: *SelectISP,    icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/whatsapp.png}
+  - {name: WhatsApp,   <<: *SelectISP,    icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/whatsapp.png}
   - {name: Facebook,   <<: *SelectISP,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Facebook.png}
   - {name: 社交平台,    <<: *SelectISP,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/PBS.png}
   # ==================== 国外服务 ====================
@@ -101,7 +101,7 @@ proxy-groups:
   - {name: 亚马逊,      <<: *FallBack,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Amazon.png}
   - {name: 苹果服务,    <<: *FallBack,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Apple.png}
   - {name: 微软服务,    <<: *FallBack,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Microsoft.png}
-  - {name: PayPal,      <<: *FallBack,    icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/PayPal.png}
+  - {name: PayPal,      <<: *FallBack,    icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/PayPal.png}
   # ==================== 游戏 ====================
   - {name: Steam,      <<: *SelectLD,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Steam.png}
   - {name: 游戏平台,    <<: *SelectLD,    icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/Game.png}

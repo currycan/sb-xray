@@ -24,6 +24,9 @@ _BACKUP = _OPENWRT / "cn-backup"
 _CDN = _OPENWRT / "cdn-speedtest"
 _ALL_SCRIPTS = [_SETUP, _BRIDGE, _MONITOR, _BACKUP, _CDN]
 
+_HACK = Path(__file__).resolve().parent.parent / "sources" / "hack"
+_CHECK_IP = _HACK / "check_ip_type.sh"
+
 
 def _run(script: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -142,6 +145,26 @@ def test_monitor_unknown_option_fails_fast() -> None:
     proc = _run(_MONITOR, "--bogus")
     assert proc.returncode != 0
     assert "未知参数" in proc.stderr
+
+
+# ---- cn-bridge-monitor 并发硬化（H2） ---------------------------------------
+
+
+def test_monitor_uses_nonblocking_flock_with_degrade() -> None:
+    """cron 周期调用 + tailscale ping 可能拖慢：须非阻塞自锁防两轮重叠改写计数；
+    缺 flock（极简镜像）优雅降级裸跑，不中断探活。"""
+    src = _MONITOR.read_text(encoding="utf-8")
+    assert "flock -n" in src, "去抖计数须用非阻塞 flock -n 防并发"
+    assert "command -v flock" in src, "须探测 flock 以便缺失时降级"
+    assert "MON_LOCK" in src, "应有独立锁文件变量 MON_LOCK"
+
+
+def test_monitor_atomic_counter_write() -> None:
+    """per-key 计数写须 tmp+mv 原子落盘，杜绝并发读到截断计数。"""
+    src = _MONITOR.read_text(encoding="utf-8")
+    assert "_cnt_write" in src, "计数写须收口到 _cnt_write helper"
+    assert 'mv -f "$_cnt_tmp" "$1"' in src or 'mv -f "$_tmp" "$2"' in src, "_cnt_write 须 mv 原子替换计数文件"
+    assert 'echo "$_c" > "$_cf"' not in src, "record 不得裸 echo 直写计数文件"
 
 
 def test_bridge_unknown_command_fails_fast() -> None:
@@ -801,3 +824,57 @@ def test_config_env_example_documents_backup_vars() -> None:
     # 云端目标复用 BRIDGE_HOT；告警复用 Telegram 通道
     assert "BRIDGE_HOT" in src
     assert "ALERT_TG_TOKEN" in src
+
+
+# ---- check_ip_type.sh 评分硬化与去重 declare（H3） ---------------------------
+
+
+def test_check_ip_no_duplicate_declare() -> None:
+    """行 58/59 完全重复的 `declare -A tiktok ... chatgpt` 须去重为一行。"""
+    src = _CHECK_IP.read_text(encoding="utf-8")
+    dup = "declare -A tiktok disney netflix youtube amazon reddit chatgpt"
+    assert src.count(dup) == 1, "媒体数组 declare 行重复，应只声明一次"
+
+
+def test_check_ip_no_unused_db_arrays() -> None:
+    """声明但从不赋值/读取的关联数组（dbip ipwhois ipdata ipqs）应删除。"""
+    src = _CHECK_IP.read_text(encoding="utf-8")
+    for arr in ("dbip", "ipwhois", "ipdata", "ipqs"):
+        assert f"{arr}[" not in src, f"{arr} 既无赋值也无读取，declare 应删除"
+    db_line = next(ln for ln in src.splitlines() if ln.startswith("declare -A maxmind"))
+    for arr in ("dbip", "ipwhois", "ipdata", "ipqs"):
+        assert arr not in db_line, f"declare -A 行残留未用数组 {arr}"
+
+
+# ---- openwrt-init.sh 网卡迭代硬化（H4） -------------------------------------
+
+
+def test_setup_iface_loop_uses_glob_not_ls() -> None:
+    """禁止 `for _i in $(ls /sys/class/net)`（SC2045，网卡名分词/特殊字符会断）；
+    改 glob 遍历 + basename 取名。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    assert "$(ls /sys/class/net" not in src, "不得遍历 ls 输出（SC2045）"
+    assert "for _p in /sys/class/net/*" in src, "须用 glob 遍历网卡目录"
+    assert '_i=$(basename "$_p")' in src, "须经 basename 从 glob 路径取网卡名"
+    # glob 无匹配守卫：POSIX sh 无 nullglob，未展开时 [ -e ] 跳过
+    loop = src[src.index("for _p in /sys/class/net/*"):]
+    loop = loop[: loop.index("done") + 4]
+    assert "[ -e " in loop, "glob 无匹配时须 [ -e ] 守卫跳过未展开的字面量"
+
+
+def test_check_ip_score_coerced_to_integer() -> None:
+    """score 经整数比较前必须强制取整——API 回小数(12.5)会令 bash [[ -lt ]] 语法报错。
+    三处取分（scamalytics/ip2location/abuseipdb）统一经 _int_or_zero 过滤。"""
+    src = _CHECK_IP.read_text(encoding="utf-8")
+    assert "_int_or_zero()" in src, "缺少取整 helper _int_or_zero"
+    # helper：截小数 + 非数字归 0
+    fn = src[src.index("_int_or_zero()"):src.index("\n}", src.index("_int_or_zero()"))]
+    assert "%%.*" in fn, "_int_or_zero 须用 ${v%%.*} 截掉小数部分"
+    assert "*[!0-9]*" in fn, "_int_or_zero 须把非纯数字归零"
+    # scamalytics 整数比较前已取整
+    sc = src[src.index("db_scamalytics()"):src.index("end_progress\n}", src.index("db_scamalytics()"))]
+    assert "_int_or_zero" in sc, "db_scamalytics 的 score 须经 _int_or_zero 取整再比较"
+    # ip2location / abuseipdb 的 score 字段同样取整（一致硬化）
+    for fnname in ("db_ip2location()", "db_abuseipdb()"):
+        body = src[src.index(fnname):src.index("end_progress\n}", src.index(fnname))]
+        assert "_int_or_zero" in body, f"{fnname} 的 score 须经 _int_or_zero 取整"

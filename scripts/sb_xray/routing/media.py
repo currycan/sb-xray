@@ -27,11 +27,11 @@ not send these services out ``direct`` (censorship + account risk).
 from __future__ import annotations
 
 import os
-import re
 
 from sb_xray import http as sbhttp
+from sb_xray.events import emit_event
 from sb_xray.network import get_fallback_proxy, is_restricted_region
-from sb_xray.routing.service_spec import SPECS_BY_ENV, ContentSignature
+from sb_xray.routing.service_spec import SERVICE_SPECS, SPECS_BY_ENV, ContentSignature, ServiceSpec
 
 # Streaming-unlock classify verdicts.
 _REAL = "REAL"
@@ -53,11 +53,28 @@ def _classify(result: sbhttp.FetchResult, sig: ContentSignature) -> str:
     body = result.body
     if any(s in body for s in sig.blocked_substrings):
         return _BLOCKED
-    if any(re.search(p, result.final_url) for p in sig.blocked_url_patterns):
+    if any(p.search(result.final_url) for p in sig.compiled_url_patterns):
         return _BLOCKED
     if sig.real_substrings and any(s in body for s in sig.real_substrings):
         return _REAL
+    # marker 可能落在 64 KiB 截断点之外 → 无法证明是 REAL,fail-safe 判 BLOCKED
+    # 走住宅回退,而非 UNKNOWN（UNKNOWN 同样回退,但显式 BLOCKED 让事件总线可观测）
+    if result.truncated:
+        return _BLOCKED
     return _UNKNOWN
+
+
+def classify_signature(spec: ServiceSpec) -> str:
+    """Fetch ``spec.probe_url`` and return a raw verdict string.
+
+    Reusable B-class kernel shared by ``_streaming_unlock`` (live routing) and
+    the C3 self-check (signature-rot detection). A spec with no signature can
+    never produce REAL, so it short-circuits to UNKNOWN without any HTTP — the
+    same fail-safe stance ``_streaming_unlock`` already takes.
+    """
+    if spec.signature is None:
+        return _UNKNOWN
+    return _classify(sbhttp.fetch(spec.probe_url), spec.signature)
 
 
 def _account_sensitive() -> str:
@@ -78,9 +95,7 @@ def _streaming_unlock(env_var: str) -> str:
     if _is_residential():
         return "direct"
     spec = SPECS_BY_ENV[env_var]
-    if spec.signature is None:  # defensive: a streaming spec must carry one
-        return get_fallback_proxy()
-    verdict = _classify(sbhttp.fetch(spec.probe_url), spec.signature)
+    verdict = classify_signature(spec)
     return "direct" if verdict == _REAL else get_fallback_proxy()
 
 
@@ -125,6 +140,41 @@ def check_gemini() -> str:
     if override == "false":
         return get_fallback_proxy()
     return _account_sensitive()
+
+
+def run_signature_self_check() -> int:
+    """Fetch each B-class probe URL and flag rotted content signatures.
+
+    Pure observation: for every spec carrying a ``ContentSignature``, GET the
+    real page and reclassify. A *reachable* page (status 200-399) that yields
+    UNKNOWN means our markers no longer match the live markup — the signature
+    has rotted and B-class routing has silently degraded to fail-safe fallback
+    with no alert. We emit ``routing.signature.rot`` so operators see it.
+
+    Routing is untouched — this never changes a verdict, it only reports. An
+    unreachable probe (status < 200) is NOT a rot (the IP just can't reach it),
+    so it raises no event. Returns the rot count (0 = all signatures healthy).
+    """
+    rot = 0
+    for spec in SERVICE_SPECS:
+        if spec.signature is None:
+            continue
+        result = sbhttp.fetch(spec.probe_url)
+        if result.status < 200 or result.status >= 400:
+            continue
+        verdict = _classify(result, spec.signature)
+        if verdict == _UNKNOWN:
+            rot += 1
+            emit_event(
+                "routing.signature.rot",
+                {
+                    "service": spec.slug,
+                    "probe_url": spec.probe_url,
+                    "verdict": verdict,
+                    "status": result.status,
+                },
+            )
+    return rot
 
 
 # ---- aggregate --------------------------------------------------------------

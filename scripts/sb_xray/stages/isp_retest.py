@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 from sb_xray.events import emit_event
+from sb_xray.stages.reload_util import reload_nginx as _reload_nginx
 from sb_xray.stages.reload_util import restart_daemons as _restart_daemons
 from sb_xray.stages.reload_util import restore_media_routing as _restore_media_routing
 
@@ -144,6 +145,21 @@ def _speed_summary(outcome: object) -> dict[str, Any] | None:
     return summary
 
 
+def _run_signature_self_check() -> None:
+    """Fire the B-class signature-rot self-check, fully isolated.
+
+    Runs on the retest cron (a node-local periodic process — the right place to
+    probe real services from this IP). Any failure is swallowed: a rotted-marker
+    check must never fail the retest itself (routing already fails safe).
+    """
+    try:
+        from sb_xray.routing.media import run_signature_self_check
+
+        run_signature_self_check()
+    except Exception:  # pragma: no cover — defensive isolation
+        logger.exception("isp-retest: signature self-check failed (ignored)")
+
+
 def _write_status_timestamps(*, delta_pct: float, top_tag: str) -> None:
     # Import locally to avoid speed_test import-cycle at module top.
     from sb_xray.speed_test import _write_status_line
@@ -190,6 +206,7 @@ def run() -> int:
     )
 
     _write_status_timestamps(delta_pct=delta_pct, top_tag=new_top)
+    _run_signature_self_check()
 
     if not reload_needed:
         logger.info(
@@ -229,6 +246,7 @@ def run() -> int:
         return 1
 
     restarted = _restart_daemons()
+    _reload_nginx()
     completed_payload: dict[str, object] = {
         "reason": reason,
         "old_top_tag": old_top,

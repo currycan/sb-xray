@@ -726,6 +726,23 @@ def _status_file() -> Path:
     return Path(os.environ.get("STATUS_FILE", "/.env/status"))
 
 
+_STATUS_LINE_RE: Final[re.Pattern[str]] = re.compile(r"^export (\w+)=['\"]?(.*?)['\"]?$")
+
+
+def _parse_status_line(line: str) -> tuple[str, str] | None:
+    """Parse one ``export KEY='VALUE'`` STATUS_FILE line → ``(key, value)``.
+
+    Single source of truth for the export-line grammar shared by
+    :func:`_read_status_snapshot` and :func:`_try_speed_cache_hit`; returns
+    ``None`` for blank / comment / non-matching lines so both callers strip
+    quotes identically (G5: no per-call regex drift).
+    """
+    m = _STATUS_LINE_RE.match(line.strip())
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
 # Strictly-positive Mbps marks a tag as "usable"; 0.0 means every sample
 # failed (connect_fail / timeout / low_speed), i.e. a dead line that must not
 # steer routing or linger in the balancer selector.
@@ -751,9 +768,9 @@ def _read_status_snapshot() -> dict[str, str]:
     snapshot: dict[str, str] = {}
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^export (\w+)=['\"]?(.*?)['\"]?$", line.strip())
-            if m:
-                snapshot[m.group(1)] = m.group(2)
+            parsed = _parse_status_line(line)
+            if parsed:
+                snapshot[parsed[0]] = parsed[1]
     except OSError:
         return {}
     return snapshot
@@ -952,7 +969,9 @@ def measure_isp_speeds(url: str, sample_count: int) -> SpeedOutcome:
         except (ValueError, TypeError):
             prev_speeds = {}
 
-    leader_tag, leader_speed = _leader_with_hysteresis(ctx, prev_speeds)
+    leader_tag, leader_speed = _leader_with_hysteresis(
+        ctx, prev_speeds, prev_isp_tag=prev.get("ISP_TAG", "")
+    )
     decision = apply_isp_routing_logic(
         RoutingContext(
             ip_type=os.environ.get("IP_TYPE", "unknown"),
@@ -1044,8 +1063,31 @@ def _measure_isp_nodes(url: str, sample_count: int) -> IspSpeedContext:
     return ctx
 
 
+def _resolve_prev_leader(
+    prev_speeds: dict[str, float], prev_isp_tag: str
+) -> str | None:
+    """Pick the prior leader for hysteresis, ignoring the 999.0 cache sentinel.
+
+    Priority: the persisted ``ISP_TAG`` (the tag that actually steered routing
+    last run) when it is present in ``prev_speeds``; else the argmax of
+    ``prev_speeds`` after dropping the ``_KEEP_ON_CACHE_HIT_MBPS`` sentinel a
+    cache-hit injects (which would otherwise lock the incumbent to the cached
+    tag forever). G5.
+    """
+    real = {t: v for t, v in prev_speeds.items() if v != _KEEP_ON_CACHE_HIT_MBPS}
+    # 路由权威的 ISP_TAG 被返回即使其速度是哨兵，但 argmax 回退路径排除哨兵——非对称但正确。
+    if prev_isp_tag and prev_isp_tag in prev_speeds:
+        return prev_isp_tag
+    if not real:
+        return None
+    return max(real.items(), key=lambda kv: kv[1])[0]
+
+
 def _leader_with_hysteresis(
-    ctx: IspSpeedContext, prev_speeds: dict[str, float]
+    ctx: IspSpeedContext,
+    prev_speeds: dict[str, float],
+    *,
+    prev_isp_tag: str = "",
 ) -> tuple[str | None, float]:
     """Apply cross-run hysteresis to the fastest-tag pick.
 
@@ -1055,14 +1097,18 @@ def _leader_with_hysteresis(
     unless this run's winner beats it by ``ISP_LEADER_HYSTERESIS`` (default
     1.15 = 15%). The previous leader must still be usable this run to be kept.
 
+    ``prev_isp_tag`` should be the persisted ``ISP_TAG`` from the last run so
+    that the hysteresis incumbent is the tag that actually steered routing, not
+    the argmax of raw speeds (which may include the 999.0 cache-hit sentinel).
+
     Returns ``(tag, speed)`` — ``ctx``'s own winner when there is no eligible
     incumbent. Note this only stabilises the headline/verdict; live routing is
     handled by xray ``leastPing`` regardless of this pick.
     """
     if not ctx.fastest_tag or not prev_speeds:
         return ctx.fastest_tag, ctx.fastest_speed
-    prev_leader = max(prev_speeds.items(), key=lambda kv: kv[1])[0]
-    if prev_leader == ctx.fastest_tag:
+    prev_leader = _resolve_prev_leader(prev_speeds, prev_isp_tag)
+    if prev_leader is None or prev_leader == ctx.fastest_tag:
         return ctx.fastest_tag, ctx.fastest_speed
     incumbent_speed = ctx.speeds.get(prev_leader, 0.0)
     if incumbent_speed <= _USABLE_MIN_MBPS:
@@ -1243,6 +1289,88 @@ def run_isp_speed_tests(
     return outcome
 
 
+def _apply_last_known_routing() -> None:
+    """Load last-known routing rows from STATUS_FILE into os.environ.
+
+    C2 cold-boot fallback: when the live measurement overruns the boot wall-clock
+    budget, the main process still needs *some* ISP_TAG / _ISP_SPEEDS_JSON so the
+    config templates render against the previous good decision instead of an empty
+    one. The async measurement thread keeps running and will atomically persist a
+    fresh outcome to STATUS_FILE (and the periodic isp-retest cron re-measures
+    anyway), so this is a graceful stopgap, never a permanent state.
+    """
+    snap = _read_status_snapshot()
+    for key in ("ISP_TAG", "_ISP_SPEEDS_JSON", "IS_8K_SMOOTH"):
+        value = snap.get(key, "")
+        if value:
+            os.environ[key] = value
+    isp_tag = snap.get("ISP_TAG", "")
+    os.environ["HAS_ISP_NODES"] = "true" if isp_tag not in ("", "direct", "block") else ""
+    if snap:
+        logger.info(
+            "last-known 选路已加载 (isp_tag=%s)；配置基于上次持久化结果渲染",
+            isp_tag or "未知",
+        )
+    else:
+        logger.warning(
+            "STATUS_FILE 不存在或为空 — 真正冷启动，本次 boot 无 last-known 选路，"
+            "ISP_TAG / _ISP_SPEEDS_JSON 等路由键本周期保持未设置状态",
+        )
+
+
+def run_isp_speed_tests_budgeted(
+    *,
+    samples: int | None = None,
+    url: str = _SPEED_TEST_URL,
+) -> SpeedOutcome | None:
+    """Boot-time speed test with a wall-clock budget cap (C2).
+
+    Runs :func:`run_isp_speed_tests` on a daemon thread and waits at most
+    ``ISP_SPEED_BOOT_BUDGET_SEC`` (default 45s, ``0`` disables the cap and runs
+    synchronously for full backward compatibility). On overrun the wait is
+    abandoned — the measurement thread keeps running and persists its outcome to
+    STATUS_FILE atomically — and the main process loads the last-known routing
+    rows so config generation never stalls behind a cold-cache measurement.
+
+    Returns the real :class:`SpeedOutcome` (or ``None`` on a cache hit) when the
+    measurement finishes inside the budget; returns ``None`` on a budget overrun.
+    """
+    import threading
+
+    raw = os.environ.get("ISP_SPEED_BOOT_BUDGET_SEC", "45").strip()
+    try:
+        budget = float(raw) if raw else 45.0
+    except ValueError:
+        logger.warning(
+            "ISP_SPEED_BOOT_BUDGET_SEC=%r は数値に変換できません — 45.0s にフォールバックします",
+            raw,
+        )
+        budget = 45.0
+    if budget <= 0:
+        return run_isp_speed_tests(samples=samples, url=url)
+
+    box: dict[str, SpeedOutcome | None] = {"outcome": None}
+
+    def _runner() -> None:
+        box["outcome"] = run_isp_speed_tests(samples=samples, url=url)
+
+    t = threading.Thread(target=_runner, name="isp-speed-boot", daemon=True)
+    t.start()
+    t.join(budget)
+    if t.is_alive():
+        logger.warning(
+            "ISP 测速超过启动墙钟预算 %.0fs，改用 STATUS_FILE 中 last-known 选路继续 boot"
+            "（测速线程后台继续，结果将原子写回 STATUS_FILE）。"
+            "本次 boot 渲染的配置基于 last-known 路由值；"
+            "后台线程更新完成前 os.environ 与渲染配置可能存在偏差，"
+            "下次 isp-retest 完成后自动对齐。",
+            budget,
+        )
+        _apply_last_known_routing()
+        return None
+    return box["outcome"]
+
+
 def _try_speed_cache_hit() -> bool:
     """Phase 5 cold-boot cache.
 
@@ -1269,9 +1397,9 @@ def _try_speed_cache_hit() -> bool:
     status: dict[str, str] = {}
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^export (\w+)=['\"]?(.*?)['\"]?$", line.strip())
-            if m:
-                status[m.group(1)] = m.group(2)
+            parsed = _parse_status_line(line)
+            if parsed:
+                status[parsed[0]] = parsed[1]
     except OSError:
         return False
 

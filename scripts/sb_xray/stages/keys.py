@@ -8,15 +8,23 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from typing import Final
 
 from sb_xray.env import EnvManager
 
 logger = logging.getLogger(__name__)
 
+# `xray x25519` / `xray mlkem768` are CPU-local keygen calls that finish in
+# milliseconds; 30s bounds a wedged binary so it can't hang PID-1 boot (G1).
+# On timeout we re-raise — keygen is fail-fast, the restart loop recovers.
+_XRAY_TIMEOUT_SEC: Final[float] = 30.0
+
 
 def _run_xray(cmd: list[str]) -> list[str]:
     """Run ``cmd`` and return stdout lines, raising on non-zero exit."""
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd, check=True, capture_output=True, text=True, timeout=_XRAY_TIMEOUT_SEC
+    )
     return [ln for ln in result.stdout.splitlines() if ln.strip()]
 
 

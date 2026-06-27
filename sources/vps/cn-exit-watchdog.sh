@@ -52,6 +52,21 @@ fi
 
 [ -n "$WD_SOCKS5_HOST" ] || { echo "WD_SOCKS5_HOST 未配置且 .env 无 tsip"; exit 1; }
 
+# 并发去重：cron 每分钟一调，curl 卡 -m 8 可能令两进程并发改写 state。
+# 非阻塞自锁——已持锁说明上一轮还在跑，本轮直接退（探活下一分钟补上）。
+# 缺 flock（极简镜像）则优雅降级裸跑，绝不因缺工具中断告警链路。
+WD_LOCK="${WD_LOCK:-${WD_STATE}.lock}"
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"$WD_LOCK" 2>/dev/null || true
+    flock -n 9 || { echo "上一轮探活仍在运行，跳过本轮"; exit 0; }
+fi
+
+# 原子状态写：tmp 同目录落盘后 mv 覆盖，杜绝并发读到截断半行。
+_state_write() {
+    _tmp="${WD_STATE}.$$"
+    printf '%s %s\n' "$1" "$2" > "$_tmp" && mv -f "$_tmp" "$WD_STATE"
+}
+
 # state 文件两个字段：连续失败计数 / 是否已告警（0|1）
 fails=0; alerted=0
 [ -f "$WD_STATE" ] && { read -r fails alerted < "$WD_STATE" 2>/dev/null || true; }
@@ -65,7 +80,7 @@ if [ "$code" = "204" ] || [ "$code" = "200" ]; then
     if [ "$alerted" = "1" ]; then
         tg_send "✅ CN出口恢复 @ ${self}: ${WD_SOCKS5_HOST}:${WD_SOCKS5_PORT} 探活恢复（HTTP ${code}）"
     fi
-    echo "0 0" > "$WD_STATE"
+    _state_write 0 0
     exit 0
 fi
 
@@ -74,5 +89,5 @@ if [ "$fails" -ge "$WD_THRESHOLD" ] && [ "$alerted" = "0" ]; then
     tg_send "❌ CN出口疑似宕机 @ ${self}: 经 ${WD_SOCKS5_HOST}:${WD_SOCKS5_PORT} 探活连续 ${fails} 次失败（最后码 ${code:-超时}）。设备侧监控可能已随设备失联，请检查 CN 出口设备电源/网络。"
     alerted=1
 fi
-echo "$fails $alerted" > "$WD_STATE"
+_state_write "$fails" "$alerted"
 exit 0

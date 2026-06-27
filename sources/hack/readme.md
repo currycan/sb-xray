@@ -11,7 +11,7 @@
 ### 功能
 
 - **基础信息与类型**：聚合 Maxmind、IPinfo、IPregistry、IP2Location、AbuseIPDB 等多个数据库，判定 IP 用途类型（家宽 / 机房 / 商业 / 教育 / CDN / 手机 等）。
-- **风险评分**：Scamalytics 欺诈分数、IPAPI 风险等级。
+- **风险评分**：Scamalytics 欺诈分数、IPAPI 风险等级。评分在比较前统一强制取整（API 偶返小数时不再令脚本中断），非数字归 0。
 - **流媒体 / AI 解锁**：TikTok、Netflix、YouTube Premium、Disney+、ChatGPT 等区域解锁检测。
 - 同时检测 IPv4 / IPv6，可指定出口网卡或代理。
 

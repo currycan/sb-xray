@@ -98,6 +98,12 @@ _STAGE_IDS: tuple[str, ...] = (
     "show",
 )
 
+# C1: probe/speed/media steer routing but are NOT load-bearing for a bootable
+# container — a crash here must degrade (DEGRADED) and let boot reach
+# exec_supervisord, not abort before it. cert/keys/dhparam/config stay
+# fail-fast (their failure makes nginx/xray restart-loop on missing files).
+_NON_FATAL_STAGES: frozenset[str] = frozenset({"probe", "speed", "media"})
+
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -166,6 +172,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     sub.add_parser(
         "log-rotate",
         help="Rotate /var/log logs via the rendered logrotate ruleset (cron entry).",
+    )
+
+    sub.add_parser(
+        "cert-renew",
+        help="Renew TLS bundle if <7d validity; reload nginx on renewal (cron entry).",
     )
 
     sub.add_parser(
@@ -528,7 +539,7 @@ def run_pipeline(
     from sb_xray import secrets as sbsecrets
     from sb_xray.routing import isp as sbisp
     from sb_xray.routing import providers as sbprov
-    from sb_xray.speed_test import run_isp_speed_tests
+    from sb_xray.speed_test import run_isp_speed_tests_budgeted
     from sb_xray.stages import (
         cron as sbcron,
     )
@@ -609,7 +620,7 @@ def run_pipeline(
         (2, "secrets", "secrets", "解密远端密钥库 + 加载密钥", _secrets),
         (3, None, "bootstrap", "加载持久化状态 (ENV/STATUS)", _bootstrap),
         (4, "probe", "probe", "基础环境变量初始化", lambda: probe_base_env(mgr)),  # type: ignore[arg-type]
-        (5, "speed", "speed", "ISP 测速与选路", run_isp_speed_tests),
+        (5, "speed", "speed", "ISP 测速与选路", run_isp_speed_tests_budgeted),
         (6, "media", "media", "流媒体/AI 可达性检测", lambda: _cache_media_probes(mgr)),  # type: ignore[arg-type]
         (7, "keys", "keys", "生成加密密钥对", lambda: sbkeys.ensure_all_keys(mgr)),  # type: ignore[arg-type]
         (
@@ -635,7 +646,8 @@ def run_pipeline(
 
     for index, skip_name, name, label, fn in stage_table:
         info = StageInfo(index=index, total=TOTAL_STAGES, name=name, label=label)
-        with StageTimer(info, logger, summary=summary) as t:
+        non_fatal = name in _NON_FATAL_STAGES
+        with StageTimer(info, logger, summary=summary, non_fatal=non_fatal) as t:
             if skip_name is not None and skip_name in skips:
                 t.skipped("--skip-stage")
                 continue
@@ -757,6 +769,11 @@ def main(argv: list[str] | None = None) -> int:
         from sb_xray.stages import secrets_refresh
 
         return secrets_refresh.run()
+
+    if args.command == "cert-renew":
+        from sb_xray.stages import cert_renew
+
+        return cert_renew.run()
 
     if args.command == "xray-run":
         from sb_xray.stages import xray_run

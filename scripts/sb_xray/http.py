@@ -30,11 +30,15 @@ class FetchResult:
     ``status`` is the (post-redirect) HTTP status code, or ``-1`` on any
     network/protocol failure. ``body`` is the decoded response text,
     truncated to ~64 KiB. ``final_url`` is the URL after redirects.
+    ``truncated`` is ``True`` when the body hit the ``_MAX_BODY_BYTES`` cap
+    and was cut off — callers should treat an unmatched marker as
+    inconclusive rather than a definitive absence.
     """
 
     status: int
     body: str
     final_url: str
+    truncated: bool = False
 
 
 def probe(url: str, *, follow: bool = False, timeout: float = PROBE_TIMEOUT) -> str:
@@ -88,14 +92,18 @@ def fetch(url: str, *, follow: bool = True, timeout: float = GET_TIMEOUT) -> Fet
         ):
             chunks: list[bytes] = []
             total = 0
+            truncated = False
             for chunk in resp.iter_bytes():
                 chunks.append(chunk)
                 total += len(chunk)
                 if total >= _MAX_BODY_BYTES:
+                    truncated = True
                     break
             raw = b"".join(chunks)[:_MAX_BODY_BYTES]
             body = raw.decode(resp.encoding or "utf-8", errors="replace")
-            return FetchResult(status=resp.status_code, body=body, final_url=str(resp.url))
+            return FetchResult(
+                status=resp.status_code, body=body, final_url=str(resp.url), truncated=truncated
+            )
     except httpx.HTTPError:
         return FetchResult(status=-1, body="", final_url="")
 

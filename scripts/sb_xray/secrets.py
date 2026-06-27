@@ -30,9 +30,18 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_SECRETS_URL: Final[str] = "https://raw.githubusercontent.com/currycan/key/master/tmp.bin"
+# §4/E5: in-code 默认不含任何环境特定 GitHub 账号/主机。生产以 env
+# ``SECRETS_URL`` 注入加密 blob 地址；空默认时 decrypt_remote_secrets 走
+# DECODE gate（见 :207/:232），不会触发空 URL fetch。
+_DEFAULT_SECRETS_URL: Final[str] = ""
+
+
+def _secrets_url() -> str:
+    """Encrypted-blob URL, env-overridable (``SECRETS_URL``), empty default."""
+    return os.environ.get("SECRETS_URL", _DEFAULT_SECRETS_URL)
 _DEFAULT_TMP: Final[Path] = Path("/tmp/tmp.bin")
 _DOWNLOAD_TIMEOUT: Final[float] = 30.0
+_DOWNLOAD_RETRIES: Final[int] = 2  # first attempt + one bounded retry
 
 # Shell/bash bookkeeping vars that ``env`` reports but a credential file never
 # "defines". Filtered out of :func:`parse_env_file` so the refresh diff keys on
@@ -139,20 +148,36 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return parsed
 
 
-def _fetch_and_decrypt(out_path: Path, *, blob_path: Path) -> None:
-    """Download the encrypted blob and decrypt it to ``out_path``.
+def _download_blob(blob_path: Path) -> None:
+    """Download the encrypted blob to blob_path with one bounded retry.
 
-    Raises ``RuntimeError`` on download error or non-zero ``crypctl`` exit;
-    on failure ``out_path`` is left absent (never a half-written file).
+    Raises RuntimeError only after all attempts fail — a transient network
+    flap no longer aborts a cold boot on the first try.
     """
     blob_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with httpx.Client(timeout=_DOWNLOAD_TIMEOUT) as client:
-            resp = client.get(_SECRETS_URL)
-            resp.raise_for_status()
-            blob_path.write_bytes(resp.content)
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"download failed: {exc}") from exc
+    secrets_url = _secrets_url()
+    if not secrets_url:
+        raise RuntimeError("SECRETS_URL 未设置：无法下载加密 blob")
+    last_exc: httpx.HTTPError | None = None
+    for _ in range(_DOWNLOAD_RETRIES):
+        try:
+            with httpx.Client(timeout=_DOWNLOAD_TIMEOUT) as client:
+                resp = client.get(secrets_url)
+                resp.raise_for_status()
+                blob_path.write_bytes(resp.content)
+            return
+        except httpx.HTTPError as exc:
+            last_exc = exc
+    raise RuntimeError(f"download failed: {last_exc}") from last_exc
+
+
+def _fetch_and_decrypt(out_path: Path, *, blob_path: Path) -> None:
+    """Download the encrypted blob and decrypt it to out_path.
+
+    Raises RuntimeError on download error (after bounded retry) or non-zero
+    crypctl exit; on failure out_path is left absent.
+    """
+    _download_blob(blob_path)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(

@@ -16,6 +16,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 import respx
+from sb_xray import http as sbhttp
 from sb_xray.routing import media
 from sb_xray.routing.service_spec import SPECS_BY_ENV, ContentSignature
 
@@ -225,3 +226,104 @@ def test_streaming_specs_have_real_signature() -> None:
     for env_var in ("NETFLIX_OUT", "DISNEY_OUT", "YOUTUBE_OUT"):
         sig = SPECS_BY_ENV[env_var].signature
         assert sig is not None and sig.real_substrings
+
+
+# ---- classify_signature: reusable B-class verdict kernel (C3 self-check) ----
+
+
+@respx.mock
+def test_classify_signature_real() -> None:
+    spec = SPECS_BY_ENV["YOUTUBE_OUT"]
+    respx.get(spec.probe_url).mock(
+        return_value=httpx.Response(200, text="<script>ytcfg.set({});</script>")
+    )
+    assert media.classify_signature(spec) == media._REAL
+
+
+@respx.mock
+def test_classify_signature_unknown_on_blank_page() -> None:
+    spec = SPECS_BY_ENV["NETFLIX_OUT"]
+    respx.get(spec.probe_url).mock(return_value=httpx.Response(200, text="<html>nothing</html>"))
+    assert media.classify_signature(spec) == media._UNKNOWN
+
+
+def test_classify_signature_none_signature_is_unknown() -> None:
+    # An A-class spec carries no signature → never REAL, no HTTP issued.
+    spec = SPECS_BY_ENV["CHATGPT_OUT"]
+    assert spec.signature is None
+    assert media.classify_signature(spec) == media._UNKNOWN
+
+
+# ---- run_signature_self_check: C3 marker-rot observability -----------------
+
+
+from unittest.mock import MagicMock  # noqa: E402
+
+from sb_xray.routing.service_spec import SERVICE_SPECS  # noqa: E402
+
+
+@respx.mock
+def test_self_check_emits_rot_on_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    emit = MagicMock()
+    monkeypatch.setattr(media, "emit_event", emit)
+    # Every B-class probe_url returns a 200 page with NO known markers → UNKNOWN
+    # despite being reachable = a rotted signature, the exact C3 failure.
+    for spec in SERVICE_SPECS:
+        if spec.signature is not None:
+            respx.get(spec.probe_url).mock(
+                return_value=httpx.Response(200, text="<html>changed markup</html>")
+            )
+    rot = media.run_signature_self_check()
+    b_class = [s for s in SERVICE_SPECS if s.signature is not None]
+    assert rot == len(b_class)
+    assert emit.call_count == len(b_class)
+    name, payload = emit.call_args[0]
+    assert name == "routing.signature.rot"
+    assert payload["verdict"] == media._UNKNOWN
+    assert payload["status"] == 200
+
+
+@respx.mock
+def test_self_check_silent_when_markers_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    emit = MagicMock()
+    monkeypatch.setattr(media, "emit_event", emit)
+    for spec in SERVICE_SPECS:
+        if spec.signature is not None:
+            marker = spec.signature.real_substrings[0]
+            respx.get(spec.probe_url).mock(return_value=httpx.Response(200, text=marker))
+    assert media.run_signature_self_check() == 0
+    emit.assert_not_called()
+
+
+@respx.mock
+def test_self_check_no_rot_on_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A down probe (status<200) is NOT a signature rot — only a reachable
+    # known-good page that fails to match counts. No false-positive event.
+    emit = MagicMock()
+    monkeypatch.setattr(media, "emit_event", emit)
+    for spec in SERVICE_SPECS:
+        if spec.signature is not None:
+            respx.get(spec.probe_url).mock(side_effect=httpx.ConnectError("down"))
+    assert media.run_signature_self_check() == 0
+    emit.assert_not_called()
+
+
+# ---- _classify truncation fail-safe -----------------------------------------
+
+
+def test_classify_truncated_no_match_is_blocked() -> None:
+    sig = ContentSignature(real_substrings=("netflix.reactContext",), blocked_substrings=("M7111",))
+    res = sbhttp.FetchResult(status=200, body="nothing matched here", final_url="https://x", truncated=True)
+    assert media._classify(res, sig) == media._BLOCKED
+
+
+def test_classify_not_truncated_no_match_is_unknown() -> None:
+    sig = ContentSignature(real_substrings=("netflix.reactContext",))
+    res = sbhttp.FetchResult(status=200, body="nothing", final_url="https://x", truncated=False)
+    assert media._classify(res, sig) == media._UNKNOWN
+
+
+def test_classify_real_marker_within_cap_still_real_even_if_truncated() -> None:
+    sig = ContentSignature(real_substrings=("playerModel",))
+    res = sbhttp.FetchResult(status=200, body="...playerModel...", final_url="https://x", truncated=True)
+    assert media._classify(res, sig) == media._REAL

@@ -166,6 +166,7 @@ if [ "$MODE" == "offline" ]; then
     MIHOMO_TAG=$(get_cached_version mihomo)
     HTTP_META_VERSION=$(get_cached_version http_meta)
     SUB_STORE_FRONTEND_VERSION=$(get_cached_version sub_store_frontend)
+    SUB_STORE_FRONTEND_SHA=$(get_cached_version sub_store_frontend_sha)
     SUB_STORE_BACKEND_VERSION=$(get_cached_version sub_store_backend)
     # SUI_TAG=$(get_cached_version s_ui)  # s-ui removed
     DUFS_TAG=$(get_cached_version dufs)
@@ -173,12 +174,19 @@ if [ "$MODE" == "offline" ]; then
     XUI_TAG=$(get_cached_version x_ui)
     SING_BOX_TAG=$(get_cached_version sing_box)
     XRAY_TAG=$(get_cached_version xray)
+    CRYPCTL_REF=$(get_cached_version crypctl_sha)
+    ACME_SH_VERSION=$(get_cached_version acme_sh)
+    ACME_SH_SHA256=$(get_cached_version acme_sh_sha256)
 else
     echo -e "${BLUE}刷新模式：从 GitHub API 获取最新版本信息...${NC}"
     SHOUTRRR_TAG=$(get_latest_release "containrrr/shoutrrr")
     MIHOMO_TAG=$(get_latest_release "MetaCubeX/mihomo")
     HTTP_META_VERSION=$(get_latest_release "xream/http-meta")
     SUB_STORE_FRONTEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store-Front-End")
+    # 解析 tag → commit SHA（ls-remote 拿 annotated/lightweight tag 指向的 commit）
+    SUB_STORE_FRONTEND_SHA=$(git ls-remote "https://github.com/sub-store-org/Sub-Store-Front-End" \
+      "refs/tags/${SUB_STORE_FRONTEND_VERSION#v}^{}" "refs/tags/${SUB_STORE_FRONTEND_VERSION#v}" \
+      2>/dev/null | awk 'NR==1{print $1}')
     SUB_STORE_BACKEND_VERSION=$(get_latest_release "sub-store-org/Sub-Store")
     # SUI_TAG=$(get_latest_release "alireza0/s-ui")  # s-ui removed
     DUFS_TAG=$(get_latest_stable_tag "sigoden/dufs")
@@ -186,6 +194,13 @@ else
     XUI_TAG=$(get_latest_stable_tag "MHSanaei/3x-ui")
     SING_BOX_TAG=$(get_latest_stable_tag "SagerNet/sing-box")
     XRAY_TAG=$(get_latest_stable_tag "XTLS/Xray-core")
+    CRYPCTL_TAG=$(get_latest_release "currycan/key")
+    CRYPCTL_REF=$(git ls-remote "https://github.com/currycan/key.git" \
+      "refs/tags/${CRYPCTL_TAG}^{}" "refs/tags/${CRYPCTL_TAG}" 2>/dev/null | awk 'NR==1{print $1}')
+    ACME_SH_VERSION=$(get_latest_release "acmesh-official/acme.sh")
+    ACME_SH_SHA256=$(curl -fsSL --retry 3 \
+      "https://github.com/acmesh-official/acme.sh/archive/refs/tags/${ACME_SH_VERSION}.tar.gz" \
+      | sha256sum | awk '{print $1}')
 fi
 
 # 处理版本号并构建 Docker 参数
@@ -230,10 +245,21 @@ check_version() {
     BUILD_ARGS="${BUILD_ARGS} --build-arg ${arg_name}=${stripped}"
 }
 
+# 校验：任何一项为空即拒绝构建（supply-chain pin + digest 共用）
+_require_sha() {
+    local name=$1 val=$2
+    if [ -z "$val" ]; then
+        echo -e "${RED}✗ ${name} 未设置${NC}" >&2
+        exit 1
+    fi
+    printf "  %-32s ${GREEN}%s${NC}\n" "${name}:" "${val:0:12}…"
+}
+
 check_version "Shoutrrr"        "$SHOUTRRR_TAG"               "SHOUTRRR_VERSION"
 check_version "Mihomo"          "$MIHOMO_TAG"                 "MIHOMO_VERSION"
 check_version "Http-Meta"       "$HTTP_META_VERSION"          "HTTP_META_VERSION"
 check_version "Sub-Store Front" "$SUB_STORE_FRONTEND_VERSION" "SUB_STORE_FRONTEND_VERSION"
+_require_sha "SUB_STORE_FRONTEND_SHA" "$SUB_STORE_FRONTEND_SHA"
 check_version "Sub-Store Back"  "$SUB_STORE_BACKEND_VERSION"  "SUB_STORE_BACKEND_VERSION"
 # check_version "s-ui"            "$SUI_TAG"                    "SUI_VERSION"  # s-ui removed
 check_version "Dufs"            "$DUFS_TAG"                   "DUFS_VERSION"
@@ -241,6 +267,9 @@ check_version "Cloudflared"     "$CLOUDFLARED_VERSION"        "CLOUDFLARED_VERSI
 check_version "3x-ui"           "$XUI_TAG"                    "XUI_VERSION"
 check_version "Sing-box"        "$SING_BOX_TAG"               "SING_BOX_VERSION"
 check_version "Xray"            "$XRAY_TAG"                   "XRAY_VERSION"
+_require_sha "CRYPCTL_REF" "$CRYPCTL_REF"
+_require_sha "ACME_SH_VERSION" "$ACME_SH_VERSION"
+_require_sha "ACME_SH_SHA256"  "$ACME_SH_SHA256"
 
 # 刷新模式：把新获取到的 versions 写回 versions.json（与 digests 同步更新）
 if [ "$MODE" == "refresh" ]; then
@@ -250,25 +279,35 @@ if [ "$MODE" == "refresh" ]; then
         --arg shoutrrr             "${SHOUTRRR_TAG#v}" \
         --arg mihomo               "${MIHOMO_TAG#v}" \
         --arg http_meta            "${HTTP_META_VERSION#v}" \
-        --arg sub_store_frontend   "${SUB_STORE_FRONTEND_VERSION#v}" \
-        --arg sub_store_backend    "${SUB_STORE_BACKEND_VERSION#v}" \
+        --arg sub_store_frontend     "${SUB_STORE_FRONTEND_VERSION#v}" \
+        --arg sub_store_frontend_sha "${SUB_STORE_FRONTEND_SHA}" \
+        --arg sub_store_backend      "${SUB_STORE_BACKEND_VERSION#v}" \
         --arg dufs                 "${DUFS_TAG#v}" \
         --arg cloudflared          "${CLOUDFLARED_VERSION#v}" \
         --arg x_ui                 "${XUI_TAG#v}" \
         --arg sing_box             "${SING_BOX_TAG#v}" \
         --arg xray                 "${XRAY_TAG#v}" \
+        --arg crypctl              "${CRYPCTL_TAG}" \
+        --arg crypctl_sha          "${CRYPCTL_REF}" \
+        --arg acme_sh              "${ACME_SH_VERSION}" \
+        --arg acme_sh_sha256       "${ACME_SH_SHA256}" \
         '. + {
             shoutrrr: $shoutrrr,
             mihomo: $mihomo,
             http_meta: $http_meta,
             sub_store_frontend: $sub_store_frontend,
+            sub_store_frontend_sha: $sub_store_frontend_sha,
             sub_store_backend: $sub_store_backend,
             # s_ui: $s_ui,  # s-ui removed
             dufs: $dufs,
             cloudflared: $cloudflared,
             x_ui: $x_ui,
             sing_box: $sing_box,
-            xray: $xray
+            xray: $xray,
+            crypctl: $crypctl,
+            crypctl_sha: $crypctl_sha,
+            acme_sh: $acme_sh,
+            acme_sh_sha256: $acme_sh_sha256
         }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
     echo -e "  ${GREEN}✓ versions 段已写回 versions.json${NC}"
 fi
@@ -284,11 +323,12 @@ GIT_SHA="$(git rev-parse HEAD)"
 # ============================================================
 echo -e "${BLUE}获取各组件发布文件的 SHA256...${NC}"
 
-# 11 个 digest key 列表（便于校验/遍历）
+# 15 个 digest key 列表（便于校验/遍历）
 DIGEST_KEYS="http_meta_bundle_sha256 http_meta_tpl_sha256 sub_store_backend_sha256 \
   mihomo_amd64_sha256 mihomo_arm64_sha256 dufs_amd64_sha256 dufs_arm64_sha256 \
   cloudflared_amd64_sha256 cloudflared_arm64_sha256 xui_amd64_sha256 xui_arm64_sha256 \
-  sing_box_amd64_sha256 sing_box_arm64_sha256"
+  sing_box_amd64_sha256 sing_box_arm64_sha256 \
+  xray_amd64_sha256 xray_arm64_sha256 shoutrrr_amd64_sha256 shoutrrr_arm64_sha256"
 
 VERSIONS_JSON_PATH="$(cd "$(dirname "$0")" && pwd)/versions.json"
 
@@ -298,16 +338,6 @@ get_cached_digest() {
     local key=$1
     [ -f "$VERSIONS_JSON_PATH" ] || { echo ""; return; }
     jq -r --arg k "$key" '.digests[$k] // empty' "$VERSIONS_JSON_PATH" 2>/dev/null
-}
-
-# 校验：任何一项为空即拒绝构建
-_require_sha() {
-    local name=$1 val=$2
-    if [ -z "$val" ]; then
-        echo -e "${RED}✗ ${name} 未设置${NC}" >&2
-        exit 1
-    fi
-    printf "  %-32s ${GREEN}%s${NC}\n" "${name}:" "${val:0:12}…"
 }
 
 if [ "$MODE" == "offline" ]; then
@@ -326,6 +356,10 @@ if [ "$MODE" == "offline" ]; then
     XUI_ARM64_SHA=$(get_cached_digest xui_arm64_sha256)
     SING_BOX_AMD64_SHA=$(get_cached_digest sing_box_amd64_sha256)
     SING_BOX_ARM64_SHA=$(get_cached_digest sing_box_arm64_sha256)
+    XRAY_AMD64_SHA=$(get_cached_digest xray_amd64_sha256)
+    XRAY_ARM64_SHA=$(get_cached_digest xray_arm64_sha256)
+    SHOUTRRR_AMD64_SHA=$(get_cached_digest shoutrrr_amd64_sha256)
+    SHOUTRRR_ARM64_SHA=$(get_cached_digest shoutrrr_arm64_sha256)
 
     # 任一缺失则提示用户先跑 refresh 模式
     _missing=0
@@ -337,9 +371,19 @@ if [ "$MODE" == "offline" ]; then
         echo -e "${YELLOW}  请运行 \`./build.sh refresh\` 从 GitHub API 拉取并写回 digests${NC}" >&2
         exit 1
     fi
+
+    # 供应链 pin（commit SHA / 版本号，非 digests map）— 任一缺失即拒绝离线构建
+    SUPPLY_PIN_KEYS="sub_store_frontend_sha crypctl_sha acme_sh acme_sh_sha256"
+    for key in $SUPPLY_PIN_KEYS; do
+        if [ -z "$(get_cached_version "$key")" ]; then
+            echo -e "${RED}✗ versions.json 缺少供应链 pin 字段：${key}${NC}" >&2
+            echo -e "${YELLOW}  请运行 \`./build.sh refresh\` 重新解析并写回${NC}" >&2
+            exit 1
+        fi
+    done
 else
     # ---------- 刷新模式：从 GitHub API 获取 digests，写回 versions.json ----------
-    check_gh_rate_limit 7
+    check_gh_rate_limit 9
 
     _extract_arg() { echo "$BUILD_ARGS" | grep -oE "$1=[^ ]+" | cut -d= -f2- | tail -1; }
     MIHOMO_V=$(_extract_arg MIHOMO_VERSION)
@@ -363,6 +407,21 @@ else
     XUI_ARM64_SHA=$(get_asset_digest MHSanaei/3x-ui "v$XUI_V" "x-ui-linux-arm64.tar.gz")
     SING_BOX_AMD64_SHA=$(get_asset_digest SagerNet/sing-box "v$SING_BOX_V" "sing-box-${SING_BOX_V}-linux-amd64.tar.gz")
     SING_BOX_ARM64_SHA=$(get_asset_digest SagerNet/sing-box "v$SING_BOX_V" "sing-box-${SING_BOX_V}-linux-arm64.tar.gz")
+
+    XRAY_V=$(_extract_arg XRAY_VERSION)
+    SHOUTRRR_V=$(_extract_arg SHOUTRRR_VERSION)
+    _xray_dgst_sha() {  # $1=asset zip 名；从 .dgst 提取 SHA2-256
+        fetch_url "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_V}/$1.dgst" \
+          | awk -F'= ' '/^SHA2-256/ {print $2}'
+    }
+    _shoutrrr_sha() {  # $1=tarball 名；从 checksums.txt 取
+        fetch_url "https://github.com/containrrr/shoutrrr/releases/download/v${SHOUTRRR_V}/shoutrrr_${SHOUTRRR_V}_checksums.txt" \
+          | awk -v f="$1" '$2==f {print $1}'
+    }
+    XRAY_AMD64_SHA=$(_xray_dgst_sha "Xray-linux-64.zip")
+    XRAY_ARM64_SHA=$(_xray_dgst_sha "Xray-linux-arm64-v8a.zip")
+    SHOUTRRR_AMD64_SHA=$(_shoutrrr_sha "shoutrrr_linux_amd64.tar.gz")
+    SHOUTRRR_ARM64_SHA=$(_shoutrrr_sha "shoutrrr_linux_arm64.tar.gz")
 fi
 
 _require_sha "HTTP_META_BUNDLE_SHA256"  "$HTTP_META_BUNDLE_SHA"
@@ -378,6 +437,10 @@ _require_sha "XUI_AMD64_SHA256"         "$XUI_AMD64_SHA"
 _require_sha "XUI_ARM64_SHA256"         "$XUI_ARM64_SHA"
 _require_sha "SING_BOX_AMD64_SHA256"    "$SING_BOX_AMD64_SHA"
 _require_sha "SING_BOX_ARM64_SHA256"    "$SING_BOX_ARM64_SHA"
+_require_sha "XRAY_AMD64_SHA256"        "$XRAY_AMD64_SHA"
+_require_sha "XRAY_ARM64_SHA256"        "$XRAY_ARM64_SHA"
+_require_sha "SHOUTRRR_AMD64_SHA256"    "$SHOUTRRR_AMD64_SHA"
+_require_sha "SHOUTRRR_ARM64_SHA256"    "$SHOUTRRR_ARM64_SHA"
 
 # 刷新模式下把新获取的 digest 写回 versions.json，供后续 offline 模式使用
 if [ "$MODE" == "refresh" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
@@ -398,6 +461,10 @@ if [ "$MODE" == "refresh" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
         --arg xui_arm64_sha256         "$XUI_ARM64_SHA" \
         --arg sing_box_amd64_sha256    "$SING_BOX_AMD64_SHA" \
         --arg sing_box_arm64_sha256    "$SING_BOX_ARM64_SHA" \
+        --arg xray_amd64_sha256        "$XRAY_AMD64_SHA" \
+        --arg xray_arm64_sha256        "$XRAY_ARM64_SHA" \
+        --arg shoutrrr_amd64_sha256    "$SHOUTRRR_AMD64_SHA" \
+        --arg shoutrrr_arm64_sha256    "$SHOUTRRR_ARM64_SHA" \
         '.digests = {
             mihomo_amd64_sha256: $mihomo_amd64_sha256,
             mihomo_arm64_sha256: $mihomo_arm64_sha256,
@@ -411,7 +478,11 @@ if [ "$MODE" == "refresh" ] && [ -f "$VERSIONS_JSON_PATH" ]; then
             xui_amd64_sha256: $xui_amd64_sha256,
             xui_arm64_sha256: $xui_arm64_sha256,
             sing_box_amd64_sha256: $sing_box_amd64_sha256,
-            sing_box_arm64_sha256: $sing_box_arm64_sha256
+            sing_box_arm64_sha256: $sing_box_arm64_sha256,
+            xray_amd64_sha256: $xray_amd64_sha256,
+            xray_arm64_sha256: $xray_arm64_sha256,
+            shoutrrr_amd64_sha256: $shoutrrr_amd64_sha256,
+            shoutrrr_arm64_sha256: $shoutrrr_arm64_sha256
         }' "$VERSIONS_JSON_PATH" > "$_tmp_versions" && mv "$_tmp_versions" "$VERSIONS_JSON_PATH"
     echo -e "  ${GREEN}✓ digests 段已写回 versions.json${NC}"
 fi
@@ -429,7 +500,11 @@ BUILD_ARGS="${BUILD_ARGS} \
   --build-arg XUI_AMD64_SHA256=${XUI_AMD64_SHA} \
   --build-arg XUI_ARM64_SHA256=${XUI_ARM64_SHA} \
   --build-arg SING_BOX_AMD64_SHA256=${SING_BOX_AMD64_SHA} \
-  --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA}"
+  --build-arg SING_BOX_ARM64_SHA256=${SING_BOX_ARM64_SHA} \
+  --build-arg SUB_STORE_FRONTEND_SHA=${SUB_STORE_FRONTEND_SHA} \
+  --build-arg CRYPCTL_REF=${CRYPCTL_REF} \
+  --build-arg ACME_SH_VERSION=${ACME_SH_VERSION} \
+  --build-arg ACME_SH_SHA256=${ACME_SH_SHA256}"
 
 # 镜像版本号注入（Dockerfile final stage 的 ARG VERSION/SHA → OCI label）
 BUILD_ARGS="${BUILD_ARGS} --build-arg VERSION=${TAG_VERSION} --build-arg SHA=${GIT_SHA}"

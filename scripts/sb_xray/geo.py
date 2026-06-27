@@ -52,6 +52,7 @@ LINK_DIR: Final[Path] = LINK_DIRS[0]  # 保留单目录常量,向后兼容旧调
 MAX_AGE_SECONDS: Final[float] = 7 * 24 * 3600  # <7 天视为新鲜
 TIMEOUT: Final[float] = 60.0  # 单文件 10-30 MB,给 60s 兜底
 CHUNK_SIZE: Final[int] = 65536
+_DOWNLOAD_RETRIES: Final[int] = 2
 _SUPERVISOR_SOCKET: Final[Path] = Path("/var/run/supervisor.sock")
 
 _MANIFEST: Final[dict[str, str]] = {
@@ -74,26 +75,29 @@ def _is_fresh(path: Path, max_age: float) -> bool:
 def _download_one(name: str, url: str, target_dir: Path, timeout: float) -> bool:
     final = target_dir / name
     tmp = target_dir / f".{name}.tmp"
-    try:
-        with (
-            httpx.Client(
-                timeout=timeout,
-                follow_redirects=True,
-                headers={"User-Agent": sbhttp.DEFAULT_UA},
-            ) as client,
-            client.stream("GET", url) as resp,
-        ):
-            resp.raise_for_status()
-            with tmp.open("wb") as fh:
-                for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
-                    fh.write(chunk)
-        os.replace(tmp, final)
-        return True
-    except (httpx.HTTPError, OSError) as exc:
-        logger.warning("%s 下载失败: %s", name, exc)
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
-        return False
+    last_exc: Exception | None = None
+    for _attempt in range(_DOWNLOAD_RETRIES):
+        try:
+            with (
+                httpx.Client(
+                    timeout=timeout,
+                    follow_redirects=True,
+                    headers={"User-Agent": sbhttp.DEFAULT_UA},
+                ) as client,
+                client.stream("GET", url) as resp,
+            ):
+                resp.raise_for_status()
+                with tmp.open("wb") as fh:
+                    for chunk in resp.iter_bytes(chunk_size=CHUNK_SIZE):
+                        fh.write(chunk)
+            os.replace(tmp, final)
+            return True
+        except (httpx.HTTPError, OSError) as exc:
+            last_exc = exc
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+    logger.warning("%s 下载失败(%d 次尝试): %s", name, _DOWNLOAD_RETRIES, last_exc)
+    return False
 
 
 def _refresh_symlinks(target_dir: Path, link_dirs: tuple[Path, ...]) -> None:

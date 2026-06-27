@@ -4,7 +4,7 @@
 # 第一阶段: Sub-Store 构建层
 # 从源码构建 Sub-Store 的前端和后端
 # ==========================================
-FROM node:alpine AS sub-store-builder
+FROM node:alpine@sha256:725aeba2364a9b16beae49e180d83bd597dbd0b15c47f1f28875c290bfd255b9 AS sub-store-builder
 
 ARG TARGETARCH
 
@@ -75,12 +75,16 @@ RUN set -ex; \
 # --- Sub-Store 前端 ---
 WORKDIR /app/frontend
 ARG SUB_STORE_FRONTEND_VERSION="2.16.57"
+# B1 供应链：clone 后 git checkout 锁定 commit SHA，杜绝可变 tag 被上游移动
+ARG SUB_STORE_FRONTEND_SHA=""
 ENV SUB_STORE_WEBBASEPATH="sub-store"
 # pnpm store 缓存挂载 → 跨构建复用 npm 依赖下载
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     --mount=type=cache,target=/root/.npm,sharing=locked \
   set -ex; \
-  (git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend || (sleep 5 && git clone --depth 1 --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend)); \
+  [ -n "${SUB_STORE_FRONTEND_SHA}" ] || { echo "ERROR: SUB_STORE_FRONTEND_SHA build-arg required"; exit 1; }; \
+  (git clone --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend || (sleep 5 && git clone --branch ${SUB_STORE_FRONTEND_VERSION} https://github.com/sub-store-org/Sub-Store-Front-End /app/frontend)); \
+  cd /app/frontend && git checkout ${SUB_STORE_FRONTEND_SHA}; \
   npm install -g pnpm; \
   cd /app/frontend && pnpm install --frozen-lockfile --ignore-scripts; \
   pnpm approve-builds "@parcel/watcher@2.5.6" "core-js@3.49.0" "esbuild@0.15.18" "vue-demi@0.14.10"; \
@@ -97,7 +101,7 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 # 第三阶段: 主构建层 (Golang)
 # 构建 Go 语言二进制文件 (x-ui, s-ui 后端, crypctl) 并安装其他工具
 # ==========================================
-FROM golang:1-alpine AS builder
+FROM golang:1-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS builder
 
 ARG TARGETARCH
 
@@ -115,20 +119,24 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
 ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
 ENV GOTOOLCHAIN=auto
-# 默认 goproxy.cn 优先（国内构建友好）；CI 可用 --build-arg GOPROXY=... 覆盖为 proxy.golang.org
-ARG GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"
+# 默认走官方 proxy.golang.org，与 CI(daily-build.yml)对齐 → offline/CI 模块源位级一致。
+# 国内构建可 opt-in：--build-arg GOPROXY="https://goproxy.cn,direct"。GOSUMDB 始终启用(校验和保护)。
+ARG GOPROXY="https://proxy.golang.org,direct"
 ENV GOPROXY=${GOPROXY}
 
 WORKDIR /app
 
 # ===== 安装 crypctl =====
 # NOTE: crypctl source is in a public repo (currycan/key/docker/crypctl)
+# B2 供应链：pin 到不可变 commit（CRYPCTL_REF），不再 checkout 浮动 HEAD
+ARG CRYPCTL_REF=""
 # Go 构建/模块缓存挂载 → 跨构建复用
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
   set -ex; \
+  [ -n "${CRYPCTL_REF}" ] || { echo "ERROR: CRYPCTL_REF build-arg required"; exit 1; }; \
   (git clone --filter=blob:none --no-checkout https://github.com/currycan/key.git /app/key || (sleep 5 && git clone --filter=blob:none --no-checkout https://github.com/currycan/key.git /app/key)); \
-  cd /app/key && git checkout HEAD -- docker/crypctl; \
+  cd /app/key && git checkout ${CRYPCTL_REF} -- docker/crypctl; \
   cd docker/crypctl && go build -ldflags="-s -w" -trimpath -o crypctl main.go; \
   upx --lzma --best crypctl; \
   mv crypctl /usr/local/bin/
@@ -242,7 +250,7 @@ RUN set -ex; \
 # 基础镜像: currycan/nginx:1.29.4
 # 合并所有构建产物和运行时环境
 # ==========================================
-FROM docker.io/currycan/nginx:1.29.4
+FROM docker.io/currycan/nginx:1.29.4@sha256:fb9d207b1b70ce701c69cdc8cf171a582dbcda7c575f4b39180934f34af493b7
 
 # Create a non-root user and group
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
@@ -262,13 +270,24 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
   pip install -U pip supervisor socksio; \
   rm -rf /tmp/*
 
-# 安装 acme.sh
-ENV AUTO_UPGRADE=1
+# 安装 acme.sh（B3 供应链：pin release tag + 校验 sha256，AUTO_UPGRADE 关闭）
+ENV AUTO_UPGRADE=0
 ENV LE_WORKING_DIR=/acme.sh
 ENV LE_CONFIG_HOME=/acmecerts
 ENV ACMESH_DEBUG=2
 ENV PATH=/acme.sh/:$PATH
-RUN set -ex && curl -L https://get.acme.sh | sh
+ARG ACME_SH_VERSION=""
+ARG ACME_SH_SHA256=""
+RUN set -ex; \
+  [ -n "${ACME_SH_VERSION}" ] || { echo "ERROR: ACME_SH_VERSION build-arg required"; exit 1; }; \
+  [ -n "${ACME_SH_SHA256}" ]  || { echo "ERROR: ACME_SH_SHA256 build-arg required"; exit 1; }; \
+  curl -fsSL --retry 5 --retry-delay 5 -o /tmp/acme.tar.gz \
+    "https://github.com/acmesh-official/acme.sh/archive/refs/tags/${ACME_SH_VERSION}.tar.gz"; \
+  echo "${ACME_SH_SHA256}  /tmp/acme.tar.gz" | sha256sum -c -; \
+  mkdir -p /tmp/acme-src; \
+  tar --strip-components=1 -xzf /tmp/acme.tar.gz -C /tmp/acme-src; \
+  cd /tmp/acme-src && ./acme.sh --install --home /acme.sh --config-home /acmecerts --nocron; \
+  rm -rf /tmp/acme.tar.gz /tmp/acme-src
 
 # x-ui dependences
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
@@ -282,7 +301,15 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
   rm -rf /tmp/*
 
 ENV WORKDIR=/sb-xray
+# GIST_CODE 为 GitHub Gist 订阅 ID,空默认是安全状态：
+# 未设时 providers.py 跳过含字面 ${GIST_CODE} 的 provider 块(不渲染死链 URL)。
+ENV GIST_CODE=""
 ENV LOGDIR=/var/log/
+# Go 四件套(xray / sing-box / x-ui)共享 GC 软上限(§2b 镜像内默认生效)。
+# watchtower 用旧 env 集重建容器时不读 compose,无此默认则丢失针对 ≤512MB
+# 受限节点的软上限保护。docker-compose.yml 保留同名 env 作文档化覆盖。
+ENV GOMEMLIMIT="320MiB"
+ENV GOGC="50"
 ENV SUPERVISOR_LOG_MAX_BYTES="20MB"
 # xray 与 sing-box 共用日志级别：debug | info | warning | error
 ENV LOG_LEVEL="warning"
@@ -303,11 +330,15 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 
 # VLESS Reverse Proxy（M3，默认关闭）
 # ENABLE_REVERSE=true 时 entrypoint 往 REALITY 入站追加 reverse client UUID，
-# 并按 REVERSE_DOMAINS（逗号分隔，例如 "domain:home.lan,domain:nas.lan"）生成 routing 规则
+# 并按 REVERSE_DOMAINS（逗号分隔，如 "domain:myhost.internal"）生成 routing 规则
 # 落地机（bridge）配置：模板见 templates/reverse_bridge/client.json；
 # ENABLE_REVERSE=true 时 show 命令会渲染并输出占位符已填充的 reverse_bridge_client.json 下载链接
 ENV ENABLE_REVERSE="false"
-ENV REVERSE_DOMAINS="domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan"
+ENV REVERSE_DOMAINS=""
+
+# 订阅 provider / icon 账号段（§4：不入库具体账号；运维经 compose/.env 注入实际值）
+ENV GIST_OWNER=""
+ENV ICON_REPO=""
 
 # 回国出口模式开关（显式选择回国链路）：
 #   socks5   CN 流量经 SOCKS5（Tailscale/OpenClash，需 CN_EXIT_SOCKS5_HOST/PORT）
@@ -470,12 +501,12 @@ ENV DUFS_PORT=""
 ENV DUFS_BIND="0.0.0.0"
 ENV DUFS_PATH_PREFIX="/dufs"
 ENV DUFS_ALLOW_ALL="false"
-ENV DUFS_ALLOW_UPLOAD="true"
-ENV DUFS_ALLOW_DELETE="true"
+ENV DUFS_ALLOW_UPLOAD="false"
+ENV DUFS_ALLOW_DELETE="false"
 ENV DUFS_ALLOW_SEARCH="true"
-ENV DUFS_ALLOW_SYMLINK="true"
-ENV DUFS_ALLOW_ARCHIVE="true"
-ENV DUFS_ENABLE_CORS="true"
+ENV DUFS_ALLOW_SYMLINK="false"
+ENV DUFS_ALLOW_ARCHIVE="false"
+ENV DUFS_ENABLE_CORS="false"
 ENV DUFS_RENDER_INDEX="true"
 ENV DUFS_RENDER_TRY_INDEX="true"
 ENV DUFS_RENDER_SPA="true"

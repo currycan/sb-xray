@@ -129,7 +129,15 @@ docker exec -it sb-xray bash
 | `CDNDOMAIN` | CDN 域名（Cloudflare 代理，Nginx Web 层监听此 SNI） |
 | `DECODE` | 远端密钥库解密密钥（由 `crypctl` 使用） |
 
+#### 密钥库 URL（可选）
+
+| 变量 | 镜像内默认 | 说明 |
+|:---|:---|:---|
+| `SECRETS_URL` | *(空)* | 加密 secret blob 的下载地址；仅 `DECODE` 部署（远端密钥库解密）需要设置，空值时跳过远端下载 |
+
 #### 核心可选
+
+> 📘 **列头说明**：下表及 ACME / X-UI / S-UI 面板各节使用「Dockerfile 默认」列——这些值通过 `Dockerfile ENV` 指令固化在镜像内，无论 compose 如何设置均作为兜底。`#### Supervisord 控制凭据` 及 `#### Dufs 文件服务` 等后续节改用「镜像内默认」——这些值的兜底由 Python 入口的 `os.environ.get(key, 默认值)` 提供，而非 `Dockerfile ENV`；行为等价，来源不同。
 
 | 变量 | Dockerfile 默认 | 说明 |
 |:---|:---|:---|
@@ -172,14 +180,30 @@ docker exec -it sb-xray bash
 | `SUI_SUB_PORT` | `3096` | S-UI 订阅内部端口 |
 | `SUI_LOG_LEVEL` | `info` | 日志级别 |
 
+#### Supervisord 控制凭据
+
+| 变量 | 镜像内默认 | 说明 |
+|:---|:---|:---|
+| `SUPERVISOR_USER` | `sb-xray` | supervisord XML-RPC 控制接口用户名；**与 `PUBLIC_USER` 独立**，避免面板凭据泄漏同时交出进程控制权 |
+| `SUPERVISOR_PASSWORD` | *(派生)* | 未显式设置时，由 `PUBLIC_PASSWORD` 经固定 salt 做 SHA-256 确定性派生（取前 32 位十六进制字符）；**与 PUBLIC_PASSWORD 不同值**。派生逻辑在 `config_builder._resolve_supervisor_credentials`，salt 冻结（`sb-xray-supervisor::`），改 salt 会轮转所有存量部署的派生密码 |
+
+> 🔬 **盐值冻结不变量**：salt 字符串 `sb-xray-supervisor::` 硬编码在 `config_builder.py` 注释中，禁止修改——修改会导致所有未显式设置 `SUPERVISOR_PASSWORD` 的节点在镜像升级后生成不同密码，中断 supervisorctl 远程控制会话。如需强制轮换，显式在 compose 设置 `SUPERVISOR_PASSWORD`。
+
+#### Nginx HTTP Basic Auth 凭据文件
+
+🔬 **`.htpasswd` 文件权限**：启动阶段 `nginx_auth` 将 `/etc/nginx/.htpasswd`（apr1 哈希凭据文件）写入后立即设置权限 `0640`（owner rw / group r / other 无读权限）。Nginx worker 进程通过 group 成员身份读取该文件；容器内其他进程（非同组）无法读取哈希值。排障提示：首次启动出现 `403` 时，先确认 `nginx_auth` stage 已正常完成（容器日志含 `nginx_auth: ok`），再核查文件存在且权限为 `0640`（`docker exec sb-xray stat -c '%a %n' /etc/nginx/.htpasswd` 期望输出 `640 /etc/nginx/.htpasswd`）。
+
 #### Dufs 文件服务
 
-| 变量 | Dockerfile 默认 | 说明 |
+| 变量 | 镜像内默认 | 说明 |
 |:---|:---|:---|
 | `DUFS_PATH_PREFIX` | `/dufs` | URL 前缀 |
 | `DUFS_SERVE_PATH` | `/data` | 文件存储根目录 |
-| `DUFS_ALLOW_UPLOAD` | `true` | 允许上传 |
-| `DUFS_ALLOW_DELETE` | `true` | 允许删除 |
+| `DUFS_ALLOW_UPLOAD` | `false` | 允许上传文件；**镜像内默认关闭**（Nginx 内网 ACL 限制访问面，但建议保持默认以最小化写权限） |
+| `DUFS_ALLOW_DELETE` | `false` | 允许删除文件；**镜像内默认关闭** |
+| `DUFS_ALLOW_SYMLINK` | `false` | 允许跟随符号链接；**镜像内默认关闭**（防止 serve-path 内的 symlink 越界读取宿主文件） |
+| `DUFS_ALLOW_ARCHIVE` | `false` | 允许打包下载目录；**镜像内默认关闭** |
+| `DUFS_ENABLE_CORS` | `false` | 放开跨域（CORS）；**镜像内默认关闭**（开启后任意网页可发起跨源请求） |
 
 🔬 **深挖：Dufs 配置来源与 `DUFS_*` env 优先级**
 
@@ -221,6 +245,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 |:---|:---|:---|
 | `SB_LOG_LEVEL` | `INFO` | Python entrypoint 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` / `CRITICAL`（大小写不敏感，`WARN` 作为 `WARNING` 的别名）。**与给 xray/sing-box 用的 `LOG_LEVEL` 分离**，避免 xray 的 `warning` 字符串意外屏蔽阶段进度 INFO 日志。 |
 | `NO_COLOR` | *(空)* | 设为任意非空值 → 关闭 entrypoint 日志的 ANSI 彩色。容器 stdout 非 TTY 时自动关闭，无需手动配置。 |
+| `SHOW_CREDS` | `false` | 启动横幅是否明文显示 HTTP Basic Auth 凭据；默认 `false`（掩码，仅显示前 2 字符）；`true` 时输出明文，用于本地排障 |
 
 **格式**：`[ISO-8601 时区时间戳] [LEVEL] [模块名] 消息`
 
@@ -251,8 +276,8 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 > `<PREFIX>` 可自定义（如 `LA`、`KR`），需在 `DEFAULT_ISP` 中指定全局兜底前缀。
 
 > 📘 **密钥轮换如何下发到运行中的节点**：`/.env/secret` 是远端加密库 `tmp.bin` 解密后的本地缓存，经宿主机卷持久化。更新 `tmp.bin` 后，运行中的服务通过两条路径感知变更，均**镜像内默认生效**：
-> - **周期 cron**（`secrets-refresh`，默认每小时，见 §6）：下载比对 `tmp.bin`，凭据有变化才重解密 `/.env/secret`、覆盖运行期 env、重测选路并热重启 xray/sing-box，生效延迟有上界（默认 ≤1h），与镜像发布节奏解耦。
-> - **每次 boot 复检**：容器启动时复查上游，内容变化即原子替换缓存，故 `docker compose up -d --force-recreate`（或 watchtower 镜像跳变重建）会顺带刷新——**无需再手删 `.envs/secret`**。上游不可达且本地已有缓存时降级用旧值，启动不失败。
+> - **周期 cron**（`secrets-refresh`，默认每小时，见 §6）：下载比对 `tmp.bin`，凭据有变化才重解密 `/.env/secret`、覆盖运行期 env、重测选路并热重启 xray/sing-box；重启后执行 `nginx -s reload`，使重渲的 nginx 配置即时生效（无需重启容器）。生效延迟有上界（默认 ≤1h），与镜像发布节奏解耦。
+> - **每次 boot 复检**：容器启动时复查上游，内容变化即原子替换缓存，故 `docker compose up -d --force-recreate`（或 watchtower 镜像跳变重建）会顺带刷新——**无需再手删 `.envs/secret`**。上游不可达且本地已有缓存时降级用旧值，启动不失败。三类远端拉取（secret 加密库、geo `.dat` 规则库、ipapi 地理信息）遭遇瞬态失败时均执行一次有界重试（共 2 次尝试，无 sleep），仍失败则降级；ipapi 地理信息仅在响应携带有效 `country_code` 时才写入 `/tmp` 缓存，局部响应不污染缓存。
 >
 > 🔧 **立即下发某次轮换**（不等周期 cron）：`docker exec sb-xray /scripts/entrypoint.py secrets-refresh`；期望日志含 `secrets-refresh: completed`（凭据无变化则 `secrets-refresh: noop`）。
 
@@ -280,7 +305,7 @@ Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USE
 | `PORT_XDNS` | `5353` | XDNS 紧急通道 UDP 端口（默认关，见 `docs/09-feature-flags-and-capabilities.md §7`） |
 | `ENABLE_XICMP` / `ENABLE_XDNS` / `ENABLE_ECH` | `false` | 实验性 feature flag；开启条件与效果详见 [特性开关与可选能力指南](./09-feature-flags-and-capabilities.md) |
 | `ENABLE_REVERSE` | 镜像默认 `false`；标准 compose 部署默认 **`true`** | VLESS reverse bridge 总开关。**权威口径见 §2.7「ENABLE_REVERSE 默认姿态」**（本篇为该口径 owner，05/09 引用此处）；效果详见 [特性开关与可选能力指南](./09-feature-flags-and-capabilities.md) |
-| `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（Dockerfile ENV 注册） | **小内存节点降载开关**；设 `false` 在 `createConfig` 后由 `python3 /scripts/entrypoint.py trim` 过滤对应 `[program:*]` 段；详见 §7（注：`ENABLE_SUI` 已废弃，s-ui 不再内置） |
+| `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（Dockerfile ENV 注册；`ENABLE_XUI` 在 `docker-compose.yml` 默认 `false`，需用时改 compose 为 `true`） | **小内存节点降载开关**；设 `false` 在 `createConfig` 后由 `python3 /scripts/entrypoint.py trim` 过滤对应 `[program:*]` 段；详见 §7（注：`ENABLE_SUI` 已废弃，s-ui 不再内置） |
 | `GOMEMLIMIT` / `GOGC` | _未设置_ | Go GC 硬上限 + 回收激进度；推荐小内存节点 `GOMEMLIMIT=320MiB` + `GOGC=50` |
 | `XDNS_DOMAIN` | _空_ | XDNS 紧急通道的 NS 域名（`ENABLE_XDNS=true` 时必填） |
 | `REVERSE_DOMAINS` | _空_ | VLESS Reverse 需要穿透的域名列表（逗号分隔，`ENABLE_REVERSE=true` 时生效） |
@@ -342,12 +367,16 @@ docker compose restart
 | `ISP_LEADER_HYSTERESIS` | `1.15` | 上报主选（`FASTEST_PROXY_TAG`）的跨轮滞回余量：挑战者需超过上轮 leader 该倍数才换主，抑制抖动翻转告警 |
 | `ISP_8K_SMOOTH_MBPS` | `60` | `IS_8K_SMOOTH` 判定阈值（Mbps），与内部评级梯子 8K 档对齐；旧值 100 对跨境单连接几乎不可达 |
 | `SUBSTORE_CHECK_CRON` | `30 4 * * *` | 每日产出全部 remote 订阅做拉取自检的 cron 表达式；任一订阅失败（HTTP 非 2xx 或 0 节点）即发 `substore.sub_fetch.failed` 告警；置空 `""` 禁用 |
+| `CERT_RENEW_CRON` | 每日 `03:xx`（分钟按 hostname jitter） | TLS 证书每日续签 cron 开关。**镜像内默认开**：不设置此变量即按默认每日运行，无需配 compose env。值为完整 5 字段 cron 表达式时按该表达式调度；置空 `""` 禁用。续签逻辑：调用 `entrypoint.py cert-renew`，实际向 CA 申请仅当证书剩余有效期 <7 天时触发；申请成功后自动执行 `nginx -s reload` 使新证书立即生效（无需重启容器）；跳过时零操作。日志写 `/var/log/cert_renew.log`，并发 `cert.renew.completed` 事件（见 §4.6） |
 | `SECRET_REFRESH_INTERVAL_HOURS` | `1` | `secrets-refresh` cron 间隔（小时）：周期下载比对远端 `tmp.bin`，凭据变化才重解密 `/.env/secret` 并热重配；`0` 禁用。与镜像发布解耦，使密钥轮换有上界生效延迟（见 §2.3） |
 | `SECRET_REFRESH_ENABLED` | `true` | 即使 cron 已安装，也可通过此开关让 `secrets-refresh` 子命令 no-op |
 | `ISP_PER_SERVICE_SB` | `false` | 开启后 sing-box 为 Netflix / OpenAI / Claude / Gemini / Disney / YouTube 生成独立 `isp-auto-<service>` urltest balancer,各自用该服务的真实域名探测;xray 因 observatory 单例不受影响 |
 | `ISP_FALLBACK_STRATEGY` | `direct` | `direct`(静默直连) / `block`(fail-closed,CN / HK / RU 建议) |
 | `ISP_SPEED_CACHE_TTL_MIN` | `60` | 冷启动缓存 TTL（分钟）；`0` 禁用,每次 boot 强制实测 |
 | `ISP_SPEED_CACHE_ASYNC` | `true` | 缓存命中时是否后台线程异步刷新速度;`false` 仅用于调试 |
+| `ISP_SPEED_BOOT_BUDGET_SEC` | `45` | 启动测速墙钟预算（秒）；冷缓存实测超过该上界时放弃等待，主进程改用 STATUS_FILE 中 last-known `ISP_TAG` 渲染初始配置继续启动，测速线程在后台跑完并原子写回结果。`0` 禁用预算（同步等待，退回不设上界的行为） |
+
+> **冷启动延迟包络与降级**：首次启动（无缓存或缓存过期 TTL）时，ISP 测速串行实测每个节点（单节点耗时约 `ISP_SPEED_TIMEOUT_SEC` × `ISP_SPEED_SAMPLES`）。为防止该阶段阻塞后续证书 / 配置 / supervisord 拉起，启动测速受 `ISP_SPEED_BOOT_BUDGET_SEC`（默认 45 s）墙钟预算约束：超界即放弃等待，改用 STATUS_FILE 中 last-known 路由键继续 boot；若为无历史数据的真冷启动，路由键本轮保持未定，待下一次 `isp-retest` cron 补全。此外，`probe`（基础落地变量）/ `speed`（测速选路）/ `media`（流媒体可达性）三个 stage 均为**非致命**——任一抛异常只标记 `DEGRADED` 并继续启动，不像证书 / 密钥 / DH 参数那样 fail-fast 中止容器；启动汇总行的 `degraded=N` 计数即来源于此。缓存命中（TTL 内）时测速移入后台异步刷新，boot 几乎无额外延迟。
 
 #### v2 带宽采样器（流式 + 预热丢弃 + 时间窗 + 诊断）
 
@@ -446,7 +475,7 @@ docker exec sb-xray crontab -l | grep isp-retest
 | `ENABLE_SOCKS5_PROXY` | `true` | **`CN_EXIT_MODE` 留空时的派生开关**：`true` 且 `CN_EXIT_SOCKS5_HOST` 有值 → 派生 `socks5` 模式（`config_builder.py:306`）。`CN_EXIT_MODE` 显式取值时本变量不参与判定 |
 | `REVERSE_CN_EXIT` | `false` | **`CN_EXIT_MODE` 留空时的派生开关**：socks5 不就绪且本变量 `true` → 派生 `reverse` 模式（`config_builder.py:310`）。`CN_EXIT_MODE` 显式取值时不参与判定 |
 | `ENABLE_REVERSE` | 镜像 `false` / compose `true` | 启用 `r-tunnel` 反向隧道（`reverse` / `balance` 前置开关）；双口径见下方权威说明 |
-| `REVERSE_DOMAINS` | `domain:home.lan` 等 4 个内网域名 | 经 `r-tunnel` 穿透的域名列表（逗号分隔）；与 §2.4 VLESS Reverse 为**同一变量**，`reverse` / `balance` 复用，纯回国可留空 |
+| `REVERSE_DOMAINS` | _空_（镜像默认；纯回国/无内网穿透无需设置） | 经 `r-tunnel` 穿透的域名列表（逗号分隔）；与 §2.4 VLESS Reverse 为**同一变量**，`reverse` / `balance` 复用；需内网穿透时由运维注入，例如 `domain:host.example.lan,domain:nas.example.lan` |
 
 > 📘 **`ENABLE_REVERSE` 默认姿态（权威口径 · 本篇为 owner，05/09 引用此处）**
 >
@@ -480,21 +509,29 @@ docker exec sb-xray crontab -l | grep isp-retest
 
 ```mermaid
 flowchart TD
-    A["访问请求"] --> B{"携带 Token?"}
-    B -- "是" --> C{"Token 正确?"}
-    C -- "是" --> D["允许访问"]
-    C -- "否" --> E["要求 HTTP 基础认证"]
-    B -- "否" --> E
+    A["访问请求"] --> T{"SUBSCRIBE_TOKEN<br/>已配置且字符合法?"}
+    T -- "否（空/非法字符）" --> E
+    T -- "是" --> B{"携带 ?token=?"}
+    B -- "是，值匹配" --> D["允许访问（免 Basic Auth）"]
+    B -- "否或值不匹配" --> E["要求 HTTP 基础认证"]
     E -- "凭据正确" --> D
     E -- "凭据错误" --> F["返回 404"]
 
-    style D fill:#55efc4,stroke:#00b894,stroke-width:2px
-    style F fill:#ff7675,stroke:#d63031,stroke-width:2px
+    class D process
+    class F block
+    class T,B decision
+    class E gateway
+    classDef process  fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef block    fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
+    classDef decision fill:#fdcb6e,stroke:#e0a33e,stroke-width:2px,color:#333
+    classDef gateway  fill:#dfe6e9,stroke:#636e72,stroke-width:2px,color:#333
 ```
+
+> 📘 **Fail-closed 不变量**：`SUBSCRIBE_TOKEN` 为空、或含 nginx 语法破坏字符（双引号、换行、空白、分号、花括号、反斜杠等）时，nginx `map` 块仅保留 `default "Restricted"`——任何 `?token=` 参数（含空串）都**不能**绕过 Basic Auth。订阅端点永远不会在无凭据的状态下开放。
 
 ### 3.2 认证方式一：Token 认证（推荐）
 
-Token 在容器首次启动时**自动生成**。
+Token 在容器首次启动时**自动生成**（`[a-z0-9]` 32 位字符，见 §2.4）。
 
 **查看当前 Token**：
 
@@ -508,12 +545,14 @@ docker exec sb-xray grep SUBSCRIBE_TOKEN /.env/sb-xray
 https://your-domain.com/sb-xray/MihomoPro.yaml?token=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
 ```
 
-**自定义 Token**（可选）：
+**自定义 Token**（可选，允许字符集 `[a-zA-Z0-9_-]`，最长 256 字符）：
 
 ```yaml
 environment:
   - SUBSCRIBE_TOKEN=your_custom_secure_token_32_chars
 ```
+
+> ⚠️ 自定义 Token 含空格、双引号、分号等字符时，`config_builder` 会检测到非法字符并 fail-closed——该 Token 不生效，订阅端点强制 Basic Auth，容器日志打 WARNING。
 
 ### 3.3 认证方式二：HTTP 基础认证（备用）
 
@@ -594,7 +633,7 @@ SAN[1]: example.com       (主域名)
 ### 5.1 自动更新
 
 - **启动阶段**: entrypoint `geoip` 段（17 段坐标系第 11 段，`stages/geoip.py`）调用 `geo.refresh(on_startup=True)`。文件 <7 天视为新鲜,直接跳过下载;仅维护 `/usr/local/bin/*.dat` 符号链接。
-- **每日任务**: cron 每天 03:00 (容器时区) 执行 `/scripts/entrypoint.py geo-update`,强制刷新并通过 `supervisorctl` 重启 xray 让新规则生效。
+- **每日任务**: cron 在 03:00 时段（分钟受 `ISP_RETEST_JITTER` 打散，默认 `true`；设 `false` 回退到分钟 0）执行 `/scripts/entrypoint.py geo-update`，强制刷新并通过 `supervisorctl` 重启 xray 让新规则生效。
 - **日志**: cron 输出重定向到 `/var/log/geo_update.log`;启动阶段输出走 entrypoint 的 stderr。
 
 ### 5.2 手动更新
@@ -633,18 +672,21 @@ docker compose restart sb-xray
 
 ### 5.6 定时任务（cron）总表
 
-系统运行期共有 **6 个定时任务**，分属两个调度来源：前 5 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 6 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
+系统运行期共有 **7 个定时任务**，分属两个调度来源：前 6 个由容器内 root crontab 安装（`scripts/sb_xray/stages/cron.py`，幂等重装、随 env 收敛），第 7 个由 Sub-Store 后端进程自身按其原生 env 调度（不进 root crontab）。
 
 | # | 任务 | 默认表达式 | 控制变量 | 调度来源 | 用途 |
 |:---:|:---|:---|:---|:---|:---|
-| 1 | `geo-update` | `0 3 * * *` | —（恒定 daily 03:00） | root crontab | 强制刷新 GeoIP/GeoSite 规则库并重启 xray（见 §5.1） |
-| 2 | `isp-retest` | `0 */6 * * *`（按 hostname 打散分钟位） | `ISP_RETEST_INTERVAL_HOURS`（默认 `6`，`0` 禁用） | root crontab | 周期性带宽重测，线路集/类别变化时热重配 balancer（见 §2.6） |
+| 1 | `geo-update` | `<m> 3 * * *`（分钟按 hostname 派生 0–59；`ISP_RETEST_JITTER=false` 时为 0） | `ISP_RETEST_JITTER`（默认 `true`，`false` 回退分钟 0） | root crontab | 强制刷新 GeoIP/GeoSite 规则库并重启 xray（见 §5.1） |
+| 2 | `isp-retest` | `0 */6 * * *`（按 hostname 打散分钟位） | `ISP_RETEST_INTERVAL_HOURS`（默认 `6`，`0` 禁用） | root crontab | 周期性带宽重测，线路集/类别变化时热重配 balancer 并重启 xray/sing-box，重启后执行 `nginx -s reload` 使重渲 nginx 配置即时生效（见 §2.6） |
 | 3 | `substore-check` | `30 4 * * *` | `SUBSTORE_CHECK_CRON`（空串禁用） | root crontab | 拉取自检全部 remote 订阅，失败发 `substore.sub_fetch.failed` 告警（见 §2.6） |
-| 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，发 `secret.refresh.completed` 事件（见 §2.3） |
+| 4 | `secrets-refresh` | `0 */1 * * *`（按 hostname 打散分钟位） | `SECRET_REFRESH_INTERVAL_HOURS`（默认 `1`，`0` 禁用） | root crontab | 周期下载比对远端 `tmp.bin`，凭据变化时重解密 `/.env/secret`、热重配并重启 xray/sing-box，重启后执行 `nginx -s reload` 使重渲 nginx 配置即时生效，发 `secret.refresh.completed` 事件（见 §2.3） |
 | 5 | `log-rotate` | `0 * * * *` | `LOG_ROTATE_CRON`（空串禁用） | root crontab | 按大小轮转 `/var/log` 下日志（logrotate），防止 nginx/xray/sing-box 日志撑满磁盘（见 §6.7） |
-| 6 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
+| 6 | `cert-renew` | `xx 3 * * *`（分钟按 hostname jitter） | `CERT_RENEW_CRON`（**镜像内默认开**，空串禁用） | root crontab | 每日检查 TLS 证书有效期；剩余 <7 天时通过 acme.sh 向 CA 申请续签并执行 `nginx -s reload` 使新证书立即生效；有效期充足时零操作。日志写 `/var/log/cert_renew.log`，发 `cert.renew.completed` 事件 |
+| 7 | Sub-Store 后端定时同步 | `0 4 * * *` | `SUB_STORE_BACKEND_SYNC_CRON` | Sub-Store 进程原生 | Sub-Store 后端自身的订阅后端同步任务；由 sub-store node 进程读取该 env 调度，**不在 root crontab 内**。默认排在 `substore-check`（04:30）前 30 分钟，使自检验证的是当天刚同步的数据 |
 
-> 📘 任务 1–5 用 `docker exec sb-xray crontab -l` 可见；任务 6 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
+> 📘 任务 1–6 用 `docker exec sb-xray crontab -l` 可见；任务 7 是 Sub-Store 应用层调度，不出现在 crontab，仅作为 env 透传给 sub-store 进程（`docker-compose.yml` 不显式设时用镜像内默认 `0 4 * * *`；显式设过该 env 的部署不受默认值变更影响）。
+>
+> 🔬 **托管行识别机制**：重装/收敛时，`cron.py` 以正则 `/scripts/entrypoint\.py <子命令>(?:\s|$)` 识别需剥除的托管行——子命令名后须接空白或行尾（token 边界），而非裸子串匹配。不含该模式的自定义 crontab 行在收敛过程中原样保留，重装操作幂等（不产生重复行）。
 
 ---
 

@@ -30,14 +30,45 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
-def _remark(protocol: str) -> str:
-    """`${FLAG_PREFIX}<proto> ✈ ${NODE_NAME}${NODE_SUFFIX}` — no URL-encode.
+def _port(name: str) -> str:
+    """读取端口 env 并 int() 校验;非数字/空时 fail-loud 指名 env(J1)。
 
-    show-config.sh leaves the ``#fragment`` remark un-encoded (the Bash
-    scripts simply append ``#${FLAG_PREFIX}...``); we preserve that so
-    the base64 payload is byte-identical.
+    端口走订阅链接 netloc / vmess JSON 的 ``port``;非数字会产出无效链接,
+    客户端静默丢节点。boot 流水线宁可在生成期显式失败也不发坏订阅。
+    """
+    raw = _env(name)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"端口 env {name}={raw!r} 不是合法整数,无法生成订阅链接"
+        ) from exc
+    if not (1 <= value <= 65535):
+        raise RuntimeError(
+            f"端口 env {name}={raw!r} 超出合法范围 1-65535"
+        )
+    return raw
+
+
+def _remark_raw(protocol: str) -> str:
+    """`${FLAG_PREFIX}<proto> ✈ ${NODE_NAME}${NODE_SUFFIX}` — un-encoded.
+
+    Returns the assembled remark string as-is, suitable for JSON fields
+    (e.g. vmess ``ps``) where clients read the value verbatim and must NOT
+    receive percent-encoded text.
     """
     return f"{_env('FLAG_PREFIX')}{protocol} ✈ {_env('NODE_NAME')}{_env('NODE_SUFFIX')}"
+
+
+def _remark(protocol: str) -> str:
+    """`${FLAG_PREFIX}<proto> ✈ ${NODE_NAME}${NODE_SUFFIX}` — URL-encoded.
+
+    运维可自定义 FLAG_PREFIX/NODE_NAME/NODE_SUFFIX。这些值会进入订阅链接的
+    ``#fragment``；若含 ``#``/``&``/``?``/换行 会破坏 query 解析或产出可注入
+    链接(J1)。统一经 ``urlquote`` 编码，emoji/中文/空格走百分号编码后客户端
+    解码仍能还原原始备注(safe="-._~"，与 Bash/JS quote 默认一致)。
+    """
+    return urlquote(_remark_raw(protocol))
 
 
 def urlquote(value: str) -> str:
@@ -52,7 +83,7 @@ def urlquote(value: str) -> str:
 
 def build_hysteria2_link() -> str:
     domain = _env("DOMAIN")
-    port = _env("PORT_HYSTERIA2")
+    port = _port("PORT_HYSTERIA2")
     pwd = _env("SB_UUID")
     return (
         f"hysteria2://{pwd}@{domain}:{port}/"
@@ -65,7 +96,7 @@ def build_hysteria2_link() -> str:
 
 def build_tuic_link() -> str:
     domain = _env("DOMAIN")
-    port = _env("PORT_TUIC")
+    port = _port("PORT_TUIC")
     uuid = _env("SB_UUID")
     return (
         f"tuic://{uuid}:{uuid}@{domain}:{port}"
@@ -78,7 +109,7 @@ def build_tuic_link() -> str:
 
 def build_anytls_link() -> str:
     domain = _env("DOMAIN")
-    port = _env("PORT_ANYTLS")
+    port = _port("PORT_ANYTLS")
     uuid = _env("SB_UUID")
     return f"anytls://{uuid}@{domain}:{port}?security=tls&type=tcp#{_remark('AnyTLS')}"
 
@@ -91,9 +122,9 @@ def build_vmess_link() -> str:
     """
     payload = {
         "v": "2",
-        "ps": _remark("Vmess"),
+        "ps": _remark_raw("Vmess"),
         "add": _env("CDNDOMAIN"),
-        "port": _env("LISTENING_PORT"),
+        "port": _port("LISTENING_PORT"),
         "id": _env("XRAY_UUID"),
         "aid": "0",
         "scy": "auto",
@@ -114,7 +145,7 @@ def build_vmess_link() -> str:
 def build_vless_vision_link() -> str:
     uuid = _env("XRAY_UUID")
     domain = _env("DOMAIN")
-    port = _env("LISTENING_PORT")
+    port = _port("LISTENING_PORT")
     dest = _env("DEST_HOST")
     pbk = _env("XRAY_REALITY_PUBLIC_KEY")
     sid = _env("XRAY_REALITY_SHORTID")
@@ -162,7 +193,7 @@ def _xhttp_reality_base(*, compat: bool) -> str:
 def build_xhttp_reality_link(*, compat: bool = False) -> str:
     uuid = _env("XRAY_UUID")
     domain = _env("DOMAIN")
-    port = _env("LISTENING_PORT")
+    port = _port("LISTENING_PORT")
     return (
         f"vless://{uuid}@{domain}:{port}"
         f"?{_xhttp_reality_base(compat=compat)}"
@@ -180,7 +211,7 @@ def _xhttp_down_reality_extra(*, compat: bool) -> str:
     pbk = _env("XRAY_REALITY_PUBLIC_KEY")
     sid = _env("XRAY_REALITY_SHORTID")
     domain = _env("DOMAIN")
-    port = _env("LISTENING_PORT")
+    port = _port("LISTENING_PORT")
     path_tail = "xhttp-compat" if compat else "xhttp"
     mode = "packet-up" if compat else "auto"
     return (
@@ -207,7 +238,7 @@ def _xhttp_down_tls_extra(*, compat: bool) -> str:
     url_path = _env("XRAY_URL_PATH")
     cdn = _env("CDNDOMAIN")
     domain = _env("DOMAIN")
-    port = _env("LISTENING_PORT")
+    port = _port("LISTENING_PORT")
     path_tail = "xhttp-compat" if compat else "xhttp"
     mode = "packet-up" if compat else "auto"
     return (
@@ -230,7 +261,7 @@ def _xhttp_down_tls_extra(*, compat: bool) -> str:
 def build_up_cdn_down_reality_link(*, compat: bool = False) -> str:
     uuid = _env("XRAY_UUID")
     cdn = _env("CDNDOMAIN")
-    port = _env("LISTENING_PORT")
+    port = _port("LISTENING_PORT")
     url_path = _env("XRAY_URL_PATH")
     mlkem = _env("XRAY_MLKEM768_CLIENT")
     path_tail = "xhttp-compat" if compat else "xhttp"
@@ -248,7 +279,7 @@ def build_up_cdn_down_reality_link(*, compat: bool = False) -> str:
 def build_up_reality_down_cdn_link(*, compat: bool = False) -> str:
     uuid = _env("XRAY_UUID")
     domain = _env("DOMAIN")
-    port = _env("LISTENING_PORT")
+    port = _port("LISTENING_PORT")
     url_path = _env("XRAY_URL_PATH")
     mlkem = _env("XRAY_MLKEM768_CLIENT")
     dest = _env("DEST_HOST")
@@ -270,7 +301,7 @@ def build_up_reality_down_cdn_link(*, compat: bool = False) -> str:
 def build_mix_link(*, compat: bool = False) -> str:
     uuid = _env("XRAY_UUID")
     cdn = _env("CDNDOMAIN")
-    port = _env("LISTENING_PORT")
+    port = _port("LISTENING_PORT")
     url_path = _env("XRAY_URL_PATH")
     mlkem = _env("XRAY_MLKEM768_CLIENT")
     pbk = _env("XRAY_REALITY_PUBLIC_KEY")
@@ -304,7 +335,7 @@ def build_xhttp_h3_link() -> str:
     """XHTTP/3 + BBR — main track only (Bash has no compat variant)."""
     uuid = _env("XRAY_UUID")
     domain = _env("DOMAIN")
-    port = _env("PORT_XHTTP_H3")
+    port = _port("PORT_XHTTP_H3")
     url_path = _env("XRAY_URL_PATH")
     mlkem = _env("XRAY_MLKEM768_CLIENT")
     extra = (
@@ -353,13 +384,9 @@ def _part1_links() -> list[str]:
 
 
 def _part1_common_links() -> list[str]:
-    return [
-        build_hysteria2_link(),
-        build_tuic_link(),
-        build_anytls_link(),
-        build_vmess_link(),
-        build_vless_vision_link(),
-    ]
+    # J4: common 轨道 part1 与 v2rayn 轨道 part1 完全相同（同 5 协议、同顺序、
+    # 同 remark）。委托而非复制，避免两份实现漂移。差异只在 part2（compat）。
+    return _part1_links()
 
 
 def _part2_main_links() -> list[str]:

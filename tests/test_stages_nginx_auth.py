@@ -26,7 +26,9 @@ def test_writes_htpasswd_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert sbauth.setup_basic_auth(user="alice", password="secret", path=target) is True
     content = target.read_text(encoding="utf-8")
     assert content == "alice:$apr1$abc$secret-enc\n"
-    assert oct(target.stat().st_mode)[-3:] == "644"
+    mode = oct(target.stat().st_mode)[-3:]
+    assert mode == "640", f"htpasswd 应为 0640(other 不可读),实得 {mode}"
+    assert int(mode[2]) == 0, "other 位必须为 0(world-readable 会泄漏 apr1 哈希)"
 
 
 def test_apr1_uses_openssl_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -23,8 +23,17 @@ without a second xray process.
 
 from __future__ import annotations
 
+import functools
+import re
 from dataclasses import dataclass, field
 from typing import Final
+
+
+@functools.cache
+def _compile_patterns(patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    """Compile a tuple of regex strings once; LRU-cached so the same tuple
+    (identity by value, since tuples are hashable) is never compiled twice."""
+    return tuple(re.compile(p) for p in patterns)
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,12 @@ class ContentSignature:
     real_substrings: tuple[str, ...] = ()
     blocked_substrings: tuple[str, ...] = ()
     blocked_url_patterns: tuple[str, ...] = ()
+
+    @property
+    def compiled_url_patterns(self) -> tuple[re.Pattern[str], ...]:
+        """Pre-compiled ``blocked_url_patterns`` — compiled once per distinct
+        pattern tuple (module-level LRU cache) instead of per probe call."""
+        return _compile_patterns(self.blocked_url_patterns)
 
 
 @dataclass(frozen=True)
@@ -126,6 +141,16 @@ SERVICE_SPECS: Final[tuple[ServiceSpec, ...]] = (
 
 # env_var → spec lookup for media decision (unique env_vars).
 SPECS_BY_ENV: Final[dict[str, ServiceSpec]] = {s.env_var: s for s in SERVICE_SPECS}
+
+
+def service_env_vars() -> frozenset[str]:
+    """``*_OUT`` env vars declared in the central registry.
+
+    The single source of truth for the C4 superset invariant: any env var here
+    MUST also appear in ``routing.isp._SERVICE_SPEC`` so the xray rule tuples
+    cover every probed service (drift = a service with no xray routing rule).
+    """
+    return frozenset(s.env_var for s in SERVICE_SPECS)
 
 
 def per_service_enabled() -> bool:

@@ -43,10 +43,11 @@ def test_raises_when_decode_env_missing(tmp_path: Path, monkeypatch: pytest.Monk
 @respx.mock
 def test_download_and_decrypt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DECODE", "test-decode-key")
+    monkeypatch.setenv("SECRETS_URL", "https://test.local/blob.bin")
     secret = tmp_path / "secret.bin"
     tmp_bin = tmp_path / "tmp.bin"
 
-    respx.get("https://raw.githubusercontent.com/currycan/key/master/tmp.bin").mock(
+    respx.get("https://test.local/blob.bin").mock(
         return_value=httpx.Response(200, content=b"encrypted-blob")
     )
 
@@ -72,7 +73,8 @@ def test_download_and_decrypt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 @respx.mock
 def test_download_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DECODE", "key")
-    respx.get("https://raw.githubusercontent.com/currycan/key/master/tmp.bin").mock(
+    monkeypatch.setenv("SECRETS_URL", "https://test.local/blob.bin")
+    respx.get("https://test.local/blob.bin").mock(
         side_effect=httpx.ConnectError("down")
     )
     with pytest.raises(RuntimeError, match="download failed"):
@@ -82,7 +84,8 @@ def test_download_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 @respx.mock
 def test_decrypt_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DECODE", "key")
-    respx.get("https://raw.githubusercontent.com/currycan/key/master/tmp.bin").mock(
+    monkeypatch.setenv("SECRETS_URL", "https://test.local/blob.bin")
+    respx.get("https://test.local/blob.bin").mock(
         return_value=httpx.Response(200, content=b"blob")
     )
 
@@ -92,3 +95,46 @@ def test_decrypt_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="decrypt failed"):
         sbsec.decrypt_remote_secrets(secret_file=tmp_path / "s.bin", tmp_path=tmp_path / "t.bin")
+
+
+# --------------------------------------------------------------------------- #
+# _download_blob — bounded single retry                                        #
+# --------------------------------------------------------------------------- #
+
+
+@respx.mock
+def test_download_blob_retries_once_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRETS_URL", "https://test.local/blob.bin")
+    blob = tmp_path / "tmp.bin"
+    route = respx.get("https://test.local/blob.bin").mock(
+        side_effect=[
+            httpx.ConnectError("flap"),
+            httpx.Response(200, content=b"ENCRYPTED-BLOB"),
+        ]
+    )
+    sbsec._download_blob(blob)
+    assert route.call_count == 2
+    assert blob.read_bytes() == b"ENCRYPTED-BLOB"
+
+
+@respx.mock
+def test_download_blob_raises_after_all_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRETS_URL", "https://test.local/blob.bin")
+    blob = tmp_path / "tmp.bin"
+    route = respx.get("https://test.local/blob.bin").mock(side_effect=httpx.ConnectError("down"))
+    with pytest.raises(RuntimeError, match="download failed"):
+        sbsec._download_blob(blob)
+    assert route.call_count == 2
+
+
+def test_secrets_url_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SECRETS_URL", "https://example.com/blob.bin")
+    assert sbsec._secrets_url() == "https://example.com/blob.bin"
+
+
+def test_secrets_url_default_has_no_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SECRETS_URL", raising=False)
+    default = sbsec._secrets_url()
+    # §4: in-code 默认不得含具体 GitHub 账号/环境特定主机
+    assert "currycan" not in default
+    assert "raw.githubusercontent.com/currycan" not in default

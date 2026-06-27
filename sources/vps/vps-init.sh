@@ -203,6 +203,9 @@ load_config() {
     TS_HOSTNAME="${TS_HOSTNAME:-}"
     CANARY_URL="${CANARY_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/sbx-canary-check.sh}"
     WATCHDOG_URL="${WATCHDOG_URL:-https://raw.githubusercontent.com/currycan/sb-xray/main/sources/vps/cn-exit-watchdog.sh}"
+    # Tailscale 官方安装脚本源（init 侧变量，从 initial.env 读，不入容器 .env）。
+    # 默认官方源；CN 拉取慢/不通时可在 initial.env 改写为镜像/代理地址。
+    TS_INSTALL_URL="${TS_INSTALL_URL:-https://tailscale.com/install.sh}"
     WD_TG_TOKEN="${WD_TG_TOKEN:-}"
     WD_TG_CHAT="${WD_TG_CHAT:-}"
     SKIP_CANARY_WIRING="${SKIP_CANARY_WIRING:-0}"
@@ -582,7 +585,7 @@ install_redeploy_helper() {
 setup_cn_exit() {
     # 回国（CN-exit）节点专属（由 main 在 OPENWRT_TS_IP 非空时调用）：装 Tailscale
     # 入网 + keepalive cron + watchtower 自检护栏 + 反向探活。参数来自 initial.env。
-    local _tsbin _canary _wd _check_min
+    local _tsbin _canary _wd _check_min _ts_tmp
 
     # authkey 可从文件读（避免明文进进程表/历史）
     if [ -z "$TS_AUTHKEY" ] && [ -n "$TS_AUTHKEY_FILE" ] && [ -f "$TS_AUTHKEY_FILE" ]; then
@@ -597,8 +600,17 @@ setup_cn_exit() {
     # 1. 安装 Tailscale 并入网（socks5 腿命脉）
     if ! command -v tailscale >/dev/null 2>&1; then
         [ -n "$TS_AUTHKEY" ] || die "未装 tailscale 且无 TS_AUTHKEY —— 在 initial.env 配 TS_AUTHKEY 后重跑（或 inline 传入）"
-        log "安装 Tailscale..."
-        curl -fsSL https://tailscale.com/install.sh | sh || die "Tailscale 安装失败"
+        # 不裸 curl|sh：先下载到 tmp，校验非空 + shebang 再执行（与 install_tcp_brutal 同纪律，
+        # 防管道执行未完整下载/被篡改的脚本；失败即 die，因 Tailscale 是 socks5 腿命脉，非可选）。
+        log "安装 Tailscale... ← $TS_INSTALL_URL"
+        _ts_tmp="$(mktemp)"
+        if curl -fsSL "$TS_INSTALL_URL" -o "$_ts_tmp" && [ -s "$_ts_tmp" ] && head -1 "$_ts_tmp" | grep -q '#!'; then
+            bash "$_ts_tmp" || { rm -f "$_ts_tmp"; die "Tailscale 安装失败"; }
+            rm -f "$_ts_tmp"
+        else
+            rm -f "$_ts_tmp"
+            die "Tailscale 安装脚本下载失败或非法（$TS_INSTALL_URL）"
+        fi
     fi
     if [ -n "$TS_AUTHKEY" ]; then
         log "tailscale up（hostname=$TS_HOSTNAME）"

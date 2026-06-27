@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import subprocess
 from typing import Any
 
@@ -137,10 +138,11 @@ def test_show_info_links_token_block_only_when_token_set(
     monkeypatch.setenv("SUBSCRIBE_TOKEN", "secret-token")
     monkeypatch.setenv("PUBLIC_USER", "admin")
     monkeypatch.setenv("PUBLIC_PASSWORD", "s3cret")
+    monkeypatch.delenv("SHOW_CREDS", raising=False)
     display.show_info_links()
     out = capsys.readouterr().out
     assert "?token=secret-token" in out
-    assert "Basic Auth: admin / s3cret" in out
+    assert "Basic Auth: ad**** / s3****" in out
 
 
 def test_show_info_links_writes_ansi_stripped_archive(
@@ -179,3 +181,43 @@ def test_show_info_links_no_reverse_bridge_link_when_disabled(
     display.show_info_links()
     out = capsys.readouterr().out
     assert "reverse_bridge_client.json" not in out
+
+
+# ---- J3: Basic Auth masking tests -------------------------------------------
+
+
+def _capture_banner(monkeypatch: pytest.MonkeyPatch, **env: str) -> str:
+    base = {
+        "CDNDOMAIN": "cdn.example.com",
+        "DOMAIN": "vpn.example.com",
+        "SUBSCRIBE_TOKEN": "tok123",
+        "PUBLIC_USER": "adminuser",
+        "PUBLIC_PASSWORD": "s3cretpw",
+        "ENABLE_SUBSTORE": "false",
+    }
+    base.update(env)
+    for k in ("DEBUG", "ENABLE_REVERSE", "SHOW_CREDS"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in base.items():
+        monkeypatch.setenv(k, v)
+    buf = io.StringIO()
+    display.render_info_links(buf)
+    return buf.getvalue()
+
+
+def test_mask_secret_keeps_two_chars() -> None:
+    assert display._mask_secret("s3cretpw") == "s3****"
+    assert display._mask_secret("ab") == "****"  # too short — full mask
+    assert display._mask_secret("") == "****"
+
+
+def test_basic_auth_masked_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = _capture_banner(monkeypatch)
+    assert "s3cretpw" not in out  # plaintext password must not appear
+    assert "ad****" in out  # user masked
+    assert "s3****" in out  # password masked
+
+
+def test_basic_auth_plaintext_when_show_creds(monkeypatch: pytest.MonkeyPatch) -> None:
+    out = _capture_banner(monkeypatch, SHOW_CREDS="true")
+    assert "adminuser / s3cretpw" in out

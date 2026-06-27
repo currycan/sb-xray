@@ -19,6 +19,7 @@ regress shell compatibility.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 # Matches ``${VAR}`` or ``$VAR`` (POSIX identifier: ``[A-Za-z_][A-Za-z0-9_]*``).
 _VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+# JSON 字符串字面量内会破坏 json.loads 的裸字符(未转义的 " \ 控制符)。
+_JSON_BREAKING = re.compile(r'["\\\n\r\t]')
 
 # Per-program ENABLE_* switches for daemon.ini. Opt-out semantics: a program is
 # kept unless its flag is explicitly set to "false" (case-insensitive). Used by
@@ -96,14 +100,37 @@ def _render_flat(src: Path, dest: Path) -> None:
     dest.write_text(_envsubst(src.read_text(encoding="utf-8")), encoding="utf-8")
 
 
+def _suspect_json_breaking_envs(template_text: str) -> list[str]:
+    """模板中被引用、且当前值含 JSON-危险字符的 env 键名(J2 诊断用)。
+
+    ``_render_json`` 单遍 envsubst 直插 ``os.environ[name]`` 不做 JSON 转义;
+    含 ``"``/``\\``/换行 的 env 注入字符串字面量会让 ``json.loads`` 失败,而
+    异常本身只指向模板文件。此函数把嫌疑 env 列出,缩短排查回合。
+    """
+    names = {m.group(1) or m.group(2) for m in _VAR_RE.finditer(template_text)}
+    suspects = [
+        name
+        for name in names
+        if name in os.environ and _JSON_BREAKING.search(os.environ[name])
+    ]
+    return sorted(suspects)
+
+
 def _render_json(src: Path, dest: Path) -> None:
     """Render ``src`` then validate as JSON (entrypoint.sh ``_apply_tpl`` jq)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    rendered = _envsubst(src.read_text(encoding="utf-8"))
+    raw = src.read_text(encoding="utf-8")
+    rendered = _envsubst(raw)
     try:
         data = json.loads(rendered)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"invalid JSON after render: {src} -> {exc}") from exc
+        suspects = _suspect_json_breaking_envs(raw)
+        hint = (
+            f" — 嫌疑 env(值含 JSON-危险字符 \" \\ 或换行): {', '.join(suspects)}"
+            if suspects
+            else ""
+        )
+        raise RuntimeError(f"invalid JSON after render: {src} -> {exc}{hint}") from exc
     dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
@@ -535,6 +562,98 @@ def _apply_access_log_env() -> None:
     )
 
 
+# --- dufs 权限解析(A4: fail-closed 默认) ---------------------------------
+
+# 未设时的安全默认:写操作全关,只读浏览相关保持可用。Dockerfile 已声明
+# 同名 ENV(watchtower 旧 env 集也带,§2 向后兼容),此处是镜像内二次兜底,
+# 保证任何 reload 路径都不会渲染出字面量 ${DUFS_ALLOW_*} 或默认放开权限。
+_DUFS_PERMISSION_DEFAULTS: dict[str, str] = {
+    "DUFS_ALLOW_ALL": "false",
+    "DUFS_ALLOW_UPLOAD": "false",
+    "DUFS_ALLOW_DELETE": "false",
+    "DUFS_ALLOW_SYMLINK": "false",
+    "DUFS_ALLOW_ARCHIVE": "false",
+    "DUFS_ALLOW_SEARCH": "true",
+    "DUFS_ENABLE_CORS": "false",
+    "DUFS_RENDER_INDEX": "true",
+    "DUFS_RENDER_TRY_INDEX": "true",
+    "DUFS_RENDER_SPA": "true",
+    "DUFS_COMPRESS": "low",
+    "DUFS_LOG_FORMAT": '$remote_addr "$request" $status $http_user_agent',
+}
+
+
+def _resolve_dufs_permissions() -> None:
+    """Fill missing ``DUFS_*`` permission vars with fail-closed defaults.
+
+    conf.yml 用 ``${DUFS_ALLOW_*}`` 占位符;``_envsubst`` 对未设变量保留
+    字面量(产出非法 yaml),且默认不应放开写权限。此处保证渲染前每个键
+    都有安全值。显式设置优先(运维可放开)。
+    """
+    for key, default in _DUFS_PERMISSION_DEFAULTS.items():
+        if not os.environ.get(key, "").strip():
+            os.environ[key] = default
+
+
+# --- supervisord 控制凭据(F4: 与 public/dufs 凭据分离) --------------------
+
+_SUPERVISOR_DEFAULT_USER = "sb-xray"
+
+
+def _resolve_supervisor_credentials() -> None:
+    """Provide distinct supervisord control creds, separate from PUBLIC_*.
+
+    一处 PUBLIC_PASSWORD 泄漏不应同时交出 supervisord 控制权。未显式设置
+    ``SUPERVISOR_PASSWORD`` 时,从 ``PUBLIC_PASSWORD`` 用固定 salt 做 sha256
+    确定性派生 —— 与 public 不同值,且 watchtower 旧 env 集重建镜像也能稳定
+    生成(§2 镜像内默认)。显式设置优先。
+    """
+    if not os.environ.get("SUPERVISOR_USER", "").strip():
+        os.environ["SUPERVISOR_USER"] = _SUPERVISOR_DEFAULT_USER
+    if not os.environ.get("SUPERVISOR_PASSWORD", "").strip():
+        seed = os.environ.get("PUBLIC_PASSWORD", "")
+        # 盐值冻结——禁止改动以跟随 _SUPERVISOR_DEFAULT_USER，改盐会轮转所有存量部署的派生密码
+        digest = hashlib.sha256(f"sb-xray-supervisor::{seed}".encode()).hexdigest()
+        os.environ["SUPERVISOR_PASSWORD"] = digest[:32]
+
+
+# --- 订阅 token 认证 map(G4: 空 token fail-closed) ------------------------
+
+# 允许字符集：与 random_gen.generate("path") 的 _PATH_ALPHABET 一致([a-z0-9])，
+# 并兼容手动设置时常用的连字符(-)。凡含 nginx 语法破坏字符(" \n;{}\ 等)的
+# token 一律拒绝，fail-closed(强制 Basic Auth)，防止注入 nginx map 块。
+_SUBSCRIBE_TOKEN_RE: re.Pattern[str] = re.compile(r'^[a-z0-9A-Z_\-]{1,256}$')
+
+
+def _resolve_subscribe_token_map() -> None:
+    """Build the nginx ``$auth_type`` token-map body, fail-closed on empty/invalid.
+
+    nginx.conf 用 ``${NGINX_SUBSCRIBE_TOKEN_MAP}`` 占位符承载 map 的可变行。
+    ``SUBSCRIBE_TOKEN`` 非空且通过注入安全校验 → 生成 ``"<token>" "off";`` 让
+    token 持有者免 Basic Auth;为空或含 nginx 语法破坏字符 → 占位符为空串,map
+    仅剩 ``default "Restricted"``,任何请求都强制 Basic Auth(绝不退化为
+    ``"" "off"`` 的全绕过)。
+
+    允许字符集：``[a-zA-Z0-9_-]``(覆盖 random_gen "path" 生成的 [a-z0-9] 及
+    手动配置时常见的大写字母、连字符、下划线)。含双引号、换行、空白、分号、
+    花括号、反斜杠等 nginx 特殊字符的 token 被视为恶意输入,fail-closed。
+    """
+    token = os.environ.get("SUBSCRIBE_TOKEN", "").strip()
+    if token:
+        if _SUBSCRIBE_TOKEN_RE.fullmatch(token):
+            os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = f'"{token}" "off";'
+        else:
+            os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = ""
+            logger.warning(
+                "SUBSCRIBE_TOKEN 含非法字符,注入防护 fail-closed(强制 Basic Auth)"
+            )
+    else:
+        os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"] = ""
+        logger.warning(
+            "SUBSCRIBE_TOKEN 未设置,订阅端点 token-bypass 关闭(强制 Basic Auth)"
+        )
+
+
 def run_logrotate(
     *,
     conf: Path = _LOGROTATE_CONF,
@@ -583,8 +702,14 @@ def create_config(*, workdir: Path | None = None) -> None:
         workdir = Path(os.environ.get("WORKDIR", "/tmp/sb-xray"))
 
     logger.info("渲染所有模板...")
+    # J6: RANDOM_NUM 是装饰用途的单 digit（0-9），仅供 nginx http.conf 中
+    # 被注释掉的 `root /home/wwwroot/html${RANDOM_NUM}` 占位填充。不参与任何
+    # 加密/认证/路由决策，故用 random.randint 而非 secrets——非安全敏感。
     os.environ["RANDOM_NUM"] = str(random.randint(0, 9))
     _apply_access_log_env()
+    _resolve_dufs_permissions()
+    _resolve_supervisor_credentials()
+    _resolve_subscribe_token_map()
 
     for src, dest in _FLAT_RENDERS:
         dest_path = _expand_dest(dest)

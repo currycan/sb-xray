@@ -73,3 +73,34 @@ def restart_daemons(
             logger.warning("重启 %s 失败: %s", svc, exc)
     logger.info("xray/sing-box 已重启以加载新配置")
     return True
+
+
+def reload_nginx(
+    *,
+    socket_path: Path = _SUPERVISOR_SOCKET,
+    runner: object = subprocess,
+) -> bool:
+    """Signal a running nginx to reload its freshly re-rendered config.
+
+    The cron reconfigure paths re-run ``create_config()``, which re-renders the
+    nginx configs alongside xray/sing-box. Restarting only the two cores leaves
+    nginx serving the stale config until the container restarts, so emit a cheap
+    ``nginx -s reload`` here. No-op when supervisord isn't up yet (boot-time
+    call, before ``exec supervisord``). Returns ``True`` on attempted reload,
+    ``False`` on skip; signal failures are swallowed (a transient reload error
+    must never abort the reconfigure).
+    """
+    if not socket_path.is_socket():
+        logger.info("supervisord socket absent — skipping nginx reload (boot-time call)")
+        return False
+    try:
+        runner.run(  # type: ignore[attr-defined]
+            ["nginx", "-s", "reload"],
+            check=False,
+            timeout=10,
+        )
+        logger.info("nginx 已 reload 以加载新渲染配置")
+        return True
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.warning("nginx reload 失败: %s", exc)
+        return False

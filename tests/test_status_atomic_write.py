@@ -45,3 +45,18 @@ def test_concurrent_writers_dont_lose_lines(status: Path) -> None:
         assert snap[f"B_{i}"] == str(i)
     # no leftover tmp files
     assert not list(status.parent.glob(".status.*.tmp"))
+
+
+def test_parse_status_line_grammar() -> None:
+    assert st._parse_status_line("export ISP_TAG='proxy-us'") == ("ISP_TAG", "proxy-us")
+    assert st._parse_status_line('export A="b c"') == ("A", "b c")
+    assert st._parse_status_line("export N=5") == ("N", "5")
+    assert st._parse_status_line("# comment") is None
+    assert st._parse_status_line("") is None
+
+
+def test_status_line_roundtrip_quoted_json(status: Path) -> None:
+    payload = '{"proxy-us-isp": 12.5, "proxy-la-isp": 0.0}'
+    st._write_status_line("_ISP_SPEEDS_JSON", payload)
+    snap = st._read_status_snapshot()
+    assert snap["_ISP_SPEEDS_JSON"] == payload

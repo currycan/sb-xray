@@ -56,7 +56,7 @@ SelectAI:       &SelectAI     {type: select, include-all: true, filter: *FilterA
 
 # ==================== 代理提供者 ====================
 proxy-providers:
-  AllOne: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/currycan/${GIST_CODE}/raw/AllOne-Common", override: {additional-prefix: "[AllOne] ", skip-cert-verify: false, udp: true, up: 2500 Mbps, down: 2500 Mbps}}
+  AllOne: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/AllOne-Common", override: {additional-prefix: "[AllOne] ", skip-cert-verify: false, udp: true, up: 2500 Mbps, down: 2500 Mbps}}
 
 # ==================== 策略组 ====================
 # Icon URLs reference a private repo; replace with your own icon hosting if needed
@@ -86,9 +86,9 @@ proxy-groups:
   - {name: TikTok, <<: *SelectISP, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/TikTok.png}
   - {name: YouTube, <<: *SelectFAST, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/YouTube.png}
   # 人工智能: AI-自动 优先（低延迟, AI 专用节点）
-  - {name: Claude, <<: *SelectAI, icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/ClaudeCode.png}
-  - {name: Gemini, <<: *SelectAI, icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/gemini.png}
-  - {name: 人工智能, <<: *SelectAI, icon: https://gh-proxy.com/raw.githubusercontent.com/currycan/key/master/icons/AI.png}
+  - {name: Claude, <<: *SelectAI, icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/ClaudeCode.png}
+  - {name: Gemini, <<: *SelectAI, icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/gemini.png}
+  - {name: 人工智能, <<: *SelectAI, icon: https://gh-proxy.com/raw.githubusercontent.com/${ICON_REPO}/master/icons/AI.png}
   # 社交平台: 家宽-自动 优先（Telegram/Twitter/WhatsApp 住宅 IP 更稳定）
   - {name: 社交平台, <<: *SelectISP, icon: https://gh-proxy.com/raw.githubusercontent.com/Koolson/Qure/master/IconSet/Color/PBS.png}
   # 国际媒体: 媒体-自动 优先（流媒体解锁节点）

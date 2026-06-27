@@ -300,3 +300,149 @@ def test_logrotate_replaces_stale_entry(
     content = target.read_text(encoding="utf-8")
     assert content.count("log-rotate") == 1
     assert "0 * * * *" in content
+
+
+def test_managed_line_anchors_to_full_command_token() -> None:
+    """子串匹配会误判;托管行判定须锚到 /scripts/entrypoint.py <subcmd>。"""
+    # 真托管行 → True
+    assert sbcron._is_managed_line(
+        "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+    )
+    assert sbcron._is_managed_line("0 */1 * * * /scripts/entrypoint.py secrets-refresh")
+    # 旧 shell 入口(迁移期)→ True
+    assert sbcron._is_managed_line("0 3 * * * /scripts/geo_update.sh >> /var/log/x.log 2>&1")
+    # 运维自定义行,参数里偶然含 marker 字面量 → 不得误删
+    assert not sbcron._is_managed_line("0 2 * * * /usr/bin/backup --tag isp-retest-archive")
+    assert not sbcron._is_managed_line("# note: geo-update runs daily")
+    assert not sbcron._is_managed_line("0 2 * * * /usr/bin/true")
+
+
+def test_managed_line_does_not_match_subcommand_prefix_collision() -> None:
+    """geo-update-extended 以托管子命令 geo-update 为前缀,但不是托管行,不得被误删。"""
+    assert not sbcron._is_managed_line(
+        "0 2 * * * /scripts/entrypoint.py geo-update-extended >> /log 2>&1"
+    )
+    # 同理 isp-retest 前缀碰撞
+    assert not sbcron._is_managed_line(
+        "0 3 * * * /scripts/entrypoint.py isp-retest-v2 >> /log 2>&1"
+    )
+    # 真正的托管行仍为 True
+    assert sbcron._is_managed_line(
+        "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+    )
+
+
+def test_install_preserves_custom_line_containing_marker_substring(tmp_path: Path) -> None:
+    target = tmp_path / "crontab"
+    target.write_text(
+        "0 2 * * * /usr/bin/backup --tag isp-retest-archive\n"
+        "# geo-update note kept\n",
+        encoding="utf-8",
+    )
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "/usr/bin/backup --tag isp-retest-archive" in content
+    assert "# geo-update note kept" in content
+    assert content.count("/scripts/entrypoint.py geo-update") == 1
+
+
+def test_all_managed_lines_reinstall_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target, isp_hours=6, secret_hours=1)
+    sbcron.install_crontab(cron_file=target, isp_hours=6, secret_hours=1)
+    content = target.read_text(encoding="utf-8")
+    for sub in ("geo-update", "isp-retest", "substore-check", "secrets-refresh", "log-rotate", "cert-renew"):
+        assert content.count(f"/scripts/entrypoint.py {sub}") == 1, sub
+
+
+def test_installs_cert_renew_default_daily(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CERT_RENEW_CRON", raising=False)
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")  # pin minute 0
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "0 3 * * * /scripts/entrypoint.py cert-renew" in content
+    assert content.count("cert-renew") == 1
+
+
+def test_cert_renew_default_jitters_minute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CERT_RENEW_CRON", raising=False)
+    monkeypatch.delenv("ISP_RETEST_JITTER", raising=False)
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "dc99-3")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    line = next(
+        ln for ln in target.read_text(encoding="utf-8").splitlines() if "cert-renew" in ln
+    )
+    assert int(line.split()[0]) == sbcron._jitter_minute()
+    assert line.split()[1] == "3"
+
+
+def test_cert_renew_custom_cron(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CERT_RENEW_CRON", "30 5 * * *")
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    assert "30 5 * * * /scripts/entrypoint.py cert-renew" in target.read_text(encoding="utf-8")
+
+
+def test_cert_renew_disabled_with_empty_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CERT_RENEW_CRON", "")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert "cert-renew" not in content
+    assert "geo-update" in content
+
+
+def test_cert_renew_replaces_stale_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CERT_RENEW_CRON", raising=False)
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    target.write_text(
+        "0 1 * * * /scripts/entrypoint.py cert-renew >> /var/log/cert_renew.log 2>&1\n",
+        encoding="utf-8",
+    )
+    sbcron.install_crontab(cron_file=target)
+    content = target.read_text(encoding="utf-8")
+    assert content.count("cert-renew") == 1
+    assert "0 3 * * *" in content
+
+
+def test_geo_update_default_jitters_minute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default (no ISP_RETEST_JITTER) must NOT pin geo-update to minute 0."""
+    monkeypatch.delenv("ISP_RETEST_JITTER", raising=False)
+    monkeypatch.setattr(sbcron.socket, "gethostname", lambda: "dc99-3")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    geo_line = next(
+        ln for ln in target.read_text(encoding="utf-8").splitlines() if "geo-update" in ln
+    )
+    fields = geo_line.split()
+    assert int(fields[0]) == sbcron._jitter_minute()  # jittered minute
+    assert fields[1] == "3"  # hour stays 03:00
+
+
+def test_geo_update_jitter_disabled_pins_minute_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ISP_RETEST_JITTER", "false")
+    target = tmp_path / "crontab"
+    sbcron.install_crontab(cron_file=target)
+    geo_line = next(
+        ln for ln in target.read_text(encoding="utf-8").splitlines() if "geo-update" in ln
+    )
+    assert geo_line.startswith("0 3 * * * /scripts/entrypoint.py geo-update")

@@ -189,6 +189,7 @@ flowchart LR
 | `WATCHDOG_URL` | `cn-exit-watchdog.sh`（回国节点护栏） |
 | `SSRPOLIPO_COMPOSE_URL` | ssr-polipo compose（`INSTALL_SSRPOLIPO=1` 时必给） |
 | `TCP_BRUTAL_URL` | tcp-brutal 安装脚本 |
+| `TS_INSTALL_URL` | Tailscale 官方安装脚本（回国节点首装时下载到 tmp 校验后执行） |
 
 > CN 节点拉 raw 慢时，把对应 `*_URL` 指向镜像/代理。
 
@@ -266,7 +267,7 @@ watchtower 在 compose 里凌晨自动更新 `:latest`；init 在回国节点装
 | 位置 | 内容 |
 |------|------|
 | `~/sb-xray/.env` | `vps-init.sh` 写（**仅容器变量**：domain/code，回国节点加 `tsip`/`CN_EXIT_MODE`/`ENABLE_*`/`WATCHTOWER_SCHEDULE`） |
-| 系统（回国节点） | 安装 tailscale（官方源），`tailscale up --accept-dns=false`（不改本机 DNS，避免影响容器） |
+| 系统（回国节点） | 安装 tailscale（官方源，安装脚本先下载到 tmp、校验 shebang 后执行，不裸 `curl\|sh`），`tailscale up --accept-dns=false`（不改本机 DNS，避免影响容器） |
 | `/etc/cron.d/cn-exit-keepalive`（回国） | 每分钟 `tailscale ping` OpenWrt（辅助保活；主力在 OpenWrt 侧） |
 | `/etc/cron.d/sbx-canary-check`（回国） | 自动更新后业务自检（`SKIP_CANARY_WIRING=1` 不装） |
 | `/etc/cron.d/cn-exit-watchdog`（回国，传 `WD_*`） | 反向探活 |

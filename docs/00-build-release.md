@@ -9,7 +9,7 @@
 1. [构建环境准备](#1-构建环境准备)
 2. [自动构建脚本](#2-自动构建脚本buildsh)
 3. [三阶段 Dockerfile 架构](#3-三阶段-dockerfile-架构)
-4. [组件版本管理](#4-组件版本管理)
+4. [组件版本管理](#4-组件版本管理)（[4.2 供应链 pin](#42-供应链-pin不可变-ref-绑定)）（[4.3 镜像 digest pin 与 GOPROXY](#43-镜像-digest-pin-与-goproxy)）（[4.5 供应链 provenance](#45-供应链-provenance)）
 5. [手动精细构建](#5-手动精细构建)
 6. [常见构建问题 FAQ](#6-常见构建问题-faq)
 7. [Git Release 版本发布](#7-git-release-版本发布releasesh)
@@ -56,7 +56,7 @@ export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 
 `build.sh` 是推荐的构建入口。**单一真相源是仓库根目录的 `versions.json`**，`build.sh` 既不硬编码任何组件版本，也不在本地构建期间与 CI 产生漂移：
 
-- 日常构建直接读 `versions.json`（已由 CI 每天刷新并提交），纯离线、可复现
+- 日常构建直接读 `versions.json`（已由 CI 每天刷新并提交），纯离线；版本与下载字节 SHA256 可复现（UPX 后 shipped 字节除外，见 §4.5）
 - 需要跟最新上游版本时用 `./build.sh refresh`，会像 CI 一样调用 GitHub API 拉取 versions + digests，写回 `versions.json`，然后构建
 
 ### 2.1 基本用法
@@ -100,7 +100,7 @@ flowchart TD
 | **Latest Release** | `/repos/{owner}/{repo}/releases/latest` | Shoutrrr、Mihomo、Http-Meta、Sub-Store |
 | **Latest Stable Tag** | `/repos/{owner}/{repo}/tags?per_page=100`（过滤 `rc/beta/alpha`） | Xray、Sing-box、3x-ui、Dufs、Cloudflared |
 
-`.github/workflows/daily-build.yml` 每日跑相同逻辑：调用 API → 计算 digests → 提交 `versions.json`。所以本地 `./build.sh` 和 CI 的最新产物始终位级一致。
+`.github/workflows/daily-build.yml` 每日跑相同逻辑：调用 API → 计算 digests → 提交 `versions.json`。所以本地 `./build.sh` 和 CI 用相同的 versions + digests 构建：**版本与下载字节（downloaded artifact）的 SHA256 可复现**。注意经 UPX 压缩的组件（xray/dufs/cloudflared/crypctl）其镜像内 shipped 字节有意不可复现——校验锚定的是压缩前的上游下载物，见 §4.5「供应链 provenance」。
 
 ### 2.4 镜像版本号与 OCI 标签
 
@@ -162,7 +162,7 @@ flowchart TD
 
 **环境特性**: `CGO_ENABLED=1`（启用 CGO 以支持 SQLite）
 
-🔬 **GOPROXY 默认走国内镜像**：Golang 主构建层声明 `ARG GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"`（国内构建友好）。CI 可用 `--build-arg GOPROXY=https://proxy.golang.org,direct` 覆盖。这只影响 `go build`（crypctl）拉取依赖的来源，不改产物。
+🔬 **GOPROXY**：Golang 主构建层默认 `ARG GOPROXY="https://proxy.golang.org,direct"`，与 CI 对齐。国内环境可通过 `--build-arg GOPROXY="https://goproxy.cn,direct"` opt-in 国内镜像。详见 §4.3。
 
 **构建产物**:
 
@@ -210,7 +210,7 @@ supervisor dumb-init fail2ban acme.sh
 
 ### 4.1 当前组件版本
 
-所有版本由仓库根目录 `versions.json` 统一声明，CI 每日从 GitHub API 刷新并提交。`build.sh` 离线模式直接读取该文件，因此**本地构建与 CI 产物始终一致**。查阅当前组件版本：
+所有版本由仓库根目录 `versions.json` 统一声明，CI 每日从 GitHub API 刷新并提交。`build.sh` 离线模式直接读取该文件，因此**本地构建与 CI 的版本+digest 输入始终一致**（UPX 后 shipped 字节有意不可复现，见 §4.5）。查阅当前组件版本：
 
 ```bash
 jq -r 'to_entries[] | select(.key != "digests") | "\(.key): \(.value)"' versions.json
@@ -235,7 +235,59 @@ jq -r 'to_entries[] | select(.key != "digests") | "\(.key): \(.value)"' versions
 
 > **per-arch 资源名陷阱**：amd64 的 mihomo 用 **`-compatible`** 资源（兼容老 CPU），digest 的计算来源必须与 Dockerfile 下载用**完全相同**的资源名，否则校验失败。详见 [Q8](#q8-amd64-构建在-mihomo-sha256-校验处失败)。
 
-### 4.2 版本覆盖
+### 4.2 供应链 pin：不可变 ref 绑定
+
+📘 **三个从源码构建的组件**（Sub-Store 前端、crypctl、acme.sh）各自 pin 到不可变的上游 ref，而非浮动 tag 或 HEAD。
+
+| 组件 | Pin 类型 | `versions.json` 字段 | Build-arg |
+|:---|:---|:---|:---|
+| **Sub-Store 前端** | 40 位 git commit SHA | `sub_store_frontend_sha` | `SUB_STORE_FRONTEND_SHA` |
+| **crypctl** | 40 位 git commit SHA | `crypctl_sha` | `CRYPCTL_REF` |
+| **acme.sh** | release tag（版本号）+ 64 位 tar.gz SHA256 | `acme_sh` / `acme_sh_sha256` | `ACME_SH_VERSION` / `ACME_SH_SHA256` |
+
+🔬 **Pin 不变量与 fail-closed 保障**：
+
+- **Sub-Store 前端**：Dockerfile 阶段一在 `git clone` 后执行 `git checkout ${SUB_STORE_FRONTEND_SHA}`，切到精确 commit 后再 `pnpm build`，不信任可变 tag。
+- **crypctl**：Dockerfile 阶段二 `git checkout ${CRYPCTL_REF}` 切到精确 commit 后 `go build`，不再 checkout 浮动 HEAD。
+- **acme.sh**：以 release tar.gz 形式下载，下载后 `sha256sum -c` 强制校验；`ENV AUTO_UPGRADE=0` 永久禁用运行时静默自升级。
+- **离线 fail-closed**：`build.sh` 在离线模式读取 `versions.json` 时，`SUPPLY_PIN_KEYS` 循环遍历以上四个字段，任一缺失即 `exit 1` 并提示运行 `./build.sh refresh`，确保 pin 无法被静默跳过。
+
+🔧 **自检 pin 是否完整**：
+
+```bash
+jq '{sub_store_frontend_sha, crypctl_sha, acme_sh, acme_sh_sha256}' versions.json
+# 期望：四个字段均非空；sub_store_frontend_sha / crypctl_sha 为 40 位 hex
+```
+
+### 4.3 镜像 digest pin 与 GOPROXY
+
+📘 **Dockerfile `FROM` 镜像 digest pin**：所有 `FROM` 行（含 `node:alpine`、`golang:1-alpine`、最终 `nginx` 基镜像）均以 `name:tag@sha256:<64-hex>` 形式 digest-pin。`docker-compose.yml` 中的 watchtower 镜像（`nickfedor/n`）同样 digest-pin。本项目自身的输出镜像 `currycan/sb-xray:latest` 有意保持浮动，使 watchtower 可持续跟进 `:latest`（见 §2 watchtower 纪律）。digest 值随 `versions.json` 一起在 CI 每日刷新时更新。
+
+📘 **`GOPROXY` 默认与 CI 对齐**：Go 构建层（crypctl）的 `GOPROXY` 默认值为 `https://proxy.golang.org,direct`，与 CI（`daily-build.yml`）保持一致。国内环境可通过 `--build-arg GOPROXY="https://goproxy.cn,direct"` 按需 opt-in；`GOSUMDB` 始终保持启用，不得禁用（校验和保护）。
+
+🔬 **守护测试（B4/B5）**：`tests/test_build_supply_chain.py` 在 CI 质量门中强制验证以上三项不变量：
+
+| 测试 | 检查项 |
+|:---|:---|
+| `test_every_dockerfile_from_is_digest_pinned` | `Dockerfile` 所有 `FROM` 均携带 `@sha256:<64-hex>` |
+| `test_watchtower_image_is_digest_pinned` | `docker-compose.yml` 中所有第三方 `image:` 均 digest-pin；`currycan/sb-xray` 豁免 |
+| `test_dockerfile_goproxy_default_matches_ci` | Dockerfile `ARG GOPROXY` 默认值与 CI 构建参数完全一致 |
+| `test_dockerfile_goproxy_default_is_official_first` | 默认值以 `https://proxy.golang.org` 开头，`goproxy.cn` 不得出现在默认值中 |
+| `test_gosumdb_not_disabled` | Dockerfile 中不存在 `GOSUMDB=off` |
+
+🔧 **自检 digest pin**：
+
+```bash
+# 验证 Dockerfile 所有 FROM 均已 digest-pin
+grep "^FROM" Dockerfile
+# 期望：每行均包含 @sha256:
+
+# 验证 GOPROXY 默认值
+grep 'ARG GOPROXY' Dockerfile
+# 期望：https://proxy.golang.org,direct
+```
+
+### 4.4 版本覆盖
 
 可通过环境变量强制指定版本：
 
@@ -246,6 +298,40 @@ XRAY_VERSION=25.12.15 docker buildx build \
   --tag currycan/sb-xray:custom \
   .
 ```
+
+### 4.5 供应链 provenance
+
+📘 **`versions.json` 的 `provenance` 字段**是每个 shipped 组件 pin 状态与字节可复现性的单一真相源，机器可读，由 `tests/test_versions_provenance.py` 在 CI 质量门中守门。
+
+| 组件 | `pinned` | `reproducible` | 校验锚来源 |
+|:---|:---:|:---:|:---|
+| **xray** | ✅ | ❌ | 上游 `.dgst` 文件 SHA2-256（压缩前下载物） |
+| **shoutrrr** | ✅ | ✅ | 上游 `checksums.txt` SHA256，录入 `versions.json` |
+| **sing_box** | ✅ | ✅ | `versions.json` `digests` SHA256 |
+| **mihomo** | ✅ | ✅ | `versions.json` `digests`（amd64 用 `-compatible` 资源） |
+| **dufs** | ✅ | ❌ | `versions.json` `digests` SHA256（压缩前下载物） |
+| **cloudflared** | ✅ | ❌ | `versions.json` `digests` SHA256（压缩前下载物） |
+| **xui** | ✅ | ✅ | `versions.json` `digests` SHA256 |
+| **http_meta** | ✅ | ✅ | `versions.json` bundle+tpl SHA256 |
+| **sub_store_backend** | ✅ | ✅ | `versions.json` `digests` SHA256 |
+| **sub_store_frontend** | ✅ | ✅ | git checkout 至 `versions.json` 记录 commit SHA（B1） |
+| **crypctl** | ✅ | ❌ | git pin 至记录 SHA 后 `go build` + UPX（B2） |
+| **acme** | ✅ | ❌ | release tar.gz pin + `sha256sum -c`；`AUTO_UPGRADE=0`（B3） |
+
+📘 **UPX 后 shipped 字节有意不可复现**：xray/dufs/cloudflared/crypctl 在 Dockerfile 阶段二经 `upx --lzma --best` 极限压缩，LZMA 压缩输出不保证位级确定性。**校验锚定的是压缩前的上游下载物 SHA256**，不是镜像内最终字节——这是有意设计：UPX 压缩节省 50-70% 体积，代价是放弃镜像内字节可复现性，但下载完整性仍由 digest 锚严格保障。acme 不经 UPX，`AUTO_UPGRADE=0` 锁定版本并永久禁止运行时静默自升级。
+
+🔧 **自检 provenance 完整性**：
+
+```bash
+# 查看全量 provenance 状态
+jq '.provenance' versions.json
+
+# 列出非可复现组件及原因
+jq -r '.provenance | to_entries[] | select(.value.reproducible == false) | "\(.key): \(.value.note)"' versions.json
+# 期望：xray / dufs / cloudflared / crypctl / acme 各一行，附原因说明
+```
+
+🔬 **守护测试**：`tests/test_versions_provenance.py` 在 CI 质量门中强制验证：所有 shipped 组件均在 `provenance` 中声明；`pinned: true` 的组件在 `versions.json` 中必须存在对应 digest 或 pin 字段；`reproducible: false` 的组件必须附 `note` 说明不可复现原因。
 
 ---
 
@@ -482,7 +568,7 @@ flowchart LR
 
 前面 §2 / §7 讲的是**本地**手动构建与发布。生产环境用的 `:latest` 镜像并不是手动推的——它由 `.github/workflows/daily-build.yml` 这条 CI 流水线**每天自动产出并发布**。本节讲清这条主干怎么跑、做了哪些架构取舍，以及它和本地 `build.sh`、`versions.json`、生产节点之间的关系。
 
-> 📘 **一句话**：CI 是生产镜像的权威生产者，`build.sh` 是同一套逻辑的**可复现离线镜像**。两者都以仓库根 `versions.json` 为单一真相源，因此本地构建与 CI 产物位级一致。
+> 📘 **一句话**：CI 是生产镜像的权威生产者，`build.sh` 是同一套逻辑的**可复现离线镜像**。两者都以仓库根 `versions.json` 为单一真相源，因此本地构建与 CI 的版本+digest 输入一致（UPX 后 shipped 字节有意不可复现，见 §4.5）。
 
 ### 8.1 流水线总览
 
@@ -560,10 +646,58 @@ flowchart TD
 把三段串起来看，闭环是这样的：
 
 1. **单一真相源**：`versions.json`（含组件版本 + `digests`）。CI 每日刷新并由 `update-versions` 提交回仓库，是它的权威生产者。
-2. **本地一致**：`./build.sh` 离线读同一份 `versions.json`，所以本地手动构建与 CI 产物位级一致；`./build.sh refresh` 则复刻 CI 的「调 API → 算 digest → 写回」逻辑。
+2. **本地一致**：`./build.sh` 离线读同一份 `versions.json`，所以本地手动构建与 CI 使用同一份版本+digest 输入（UPX 后 shipped 字节有意不可复现，见 §4.5）；`./build.sh refresh` 则复刻 CI 的「调 API → 算 digest → 写回」逻辑。
 3. **发布到生产**：CI 的 `merge` 推出 `:latest` 后，生产节点经 watchtower 自动跟进该 tag——这一步的运维约束（watchtower 不读 `docker-compose.yml`、新增 env 必须镜像内默认兜底）见仓库根 `CLAUDE.md` 的「Watchtower 自动更新发布纪律」。因此**修复类变更必须落在镜像内默认行为里**，才能随 `:latest` 自动生效。
 
 > ⚠️ CI 自动发的 `:latest` 不会自动同步 `docker-compose.yml`。若某次发布确实必须靠新 compose env 才能正确运行，应在发布说明标记 `requires-compose-sync` 并改走全量 `git pull && docker compose up -d`，不走 watchtower 自动分发。
+
+### 8.5 PR 质量门（ci.yml）
+
+📘 **概念卡**：每个 Pull Request 合并前，`.github/workflows/ci.yml`（`CI Quality Gate`）自动运行四道硬性检测——任一步骤非零退出即阻止合并，确保主干 Python 行为始终可验证。纯文档改动（`docs/**`）不影响 Python 行为，由 `paths-ignore` 跳过以节省 runner 时间。
+
+```mermaid
+flowchart LR
+    PR(["Pull Request"]):::entry --> Ruff{{"ruff check\nscripts/sb_xray tests"}}:::process
+    Ruff --> Mypy{{"mypy\n(strict)"}}:::process
+    Mypy --> Pytest{{"pytest --cov\nfail_under=85"}}:::process
+    Pytest --> Smoke{{"SKIP_COMPOSE=1\ntest_smoke.sh"}}:::process
+    Smoke --> OK(["合并放行"]):::terminal
+    Ruff -- "非零退出" --> Block(["拦截合并"]):::block
+    Mypy -- "非零退出" --> Block
+    Pytest -- "非零退出" --> Block
+    Smoke -- "非零退出" --> Block
+
+    classDef entry   fill:#0984e3,stroke:#0566b3,stroke-width:2px,color:#fff
+    classDef process fill:#00b894,stroke:#009577,stroke-width:2px,color:#fff
+    classDef block   fill:#ff7675,stroke:#d63031,stroke-width:2px,color:#fff
+    classDef terminal fill:#2d3436,stroke:#636e72,stroke-width:2px,color:#fff
+```
+
+四道门的职责与门控参数：
+
+| 步骤 | 命令 | 门控条件 |
+|---|---|---|
+| **Ruff lint** | `ruff check scripts/sb_xray tests` | 任意 lint 错误（E/F/W/I/B/UP/SIM/RUF，行宽 100） |
+| **Mypy 类型检查** | `mypy`（strict 模式） | 任意类型错误（仅检查 `scripts/sb_xray`） |
+| **Pytest 覆盖率** | `python3 -m pytest --cov` | 测试失败，**或**覆盖率低于 85%（`fail_under=85`） |
+| **Smoke 离线静态** | `SKIP_COMPOSE=1 ./scripts/test_smoke.sh` | 离线静态校验（模板语法 / env 完整性）非零退出 |
+
+🔬 **与 `daily-build.yml` 的职责分离**：`daily-build.yml`（§8.1–8.4）由 `push main` / 每日 schedule / 手动 dispatch 触发，负责多平台镜像构建与推送。`ci.yml` 仅在 `pull_request` 事件触发，负责 Python 代码质量回归，不构建也不推送镜像，两条流水线互不干扰。
+
+🔧 **手动触发**：`ci.yml` 亦支持 `workflow_dispatch`，可在 GitHub Actions 页面对任意分支手动运行四道门验证。
+
+🔧 **开发者本地复现**：
+
+```bash
+# 安装 dev 依赖（与 CI 同版本锁定）
+python3 -m pip install -e ".[dev]"
+
+# 依次运行四道门（任一失败即可定位）
+ruff check scripts/sb_xray tests        # 期望：无输出，退出码 0
+mypy                                    # 期望：Success: no issues found
+python3 -m pytest --cov                 # 期望：PASSED，覆盖率 ≥ 85%
+SKIP_COMPOSE=1 ./scripts/test_smoke.sh  # 期望：所有静态检查通过
+```
 
 ---
 

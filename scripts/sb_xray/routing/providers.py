@@ -17,11 +17,15 @@ produces identical output.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 _URL_LINE_RE = re.compile(r'url:\s*"([^"]+)"')
+_UNRENDERED_GIST = "${GIST_CODE}"
 
 
 def _read_provider_file(path: Path) -> str:
@@ -110,6 +114,28 @@ def _provider_names(clash_block: str) -> list[str]:
     return names
 
 
+def _strip_unrendered_gist(clash_block: str) -> str:
+    """Drop provider lines still carrying a literal ``${GIST_CODE}``.
+
+    When ``GIST_CODE`` is unset, ``config_builder._envsubst`` leaves the
+    placeholder verbatim, producing dead ``.../.../${GIST_CODE}/raw/...``
+    URLs that 404 silently on the client. We drop those lines (rather than
+    emit broken URLs) and warn so the operator knows to set ``GIST_CODE``.
+    """
+    if _UNRENDERED_GIST not in clash_block:
+        return clash_block
+    kept: list[str] = []
+    for line in clash_block.splitlines():
+        if _UNRENDERED_GIST in line:
+            name = line.split(":", 1)[0].strip()
+            logger.warning(
+                "丢弃未渲染的 provider(GIST_CODE 未设): %s", name or line.strip()
+            )
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def generate_and_export(*, workdir: Path | None = None) -> dict[str, str]:
     """Compute and ``os.environ``-export the four provider env vars.
 
@@ -125,6 +151,8 @@ def generate_and_export(*, workdir: Path | None = None) -> dict[str, str]:
     env_block = _parse_env_providers(os.environ.get("PROVIDERS", ""))
     if env_block:
         clash_providers = f"{clash_providers}\n{env_block}" if clash_providers else env_block
+
+    clash_providers = _strip_unrendered_gist(clash_providers)
 
     surge_providers = ""
     allone_url = _extract_allone_url(clash_providers) if clash_providers else None

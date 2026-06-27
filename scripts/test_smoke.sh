@@ -360,6 +360,16 @@ else
     bad "M4-订阅: subscription.py 的 XHTTP-H3 未移出 adv-only 条件或未进主轨"
 fi
 
+# 供应链 pin（WU P0-4）：前端 commit SHA / crypctl ref / acme.sh AUTO_UPGRADE=0
+if grep -q 'git checkout ${SUB_STORE_FRONTEND_SHA}' "${REPO_ROOT}/Dockerfile" \
+   && grep -q 'git checkout ${CRYPCTL_REF}' "${REPO_ROOT}/Dockerfile" \
+   && grep -q 'ENV AUTO_UPGRADE=0' "${REPO_ROOT}/Dockerfile" \
+   && ! grep -q 'curl -L https://get.acme.sh | sh' "${REPO_ROOT}/Dockerfile"; then
+    ok "P0-4: 供应链 pin（前端/crypctl/acme.sh）已落 Dockerfile"
+else
+    bad "P0-4: 供应链 pin 缺失（前端/crypctl/acme.sh）"
+fi
+
 # ---- 容器运行时检查（可选）-------------------------------------------------
 if [ "${SKIP_COMPOSE:-0}" = "1" ]; then
     info "SKIP_COMPOSE=1，跳过运行时检查"

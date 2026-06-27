@@ -96,6 +96,17 @@ def test_hysteresis_no_prev_returns_ctx_leader() -> None:
     assert st._leader_with_hysteresis(ctx, {}) == ("proxy-us", 5.0)
 
 
+def test_hysteresis_all_sentinel_prev_falls_back_to_fastest() -> None:
+    # When all previous speeds are the sentinel and prev_isp_tag is absent,
+    # _resolve_prev_leader returns None; hysteresis then falls back to
+    # the current run's fastest tag (no incumbent bias).
+    ctx = _ctx({"proxy-us": 8.0, "proxy-la": 12.0}, "proxy-la")
+    # prev_speeds: all sentinel values, no prior tag persisted
+    tag, speed = st._leader_with_hysteresis(ctx, {"proxy-us": 999.0, "proxy-la": 999.0}, prev_isp_tag="")
+    assert tag == "proxy-la"
+    assert speed == 12.0
+
+
 # ---- notify edge-trigger ---------------------------------------------------
 
 
@@ -226,3 +237,43 @@ def test_patch_unresolved_service_outs_missing_file_is_noop(tmp_path: Path) -> N
     from sb_xray import config_builder as cb
 
     cb._patch_unresolved_service_outs(tmp_path / "nope.json")  # must not raise
+
+
+# ---- leader hysteresis: sentinel exclusion + ISP_TAG priority ---------------
+
+
+def test_hysteresis_excludes_999_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ISP_LEADER_HYSTERESIS", raising=False)
+    # prev_speeds carries the 999.0 cache-hit sentinel on proxy-la; the real
+    # prior leader (by genuine measurement) was proxy-us at 9.0. The sentinel
+    # must NOT make proxy-la the incumbent.
+    ctx = _ctx({"proxy-us": 10.0, "proxy-la": 8.0}, "proxy-us")
+    tag, speed = st._leader_with_hysteresis(
+        ctx, {"proxy-us": 9.0, "proxy-la": 999.0}
+    )
+    # incumbent resolves to proxy-us (sentinel filtered) which is also ctx leader
+    assert tag == "proxy-us"
+    assert speed == 10.0
+
+
+def test_hysteresis_prefers_persisted_isp_tag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ISP_LEADER_HYSTERESIS", raising=False)
+    # Persisted ISP_TAG names proxy-us as last routed leader. Challenger
+    # proxy-la wins this run at 10.5 but < proxy-us(10.0)*1.15 → hold proxy-us.
+    ctx = _ctx({"proxy-us": 10.0, "proxy-la": 10.5}, "proxy-la")
+    tag, speed = st._leader_with_hysteresis(
+        ctx, {"proxy-us": 999.0, "proxy-la": 1.0}, prev_isp_tag="proxy-us"
+    )
+    assert tag == "proxy-us"
+    assert speed == 10.0
+
+
+def test_hysteresis_default_prev_isp_tag_back_compat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No prev_isp_tag → behaves like the old argmax path (sentinel-free input).
+    monkeypatch.delenv("ISP_LEADER_HYSTERESIS", raising=False)
+    ctx = _ctx({"proxy-us": 10.0, "proxy-la": 10.5}, "proxy-la")
+    tag, speed = st._leader_with_hysteresis(ctx, {"proxy-us": 9.0, "proxy-la": 1.0})
+    assert tag == "proxy-us"
+    assert speed == 10.0

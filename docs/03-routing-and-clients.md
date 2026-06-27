@@ -241,6 +241,8 @@ L3  非住宅 IP，按类别分流：
 
 > **GEMINI_DIRECT 覆盖**（L0，仅 Gemini）：`GEMINI_DIRECT=true` 强制 Gemini 直连、`=false` 强制回退；留空则 Gemini 退回 A 类默认判定。用于运维侧针对 Gemini 单服务手动钉死走向。
 
+🔬 **GEMINI_OUT 宽域覆盖**：`_SERVICE_SPEC` 中 `GEMINI_OUT` 同时覆盖宽规则 `geosite:google`（整个 Google 属地）与窄规则 `geosite:google-gemini`（Gemini 专属），且宽规则在前。设计意图：让 Gemini API 与 Google 账号体系（登录/OAuth）共走同一出口，避免两者分流到不同节点后触发风控。如需将普通 Google 搜索/服务分到其他出口，需在此之前插入独立规则。
+
 ---
 
 ### 1.6 新增服务扩展点：service_spec 中央注册表
@@ -621,10 +623,10 @@ node sources/hack/rename.test.js
 告警样式：
 
 ```text
-[sb-xray:dc99-3.example.com] 🔴 订阅拉取失败
+[sb-xray:node-a.example.com] 🔴 订阅拉取失败
 
-✗ ssrdog (机场) — HTTP 403
-✗ 多宝 — HTTP 500
+✗ 机场A (机场) — HTTP 403
+✗ 机场B — HTTP 500
 
 共 2/10 条失败
 ```

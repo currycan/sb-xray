@@ -100,6 +100,39 @@ def test_common_track_has_no_mlkem(tmp_path: Path, env: None) -> None:
         assert "mlkem768" not in common
 
 
+def test_out_of_range_port_fails_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Port values outside 1-65535 must raise RuntimeError with env key in message."""
+    # Test port 0 (too low)
+    monkeypatch.setenv("TEST_PORT", "0")
+    with pytest.raises(RuntimeError, match=r"TEST_PORT=.*超出合法范围 1-65535"):
+        sub._port("TEST_PORT")
+
+    # Test port 65536 (too high)
+    monkeypatch.setenv("TEST_PORT", "65536")
+    with pytest.raises(RuntimeError, match=r"TEST_PORT=.*超出合法范围 1-65535"):
+        sub._port("TEST_PORT")
+
+    # Test negative port
+    monkeypatch.setenv("TEST_PORT", "-1")
+    with pytest.raises(RuntimeError, match=r"TEST_PORT=.*超出合法范围 1-65535"):
+        sub._port("TEST_PORT")
+
+
+def test_valid_ports_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valid ports (1-65535) must pass unchanged."""
+    # Test minimum valid port
+    monkeypatch.setenv("TEST_PORT", "1")
+    assert sub._port("TEST_PORT") == "1"
+
+    # Test maximum valid port
+    monkeypatch.setenv("TEST_PORT", "65535")
+    assert sub._port("TEST_PORT") == "65535"
+
+    # Test typical port
+    monkeypatch.setenv("TEST_PORT", "443")
+    assert sub._port("TEST_PORT") == "443"
+
+
 def test_urlquote_noop_for_plain_string() -> None:
     assert sub.urlquote("plain") == "plain"
 
@@ -117,7 +150,8 @@ def test_hysteria2_has_obfs_salamander(env: None) -> None:
     url = sub.build_hysteria2_link()
     assert "obfs=salamander" in url
     assert "obfs-password=abcdef12-3456-4789-0abc-def123456789" in url
-    assert url.endswith("#🇯🇵 Hysteria2 ✈ jp ✈ isp")
+    frag = url.split("#", 1)[1]
+    assert urllib.parse.unquote(frag) == "🇯🇵 Hysteria2 ✈ jp ✈ isp"
 
 
 def test_vmess_payload_has_ws_path_and_alpn(env: None) -> None:
@@ -138,7 +172,8 @@ def test_vless_vision_reality_link(env: None) -> None:
     assert "security=reality" in url
     assert "sni=www.apple.com" in url
     assert "type=tcp" in url
-    assert url.endswith("#🇯🇵 XTLS-Reality ✈ jp ✈ isp")
+    frag = url.split("#", 1)[1]
+    assert urllib.parse.unquote(frag) == "🇯🇵 XTLS-Reality ✈ jp ✈ isp"
 
 
 def test_xhttp_reality_main_has_mlkem(env: None) -> None:
@@ -216,8 +251,8 @@ def test_v2rayn_subscription_includes_all_ten_lines(env: None) -> None:
     assert lines[3].startswith("vmess://")
     assert lines[4].startswith("vless://") and "flow=xtls-rprx-vision" in lines[4]
     # part2: xhttp-h3, xhttp-reality, up_cdn, up_reality, mix
-    assert "Xhttp-H3+BBR" in lines[5]
-    assert lines[6].startswith("vless://") and "Xhttp+Reality直连" in lines[6]
+    assert "Xhttp-H3%2BBBR" in lines[5]
+    assert lines[6].startswith("vless://") and "Xhttp%2BReality%E7%9B%B4%E8%BF%9E" in lines[6]
 
 
 def test_common_subscription_has_eight_lines(env: None) -> None:
@@ -230,12 +265,129 @@ def test_common_subscription_has_eight_lines(env: None) -> None:
     assert lines[2].startswith("anytls://")
     assert lines[3].startswith("vmess://")
     assert lines[4].startswith("vless://") and "flow=xtls-rprx-vision" in lines[4]
-    assert "Xhttp+Reality直连" in lines[5]
-    assert "上行Xhttp+TLS+CDN下行Xhttp+Reality" in lines[6]
-    assert "Xhttp+TLS+CDN上下行不分离" in lines[7]
-    assert not any("上行Xhttp+Reality下行Xhttp+TLS+CDN" in ln for ln in lines)
+    assert "Xhttp%2BReality%E7%9B%B4%E8%BF%9E" in lines[5]
+    assert "%E4%B8%8A%E8%A1%8CXhttp%2BTLS%2BCDN%E4%B8%8B%E8%A1%8CXhttp%2BReality" in lines[6]
+    assert "Xhttp%2BTLS%2BCDN%E4%B8%8A%E4%B8%8B%E8%A1%8C%E4%B8%8D%E5%88%86%E7%A6%BB" in lines[7]
+    assert not any("Xhttp%2BReality%E7%9B%B4%E8%BF%9E" in ln and "%E4%B8%8B%E8%A1%8CXhttp%2BTLS" in ln for ln in lines)
     # main-only H3 link must NOT be in common track
-    assert not any("Xhttp-H3+BBR" in ln for ln in lines)
+    assert not any("Xhttp-H3%2BBBR" in ln for ln in lines)
     # common XHTTP variants must all use mode=packet-up or encryption=none
     for ln in lines[5:]:
         assert "encryption=none" in ln
+
+
+def test_vmess_ps_is_raw_not_percent_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vmess ps フィールドは生のノード名(パーセントエンコードなし)でなければならない。
+
+    Regression guard for the Task-1 fix: vmess://base64(json) では ps が
+    JSON 値として格納され、クライアントは URL-decode せずそのまま表示する。
+    emoji/CJK が入った名前がリテラルで届くことを確認する。
+    """
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    # Use an emoji + CJK name to detect percent-encoding regression
+    monkeypatch.setenv("FLAG_PREFIX", "🇯🇵 ")
+    monkeypatch.setenv("NODE_NAME", "日本")
+    monkeypatch.setenv("NODE_SUFFIX", "")
+    url = sub.build_vmess_link()
+    payload = url[len("vmess://"):]
+    data = json.loads(base64.b64decode(payload + "==").decode("utf-8"))
+    # ps must be the raw assembled string, not percent-encoded
+    assert data["ps"] == "🇯🇵 Vmess ✈ 日本"
+    # Confirm it does NOT contain any percent-encoded sequences
+    assert "%" not in data["ps"]
+
+
+def test_uri_fragment_still_url_encoded_after_vmess_ps_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """J1: URI fragment builders (hysteria2/vless/etc.) must still URL-encode.
+
+    Ensures the vmess-ps-raw fix did NOT accidentally un-encode URI fragments.
+    emoji + CJK in the fragment must be percent-encoded; unquote() restores them.
+    """
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("FLAG_PREFIX", "🇯🇵 ")
+    monkeypatch.setenv("NODE_NAME", "日本")
+    monkeypatch.setenv("NODE_SUFFIX", "")
+    url = sub.build_hysteria2_link()
+    frag = url.split("#", 1)[1]
+    # Raw emoji/CJK must be percent-encoded in the fragment
+    assert "🇯🇵" not in frag
+    assert "日本" not in frag
+    assert "%" in frag
+    # But unquoting restores the original
+    assert urllib.parse.unquote(frag) == "🇯🇵 Hysteria2 ✈ 日本"
+
+
+def test_remark_special_chars_are_url_encoded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """J1: 运维可控 NODE_NAME 含 #/&/换行 必须 URL-encode,否则破坏 fragment 解析或注入。"""
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("FLAG_PREFIX", "")
+    monkeypatch.setenv("NODE_SUFFIX", "")
+    monkeypatch.setenv("NODE_NAME", "ev#il&x=1\nz")
+    url = sub.build_hysteria2_link()
+    # fragment 必须不含裸 # / & / 换行(除分隔 query 与 fragment 的首个 #)
+    frag = url.split("#", 1)[1]
+    assert "#" not in frag
+    assert "\n" not in frag
+    assert "%23" in frag  # 被编码的 '#'
+    # 解码后还原原始备注内容
+    assert urllib.parse.unquote(frag) == "Hysteria2 ✈ ev#il&x=1\nz"
+
+
+def test_remark_preserves_flag_emoji_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """常规 emoji 旗标 + 中文备注仍能解码还原(无回归)。"""
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    url = sub.build_tuic_link()
+    frag = url.split("#", 1)[1]
+    assert urllib.parse.unquote(frag) == "🇯🇵 TUIC ✈ jp ✈ isp"
+
+
+# ------------------------------------------------------------------
+# J1: port env validation — fail-loud (non-numeric / empty / OOB)
+# ------------------------------------------------------------------
+
+
+def test_nonnumeric_port_fails_loud_with_env_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """J1: LISTENING_PORT 非数字必须 fail-loud 并指名 env,而非生成无效 vmess。"""
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("LISTENING_PORT", "443; rm -rf")
+    with pytest.raises(RuntimeError, match="LISTENING_PORT"):
+        sub.build_vmess_link()
+
+
+def test_empty_port_fails_loud(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("PORT_HYSTERIA2", "")
+    with pytest.raises(RuntimeError, match="PORT_HYSTERIA2"):
+        sub.build_hysteria2_link()
+
+
+def test_valid_port_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    for k, v in _FAKE_ENV.items():
+        monkeypatch.setenv(k, v)
+    assert ":8443" in sub.build_hysteria2_link()  # 数字端口正常
+
+
+# ------------------------------------------------------------------
+# J4: _part1_common_links 委托 _part1_links 契约锁定
+# ------------------------------------------------------------------
+
+
+def test_part1_common_delegates_to_part1(env: None) -> None:
+    # J4: _part1_common_links 必须与 _part1_links 完全等价（委托实现）
+    assert sub._part1_common_links() == sub._part1_links()
+
+
+def test_common_subscription_is_part1_plus_compat_part2(env: None) -> None:
+    common = sub.build_common_subscription()
+    lines = common.split("\n")
+    # 前 5 行 == part1，后 3 行 == part2 compat（共 8 协议）
+    assert lines[:5] == sub._part1_links()
+    assert len(lines) == 8
+    # compat 轨道用 encryption=none，不得出现 mlkem768 主轨加密
+    assert "mode=packet-up" in common

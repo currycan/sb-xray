@@ -6,17 +6,17 @@ path-prefix: ${DUFS_PATH_PREFIX}
 #   - tmp
 #   - '*.log'
 #   - '*.lock'
-allow-all: true
-allow-upload: true
-allow-delete: true
-allow-search: true
-allow-symlink: true
-allow-archive: true
-enable-cors: true
-render-index: true
-render-try-index: true
-render-spa: true
+allow-all: ${DUFS_ALLOW_ALL}
+allow-upload: ${DUFS_ALLOW_UPLOAD}
+allow-delete: ${DUFS_ALLOW_DELETE}
+allow-search: ${DUFS_ALLOW_SEARCH}
+allow-symlink: ${DUFS_ALLOW_SYMLINK}
+allow-archive: ${DUFS_ALLOW_ARCHIVE}
+enable-cors: ${DUFS_ENABLE_CORS}
+render-index: ${DUFS_RENDER_INDEX}
+render-try-index: ${DUFS_RENDER_TRY_INDEX}
+render-spa: ${DUFS_RENDER_SPA}
 # assets: ./assets/
-log-format: '$remote_addr "$request" $status $http_user_agent'
+log-format: '${DUFS_LOG_FORMAT}'
 log-file: ${LOGDIR}/dufs/dufs.log
-compress: low
+compress: ${DUFS_COMPRESS}

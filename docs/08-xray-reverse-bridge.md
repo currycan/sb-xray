@@ -49,7 +49,7 @@ flowchart LR
 
 | 角色 | 位置 | 职责 | 关键点 |
 |---|---|---|---|
-| **portal** | 海外 VPS（如 dc99-3） | 接收客户端，按 `geosite:cn` 把国内流量送进 `r-tunnel` | `ENABLE_REVERSE=true` + `CN_EXIT_MODE=reverse`/`balance` |
+| **portal** | 海外 VPS（如 node-a） | 接收客户端，按 `geosite:cn` 把国内流量送进 `r-tunnel` | `ENABLE_REVERSE=true` + `CN_EXIT_MODE=reverse`/`balance` |
 | **bridge** | 大陆 OpenWrt | 主动拨向 portal 建隧道；隧道来的流量 freedom 直出 | 跑 `xray -c client.json`，只需能出站访问 VPS 443 |
 
 > 📘 **为什么是 bridge 主动拨号**：大陆家宽通常没有公网 IP、还在运营商 NAT 后面，VPS 无法主动连进来。reverse 反过来——让能出站的一方（bridge）主动连公网的一方（portal），隧道建成后流量就能**双向**走。这正是它不需要公网 IP / 不需要开端口的根本原因。
@@ -339,8 +339,8 @@ chmod +x /etc/init.d/xray-bridge
 
 ```sh
 # 每项 名:FQDN:token，空格分隔；token 为各 VPS show 输出 ?token= 后那段（可各异）
-BRIDGE_NODES="dc99:dc99.example.com:tokA jp:jp.example.com:tokB cn2:cn2.example.com:tokC"
-BRIDGE_HOT=dc99,jp     # 常驻拨通的热备；其余为冷备
+BRIDGE_NODES="node-a:node-a.example.com:tokA node-b:node-b.example.com:tokB node-c:node-c.example.com:tokC"
+BRIDGE_HOT=node-a,node-b     # 常驻拨通的热备；其余为冷备
 ```
 
 `sh openwrt-init.sh` 会生成节点清单 `/etc/cn-exit/nodes.list`、安装 `cn-bridge` 工具，并对热备各拨一条独立 `xray-bridge-<名>` 进程（api 端口自动错开，避免多进程都监听 7979 冲突）。

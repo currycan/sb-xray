@@ -13,6 +13,17 @@ sys.path.insert(0, str(_SCRIPTS))
 
 import entrypoint as ep  # noqa: E402
 
+# Minimal numeric port env vars required by subscription._port() validation (J1).
+# Both show-pipeline tests call write_subscriptions(); without these the new
+# fail-loud validation raises RuntimeError on the empty-string defaults.
+_SHOW_PORT_ENV: dict[str, str] = {
+    "LISTENING_PORT": "443",
+    "PORT_HYSTERIA2": "8443",
+    "PORT_TUIC": "4443",
+    "PORT_ANYTLS": "5443",
+    "PORT_XHTTP_H3": "6443",
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -391,6 +402,8 @@ def test_show_subcommand_runs_pipeline(
     tmp_env_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("WORKDIR", str(tmp_path))
+    for k, v in _SHOW_PORT_ENV.items():
+        monkeypatch.setenv(k, v)
     called: dict[str, object] = {"show": False}
 
     def fake_show(*, archive_path: Path | None = None) -> None:
@@ -426,6 +439,8 @@ def test_show_pipeline_loads_status_and_secret_files(
     monkeypatch.setenv("WORKDIR", str(tmp_path))
     monkeypatch.setenv("STATUS_FILE", str(status_file))
     monkeypatch.setenv("SECRET_FILE", str(secret_file))
+    for k, v in _SHOW_PORT_ENV.items():
+        monkeypatch.setenv(k, v)
     for key in ("ISP_TAG", "IS_8K_SMOOTH", "REMOTE_KEY", "NODE_SUFFIX"):
         monkeypatch.delenv(key, raising=False)
 
@@ -596,3 +611,62 @@ def test_show_pipeline_skips_reverse_bridge_when_disabled(
 
     assert rc == 0
     assert not (subscribe_dir / "reverse_bridge_client.json").exists()
+
+
+def test_cert_renew_command_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sb_xray.stages import cert_renew
+
+    called: dict[str, bool] = {}
+
+    def fake_run() -> int:
+        called["ran"] = True
+        return 0
+
+    monkeypatch.setattr(cert_renew, "run", fake_run)
+    rc = ep.main(["cert-renew"])
+    assert rc == 0
+    assert called["ran"] is True
+
+
+# ---------------------------------------------------------------------------
+# non-fatal stage degradation (C1)
+# ---------------------------------------------------------------------------
+
+
+def test_probe_exception_degrades_but_still_execs_supervisord(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1: a probe-stage crash must degrade (not abort) — boot still hands
+    over to supervisord instead of dying before exec."""
+    _patch_stage_stubs(monkeypatch)
+    called = _patch_supervisord(monkeypatch)
+
+    def _boom(_mgr: object) -> None:
+        raise RuntimeError("probe boom")
+
+    monkeypatch.setattr(ep, "probe_base_env", _boom)
+
+    rc = ep.run_pipeline(
+        env_file=tmp_env_file, skip_stage=[], dry_run=False, extras=[]
+    )
+
+    assert rc == 0
+    assert called["invoked"] is True
+
+
+def test_cert_exception_still_aborts_boot(
+    tmp_env_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1 guard: cert stays fail-fast — its crash must propagate, never reach
+    exec_supervisord (nginx/xray would restart-loop on a missing bundle)."""
+    _patch_stage_stubs(monkeypatch)
+    called = _patch_supervisord(monkeypatch)
+
+    def _boom() -> None:
+        raise RuntimeError("cert boom")
+
+    monkeypatch.setattr(ep, "issue_bundle_certificate", _boom)
+
+    with pytest.raises(RuntimeError, match="cert boom"):
+        ep.run_pipeline(env_file=tmp_env_file, skip_stage=[], dry_run=False, extras=[])
+    assert called["invoked"] is False

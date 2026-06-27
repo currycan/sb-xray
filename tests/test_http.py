@@ -115,3 +115,26 @@ def test_default_timeout_is_3_seconds() -> None:
 async def test_probe_async(respx_mock: respx.MockRouter) -> None:
     respx_mock.head("https://async.test/ok").mock(return_value=httpx.Response(204))
     assert await sbhttp.probe_async("https://async.test/ok") == "204"
+
+
+@respx.mock
+def test_fetch_sets_truncated_when_body_exceeds_cap() -> None:
+    big = "A" * (70 * 1024)  # > 64 KiB cap
+    respx.get("https://example.test/big").mock(return_value=httpx.Response(200, text=big))
+    res = sbhttp.fetch("https://example.test/big")
+    assert res.truncated is True
+    assert len(res.body) == sbhttp._MAX_BODY_BYTES
+
+
+@respx.mock
+def test_fetch_not_truncated_for_small_body() -> None:
+    respx.get("https://example.test/small").mock(return_value=httpx.Response(200, text="hi"))
+    res = sbhttp.fetch("https://example.test/small")
+    assert res.truncated is False
+
+
+@respx.mock
+def test_fetch_error_result_not_truncated() -> None:
+    respx.get("https://example.test/err").mock(side_effect=httpx.ConnectError("x"))
+    res = sbhttp.fetch("https://example.test/err")
+    assert res == sbhttp.FetchResult(status=-1, body="", final_url="", truncated=False)

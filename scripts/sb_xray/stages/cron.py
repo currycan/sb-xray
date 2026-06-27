@@ -25,20 +25,46 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import socket
 from pathlib import Path
+from typing import Final
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CRON = Path("/var/spool/cron/crontabs/root")
-_GEO_ENTRY = "0 3 * * * /scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
 _GEO_MARKER = "geo-update"
-_ISP_MARKER = "isp-retest"
-_SUBSTORE_MARKER = "substore-check"
 _SUBSTORE_DEFAULT_CRON = "30 4 * * *"  # daily; SUBSTORE_CHECK_CRON="" disables
-_SECRET_MARKER = "secrets-refresh"
-_LOGROTATE_MARKER = "log-rotate"
 _LOGROTATE_DEFAULT_CRON = "0 * * * *"  # hourly size-based; LOG_ROTATE_CRON="" disables
+_CERT_RENEW_DEFAULT_HOUR = 3  # daily 03:xx (minute jittered); CERT_RENEW_CRON="" disables
+
+# 本模块托管的 entrypoint.py 子命令——剥行/重装时只针对这些命令尾锚定,
+# 避免对裸 marker 子串匹配误删运维自定义行 (F1)。
+_MANAGED_SUBCOMMANDS: Final[tuple[str, ...]] = (
+    "geo-update",
+    "isp-retest",
+    "substore-check",
+    "secrets-refresh",
+    "log-rotate",
+    "cert-renew",
+)
+_ENTRYPOINT = "/scripts/entrypoint.py"
+# 迁移期旧 shell 入口(纯字面量,无对应子命令)。
+_LEGACY_MANAGED: Final[tuple[str, ...]] = ("/scripts/geo_update.sh",)
+
+# 预编译正则:要求子命令后接空白或行尾,防止前缀碰撞误删 (F1)。
+_MANAGED_RE: Final = re.compile(
+    r"/scripts/entrypoint\.py\s+(" + "|".join(re.escape(s) for s in _MANAGED_SUBCOMMANDS) + r")(?:\s|$)"
+)
+
+
+def _is_managed_line(line: str) -> bool:
+    """True 当且仅当该行是本模块托管的 cron 行。
+
+    使用 ``_MANAGED_RE`` 正则锚到 token 边界(子命令后接空白或行尾),
+    而非裸子串——后者会把子命令名作前缀的自定义命令误删 (F1)。
+    """
+    return bool(_MANAGED_RE.search(line)) or any(legacy in line for legacy in _LEGACY_MANAGED)
 
 
 def _hours_to_cron_spec(hours: int, minute: int = 0) -> str:
@@ -78,6 +104,19 @@ def _jitter_minute() -> int:
     return int(digest, 16) % 60
 
 
+def _geo_update_entry() -> str:
+    """Daily geoip/geosite refresh, jittered to avoid a fleet-wide thundering herd.
+
+    Hour stays at 03:00; the minute is spread across the fleet via
+    :func:`_jitter_minute` (every node else hits the same upstream rule-set
+    mirror in the same second). ``ISP_RETEST_JITTER=false`` restores minute 0.
+    """
+    return (
+        f"{_jitter_minute()} 3 * * * "
+        "/scripts/entrypoint.py geo-update >> /var/log/geo_update.log 2>&1"
+    )
+
+
 def _isp_retest_entry(hours: int) -> str | None:
     if hours <= 0:
         return None
@@ -111,6 +150,25 @@ def _logrotate_entry() -> str | None:
     if not spec:
         return None
     return f"{spec} /scripts/entrypoint.py log-rotate >> /var/log/logrotate.log 2>&1"
+
+
+def _cert_renew_entry() -> str | None:
+    """Daily TLS bundle renewal; ``CERT_RENEW_CRON=""`` disables.
+
+    Like :func:`_substore_check_entry` the env value (when set) is a full
+    5-field cron spec; unset falls back to a daily run whose *minute* is
+    fleet-jittered (every node shares the same ACME DNS provider, so a fixed
+    minute would herd the renewals). The cmd itself is idempotent: cert.py
+    skips when the bundle still has >7d validity.
+    """
+    raw = os.environ.get("CERT_RENEW_CRON")
+    if raw is None:
+        spec = f"{_jitter_minute()} {_CERT_RENEW_DEFAULT_HOUR} * * *"
+    else:
+        spec = raw.strip()
+        if not spec:
+            return None
+    return f"{spec} /scripts/entrypoint.py cert-renew >> /var/log/cert_renew.log 2>&1"
 
 
 def _read_hours_env() -> int:
@@ -157,7 +215,7 @@ def _read_secret_hours_env() -> int:
 def install_crontab(
     *,
     cron_file: Path = _DEFAULT_CRON,
-    geo_entry: str = _GEO_ENTRY,
+    geo_entry: str | None = None,
     isp_hours: int | None = None,
     secret_hours: int | None = None,
 ) -> None:
@@ -168,26 +226,19 @@ def install_crontab(
     installations upgrade cleanly. Setting ``ISP_RETEST_INTERVAL_HOURS=0``
     (or passing ``isp_hours=0``) removes the isp-retest entry.
     """
+    geo_entry_line = _geo_update_entry() if geo_entry is None else geo_entry
     hours = _read_hours_env() if isp_hours is None else isp_hours
     isp_entry = _isp_retest_entry(hours)
     substore_entry = _substore_check_entry()
     secret_hours_val = _read_secret_hours_env() if secret_hours is None else secret_hours
     secret_entry = _secret_refresh_entry(secret_hours_val)
     logrotate_entry = _logrotate_entry()
+    cert_entry = _cert_renew_entry()
 
     cron_file.parent.mkdir(parents=True, exist_ok=True)
     existing = cron_file.read_text(encoding="utf-8") if cron_file.is_file() else ""
-    lines = [
-        ln
-        for ln in existing.splitlines()
-        if _GEO_MARKER not in ln
-        and "geo_update.sh" not in ln
-        and _ISP_MARKER not in ln
-        and _SUBSTORE_MARKER not in ln
-        and _SECRET_MARKER not in ln
-        and _LOGROTATE_MARKER not in ln
-    ]
-    lines.append(geo_entry)
+    lines = [ln for ln in existing.splitlines() if not _is_managed_line(ln)]
+    lines.append(geo_entry_line)
     if isp_entry is not None:
         lines.append(isp_entry)
     if substore_entry is not None:
@@ -196,6 +247,8 @@ def install_crontab(
         lines.append(secret_entry)
     if logrotate_entry is not None:
         lines.append(logrotate_entry)
+    if cert_entry is not None:
+        lines.append(cert_entry)
     cleaned = "\n".join(lines).rstrip() + "\n"
     cron_file.write_text(cleaned, encoding="utf-8")
     cron_file.chmod(0o600)
@@ -206,9 +259,11 @@ def install_crontab(
         else "secrets-refresh disabled"
     )
     logrotate_desc = "log-rotate on" if logrotate_entry is not None else "log-rotate disabled"
+    cert_desc = "cert-renew on" if cert_entry is not None else "cert-renew disabled"
     logger.info(
-        "Cron 定时任务已安装 (geo-update daily 03:00; %s; %s; %s)",
+        "Cron 定时任务已安装 (geo-update daily 03:00; %s; %s; %s; %s)",
         isp_desc,
         secret_desc,
         logrotate_desc,
+        cert_desc,
     )

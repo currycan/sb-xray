@@ -946,3 +946,318 @@ def test_cn_exit_mode_balance_noop_without_host(env: Path, tmp_path: Path) -> No
     assert "balancers" not in data["routing"]
     cn_ip = next(r for r in data["routing"]["rules"] if r["ruleTag"] == "cn-ip")
     assert cn_ip["outboundTag"] == "block"
+
+
+def test_resolve_dufs_permissions_defaults_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A4: 未设 DUFS_ALLOW_* 时必须 fail-closed(全 false),
+    避免渲染出字面量 ${DUFS_ALLOW_UPLOAD} 这种非法 yaml,也避免默认放开。"""
+    for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_UPLOAD", "DUFS_ALLOW_DELETE",
+              "DUFS_ALLOW_SEARCH", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE",
+              "DUFS_ENABLE_CORS", "DUFS_RENDER_INDEX", "DUFS_RENDER_TRY_INDEX",
+              "DUFS_RENDER_SPA", "DUFS_COMPRESS", "DUFS_LOG_FORMAT"):
+        monkeypatch.delenv(k, raising=False)
+    cb._resolve_dufs_permissions()
+    assert os.environ["DUFS_ALLOW_ALL"] == "false"
+    assert os.environ["DUFS_ALLOW_UPLOAD"] == "false"
+    assert os.environ["DUFS_ALLOW_DELETE"] == "false"
+    assert os.environ["DUFS_ALLOW_SYMLINK"] == "false"
+    assert os.environ["DUFS_ALLOW_ARCHIVE"] == "false"
+    # 只读浏览必需项保持安全的可用默认
+    assert os.environ["DUFS_ALLOW_SEARCH"] == "true"
+    assert os.environ["DUFS_COMPRESS"] == "low"
+
+
+def test_resolve_dufs_permissions_respects_explicit_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """显式设置必须原样保留(运维可按需放开);未设键必须仍 fail-closed(防进程级 env 渗漏)。"""
+    # 明确清除未显式设置的权限键,防止进程级 env 渗漏干扰断言
+    for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE", "DUFS_ENABLE_CORS"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("DUFS_ALLOW_UPLOAD", "true")
+    monkeypatch.setenv("DUFS_ALLOW_DELETE", "true")
+    cb._resolve_dufs_permissions()
+    # 显式设置的键保留原值
+    assert os.environ["DUFS_ALLOW_UPLOAD"] == "true"
+    assert os.environ["DUFS_ALLOW_DELETE"] == "true"
+    # 未显式设置的写权限必须 fail-closed,不受其他测试 env 渗漏影响
+    assert os.environ["DUFS_ALLOW_ALL"] == "false"
+    assert os.environ["DUFS_ALLOW_SYMLINK"] == "false"
+    assert os.environ["DUFS_ALLOW_ARCHIVE"] == "false"
+    assert os.environ["DUFS_ENABLE_CORS"] == "false"
+
+
+def test_dufs_conf_renders_fail_closed_defaults(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """conf.yml 模板经 _resolve_dufs_permissions + _envsubst 渲染后,
+    写权限全 false,且无残留字面量 ${...} 占位符。"""
+    for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_UPLOAD", "DUFS_ALLOW_DELETE",
+              "DUFS_ALLOW_SEARCH", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE",
+              "DUFS_ENABLE_CORS", "DUFS_RENDER_INDEX", "DUFS_RENDER_TRY_INDEX",
+              "DUFS_RENDER_SPA", "DUFS_COMPRESS", "DUFS_LOG_FORMAT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LOGDIR", str(tmp_path / "log"))
+    cb._resolve_dufs_permissions()
+    src = Path("templates/dufs/conf.yml")
+    rendered = cb._envsubst(src.read_text(encoding="utf-8"))
+    assert "allow-upload: false" in rendered
+    assert "allow-delete: false" in rendered
+    assert "allow-symlink: false" in rendered
+    assert "allow-all: false" in rendered
+    # 无残留未解析占位符
+    assert "${DUFS_ALLOW" not in rendered
+    assert "${DUFS_RENDER" not in rendered
+
+
+def test_dufs_conf_logformat_tokens_survive_literally(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A4 I2: DUFS_LOG_FORMAT 中的 dufs 原生 token($remote_addr 等)经 _envsubst 渲染后
+    必须原样保留——不得被二次展开或消除。"""
+    for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_UPLOAD", "DUFS_ALLOW_DELETE",
+              "DUFS_ALLOW_SEARCH", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE",
+              "DUFS_ENABLE_CORS", "DUFS_RENDER_INDEX", "DUFS_RENDER_TRY_INDEX",
+              "DUFS_RENDER_SPA", "DUFS_COMPRESS", "DUFS_LOG_FORMAT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("LOGDIR", str(tmp_path / "log"))
+    cb._resolve_dufs_permissions()
+    # 使用绝对路径锚定模板,避免 cwd 依赖导致脆性
+    template_path = Path(__file__).parent.parent / "templates" / "dufs" / "conf.yml"
+    rendered = cb._envsubst(template_path.read_text(encoding="utf-8"))
+    # dufs 原生 token 必须字面量存活,不被 _envsubst 展开或消除
+    assert "$remote_addr" in rendered, "dufs token $remote_addr was stripped or re-expanded"
+    assert "$request" in rendered, "dufs token $request was stripped or re-expanded"
+    assert "$status" in rendered, "dufs token $status was stripped or re-expanded"
+    assert "$http_user_agent" in rendered, "dufs token $http_user_agent was stripped or re-expanded"
+    # 确认 log-format 行本身存在
+    assert "log-format:" in rendered
+
+
+def test_resolve_supervisor_credentials_derives_distinct_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F4: supervisord 控制密码必须与 PUBLIC_PASSWORD 不同值,
+    且未显式设置时从 PUBLIC_PASSWORD 确定性派生(§2 镜像内默认,
+    watchtower 旧 env 集重建也能稳定生成)。"""
+    monkeypatch.delenv("SUPERVISOR_USER", raising=False)
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    monkeypatch.setenv("PUBLIC_PASSWORD", "shared-secret-123")
+    cb._resolve_supervisor_credentials()
+    assert os.environ["SUPERVISOR_USER"] == "sb-xray"
+    assert os.environ["SUPERVISOR_PASSWORD"] != "shared-secret-123"
+    assert os.environ["SUPERVISOR_PASSWORD"]  # 非空
+    # 确定性:再解析一次同输入 → 同输出
+    derived = os.environ["SUPERVISOR_PASSWORD"]
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    cb._resolve_supervisor_credentials()
+    assert os.environ["SUPERVISOR_PASSWORD"] == derived
+
+
+def test_resolve_supervisor_credentials_respects_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """显式 SUPERVISOR_PASSWORD 原样保留。"""
+    monkeypatch.setenv("PUBLIC_PASSWORD", "pw")
+    monkeypatch.setenv("SUPERVISOR_PASSWORD", "explicit-sup-pw")
+    monkeypatch.setenv("SUPERVISOR_USER", "ctl")
+    cb._resolve_supervisor_credentials()
+    assert os.environ["SUPERVISOR_PASSWORD"] == "explicit-sup-pw"
+    assert os.environ["SUPERVISOR_USER"] == "ctl"
+
+
+def test_supervisord_conf_renders_separated_creds(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F4: supervisord.conf 渲染后,unix_http_server 与 supervisorctl 两段
+    都用 SUPERVISOR_PASSWORD,且 != PUBLIC_PASSWORD。"""
+    monkeypatch.delenv("SUPERVISOR_USER", raising=False)
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    monkeypatch.setenv("PUBLIC_PASSWORD", "public-pw-xyz")
+    monkeypatch.setenv("PUBLIC_USER", "admin")
+    cb._resolve_supervisor_credentials()
+    src = Path(__file__).parent.parent / "templates/supervisord/supervisord.conf"
+    rendered = cb._envsubst(src.read_text(encoding="utf-8"))
+    sup_pw = os.environ["SUPERVISOR_PASSWORD"]
+    assert rendered.count(f"password={sup_pw}") == 2  # 两段都替换
+    assert "password=public-pw-xyz" not in rendered    # public 不再出现在控制段
+    assert "${PUBLIC_PASSWORD}" not in rendered          # 无残留占位符
+
+
+def test_resolve_supervisor_credentials_empty_public_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F4 §2 watchtower 空 seed 路径：PUBLIC_PASSWORD 未设时派生密码必须非空且与
+    空字符串不同，保证旧 env 集重建镜像不产出空白 supervisord 控制密码。"""
+    monkeypatch.delenv("PUBLIC_PASSWORD", raising=False)
+    monkeypatch.delenv("SUPERVISOR_PASSWORD", raising=False)
+    monkeypatch.delenv("SUPERVISOR_USER", raising=False)
+    cb._resolve_supervisor_credentials()
+    sup_pw = os.environ["SUPERVISOR_PASSWORD"]
+    assert sup_pw  # 非空
+    assert sup_pw != ""  # 明确不等于空字符串
+    # 空 PUBLIC_PASSWORD seed 派生值不等于空字符串本身（独立盐确保区分）
+    assert sup_pw != os.environ.get("PUBLIC_PASSWORD", "")
+
+
+def test_resolve_subscribe_token_map_malicious_token_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G4 injection guard: token 含 nginx 语法破坏字符时 fail-closed,注入不写入 map。"""
+    monkeypatch.setenv("SUBSCRIBE_TOKEN", 'abc" "on"; map $x $y { default')
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert token_map == ""
+    assert '"off"' not in token_map
+
+
+def test_resolve_subscribe_token_map_whitespace_only_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G4: 纯空白 token strip 后为空 → fail-closed,不产出 off 映射。"""
+    monkeypatch.setenv("SUBSCRIBE_TOKEN", "   ")
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert token_map == ""
+    assert '"off"' not in token_map
+
+
+def test_resolve_subscribe_token_map_fail_closed_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G4: SUBSCRIBE_TOKEN 为空时,token-map 绝不能生成 '\"\" off' 映射,
+    否则无 ?token= 的请求会命中空串 key 而绕过 Basic Auth。"""
+    monkeypatch.delenv("SUBSCRIBE_TOKEN", raising=False)
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert '"off"' not in token_map
+    assert '"" "off"' not in token_map
+
+
+def test_resolve_subscribe_token_map_active_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非空 token → 生成该 token 的 off 映射,允许 token 持有者免 Basic Auth。"""
+    monkeypatch.setenv("SUBSCRIBE_TOKEN", "s3cr3t-tok")
+    cb._resolve_subscribe_token_map()
+    token_map = os.environ["NGINX_SUBSCRIBE_TOKEN_MAP"]
+    assert '"s3cr3t-tok" "off";' in token_map
+
+
+def test_nginx_conf_token_map_fail_closed_render(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空 SUBSCRIBE_TOKEN 渲染 nginx.conf 后,$auth_type map 体内
+    不得出现任何 'off' 映射(只剩 default Restricted)。"""
+    monkeypatch.delenv("SUBSCRIBE_TOKEN", raising=False)
+    cb._resolve_subscribe_token_map()
+    src = Path("templates/nginx/nginx.conf")
+    rendered = cb._envsubst(src.read_text(encoding="utf-8"))
+    start = rendered.index("map $arg_token $auth_type {")
+    block = rendered[start:rendered.index("}", start)]
+    assert '"off"' not in block
+    assert 'default "Restricted";' in block
+    assert "${NGINX_SUBSCRIBE_TOKEN_MAP}" not in rendered  # 占位符已展开(空串)
+
+
+def test_http_conf_includes_internal_acl_in_admin_locations() -> None:
+    """A1: /supervisor/、DUFS、XUI 三个管理面 location 必须 include
+    network_internal.conf,否则内网 ACL 形同虚设(对公网开放)。"""
+    http_conf = Path("templates/nginx/http.conf").read_text(encoding="utf-8")
+    inc = "include /etc/nginx/network_internal.conf;"
+    # 必须恰好出现在三个管理面 location 内(共 3 次)
+    assert http_conf.count(inc) == 3, f"期望 3 处 internal-acl include,实得 {http_conf.count(inc)}"
+    # 每个管理面 location 块内都要有 include —— 用 location 锚点切片验证
+    for anchor in ("location /supervisor/ {", "location ${DUFS_PATH_PREFIX}/ {",
+                   "location /${XUI_WEBBASEPATH}/ {"):
+        start = http_conf.index(anchor)
+        block = http_conf[start:start + 600]
+        assert inc in block, f"{anchor} 缺少 internal-acl include"
+
+
+def test_providers_template_has_no_hardcoded_account() -> None:
+    """E1: providers.yaml must parameterize the gist owner, not hardcode it."""
+    src = Path("templates/providers/providers.yaml")
+    raw = src.read_text(encoding="utf-8")
+    assert "currycan" not in raw
+    assert "${GIST_OWNER}" in raw
+    # owner segment sits directly before the gist code segment
+    assert "gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/" in raw
+
+
+def test_providers_gist_owner_substituted_when_set(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GIST_OWNER in env is expanded; unset GIST_CODE stays literal (client fills)."""
+    import sb_xray.config_builder as cb
+
+    monkeypatch.setenv("GIST_OWNER", "acme")
+    monkeypatch.delenv("GIST_CODE", raising=False)
+    rendered = cb._envsubst(
+        'url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/AllOne-Common"'
+    )
+    assert "gist.githubusercontent.com/acme/${GIST_CODE}/raw/AllOne-Common" in rendered
+
+
+# ---------------------------------------------------------------------------
+# J2: _render_json 失败时报出触发的 env 键名
+# ---------------------------------------------------------------------------
+
+
+def test_render_json_error_names_breaking_env(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """J2: 含换行的 env 注入 JSON 字符串字面量导致 json.loads 失败时,错误必须指名是哪个 env。
+
+    _JSON_BREAKING 检测的危险字符包括换行; 注入后 json.loads 抛
+    ``Invalid control character``,此时 RuntimeError 消息必须含 DEST_HOST。
+    (原始 brief 值 www.apple.com\",\"injected\":\"x 恰好产出合法 JSON —— 换行
+    才是此类测试的可靠触发点。)
+    """
+    monkeypatch.setenv("DEST_HOST", "host.example.com\n")
+    src = tmp_path / "t.json"
+    src.write_text('{"sni": "${DEST_HOST}"}', encoding="utf-8")
+    dest = tmp_path / "out.json"
+    with pytest.raises(RuntimeError, match="DEST_HOST"):
+        cb._render_json(src, dest)
+
+
+def test_render_json_error_names_env_with_backslash(
+    env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """J2: 末尾裸反斜杠转义了闭合引号,导致字符串未终止 (Unterminated string)。"""
+    monkeypatch.setenv("DOMAIN", "a\\")
+    src = tmp_path / "t.json"
+    src.write_text('{"d": "${DOMAIN}"}', encoding="utf-8")
+    dest = tmp_path / "out.json"
+    with pytest.raises(RuntimeError, match="DOMAIN"):
+        cb._render_json(src, dest)
+
+
+def test_suspect_envs_ignores_clean_values(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """干净 env(无 JSON-危险字符)不被列入嫌疑。"""
+    monkeypatch.setenv("DEST_HOST", "www.apple.com")
+    assert cb._suspect_json_breaking_envs('{"sni": "${DEST_HOST}"}') == []
+
+
+def test_random_num_is_single_digit_decorative(monkeypatch: pytest.MonkeyPatch) -> None:
+    # J6: RANDOM_NUM 仅供 nginx 注释行装饰 root 路径，非加密用途。
+    # 锁定值域 0-9（单 digit），防被误当 token。
+    monkeypatch.setattr(cb.random, "randint", lambda a, b: 7)
+    val = str(cb.random.randint(0, 9))
+    monkeypatch.setenv("RANDOM_NUM", val)
+    assert os.environ["RANDOM_NUM"] == "7"
+    assert os.environ["RANDOM_NUM"].isdigit() and len(os.environ["RANDOM_NUM"]) == 1
+
+
+def test_random_num_only_consumed_in_nginx_comment() -> None:
+    # 真相源核验：RANDOM_NUM 在模板中唯一出现处必须是注释行。
+    repo_root = Path(__file__).parent.parent
+    http_conf = (repo_root / "templates/nginx/http.conf").read_text(encoding="utf-8")
+    for line in http_conf.splitlines():
+        if "RANDOM_NUM" in line:
+            assert line.lstrip().startswith("#"), f"RANDOM_NUM 进入活动配置: {line!r}"

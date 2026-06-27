@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from sb_xray.stages import dhparam as sbdh
+from sb_xray.stages.dhparam import _DHPARAM_TIMEOUT_SEC
 
 
 def test_skips_when_file_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -24,8 +25,11 @@ def test_invokes_openssl_when_missing(tmp_path: Path, monkeypatch: pytest.Monkey
     target = tmp_path / "dhparam.pem"
     captured: dict[str, object] = {}
 
-    def fake_run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+    def fake_run(
+        cmd: list[str], check: bool = False, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
         captured["cmd"] = cmd
+        captured["timeout"] = timeout
         target.write_text("generated", encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0)
 
@@ -39,15 +43,42 @@ def test_invokes_openssl_when_missing(tmp_path: Path, monkeypatch: pytest.Monkey
         str(target),
         "1024",
     ]
+    assert captured["timeout"] == _DHPARAM_TIMEOUT_SEC
     assert target.is_file()
 
 
 def test_raises_on_openssl_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "dhparam.pem"
 
-    def fake_run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+    def fake_run(
+        cmd: list[str], check: bool = False, timeout: float | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(cmd, 7)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(RuntimeError, match="openssl dhparam exited with code 7"):
         sbdh.ensure_dhparam(path=target)
+
+
+def test_passes_timeout_to_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[bytes]:
+        seen["cmd"] = cmd
+        seen["timeout"] = kw.get("timeout")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sbdh.subprocess, "run", fake_run)
+    out = tmp_path / "dhparam.pem"
+    assert sbdh.ensure_dhparam(path=out) is True
+    assert seen["timeout"] == _DHPARAM_TIMEOUT_SEC
+    assert seen["cmd"][0] == "openssl"  # type: ignore[index]
+
+
+def test_raises_on_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[bytes]:
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+
+    monkeypatch.setattr(sbdh.subprocess, "run", boom)
+    with pytest.raises(subprocess.TimeoutExpired):
+        sbdh.ensure_dhparam(path=tmp_path / "dhparam.pem")

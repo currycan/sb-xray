@@ -50,7 +50,9 @@ services:
       # # 配置provider，多个provider用换行分隔
       # - |
       #   PROVIDERS=第一个|https://<host>/api/v1/client/subscribe?token=c02d1e8f9cd19dcae0f146c4ed71541a&flag=clash.meta|优
-      # Go 四件套（xray / sing-box / x-ui）共享 GC 上限
+      # Go 四件套(xray / sing-box / x-ui)共享 GC 软上限。
+      # 镜像内已有默认(Dockerfile ENV GOMEMLIMIT/GOGC);此处仅为文档化覆盖,
+      # 删除这两行不会丢失软上限保护(watchtower 重建也安全)。
       - GOMEMLIMIT=320MiB
       - GOGC=50
       # 小内存节点降载开关（opt-out 语义，默认全部保留；置 "false"/"true" 生效）
@@ -72,8 +74,8 @@ services:
       - CN_EXIT_PROBE_INTERVAL=${CN_EXIT_PROBE_INTERVAL:-30s}
       # reverse / balance 所需：VLESS reverse bridge（XRAY_REVERSE_UUID 自动生成并持久化；落地机配置随 show 输出下载链接）
       - ENABLE_REVERSE=${ENABLE_REVERSE:-true}
-      # 通过 bridge 出的内网域名，逗号分隔；纯回国可在 .env 设 REVERSE_DOMAINS= 留空
-      - "REVERSE_DOMAINS=${REVERSE_DOMAINS:-domain:home.lan,domain:nas.lan,domain:router.lan,domain:proxy.lan}"
+      # bridge 出的内网域名（逗号分隔，如 domain:myhost.internal）；默认空＝纯回国，无内网旁路
+      - "REVERSE_DOMAINS=${REVERSE_DOMAINS:-}"
       # socks5 / balance 所需：OpenWrt 的 Tailscale IP（.env 里 tsip）+ OpenClash SOCKS5 端口
       - ENABLE_SOCKS5_PROXY=${ENABLE_SOCKS5_PROXY:-true}
       - CN_EXIT_SOCKS5_HOST=${tsip}
@@ -137,9 +139,9 @@ services:
   # 全自动镜像更新（方案 B + L1 canary 护栏，详见 .superpowers/specs/2026-06-09-watchtower-auto-update-design.md）
   # ⚠ 镜像用 nickfedor/watchtower（containrrr/watchtower 已停摆，与现代 Docker daemon 不兼容会 panic）
   watchtower:
-    image: docker.io/nickfedor/watchtower:latest
+    image: docker.io/nickfedor/watchtower:latest@sha256:5a6262b7a66a353bd2cdb1e0cace6c5b7cb4d475d1080d6a57fe4ec82fe455b6
     container_name: watchtower
-    # 通知标题用容器 hostname；设为节点域名以便 16 台一眼可辨（否则显示容器 hash）
+    # 通知标题用容器 hostname；设为节点域名以便多节点环境一眼可辨（否则显示容器 hash）
     hostname: ${domain:-sb-xray}
     restart: always
     volumes:
@@ -149,7 +151,7 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
       # 白名单：只更新带 com.centurylinklabs.watchtower.enable=true 的容器，绝不触碰节点上其它容器
       - WATCHTOWER_LABEL_ENABLE=true
-      # 错峰 schedule（6 段 cron，时区=上方 TZ）：默认北京 04:00 低峰；canary（dc99-3）.env 覆盖为 0 0 3 * * *
+      # 错峰 schedule（6 段 cron，时区＝上方 TZ）：默认低峰整点；canary 节点经 .env 覆盖 WATCHTOWER_SCHEDULE 到更早时段先行验证
       - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
       # 自动更新通知，复用 sb-xray 同源 shoutrrr（Telegram）。注：仅 schedule 模式发，run-once/sbx-update 不发（设计 §4.5）
       # 通知：watchtower 自带通知为英文且不可定制（仅 Go template，维护成本不值），故关闭。
