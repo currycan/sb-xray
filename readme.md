@@ -180,7 +180,6 @@ docker compose up -d
 | **证书** | `ACMESH_SERVER_NAME` | `letsencrypt` | 也可 `zerossl` / `google`（后两者需 EAB 凭据） |
 | **伪装** | `DEST_HOST` | `www.microsoft.com` | Reality 伪装目标站点；推荐改 `speed.cloudflare.com` |
 | **ISP 节点** | `<PREFIX>_ISP_IP` / `_PORT` / `_USER` / `_SECRET` | — | 多 ISP 全部声明，`isp-auto` 自动选优 |
-| **AI 路由** | `GEMINI_DIRECT` | 空 | `true` / `false` / 空（自动探测） |
 | **节点后缀** | `NODE_SUFFIX` | 空 | 附加到所有生成节点名尾部（如 ` ✈ 高速`） |
 | **日志** | `LOG_LEVEL` / `SB_LOG_LEVEL` | `warning` / `INFO` | xray / sing-box 用前者，Python entrypoint 用后者，刻意分离 |
 | **降载开关** | `ENABLE_SUBSTORE` / `ENABLE_XUI` / `ENABLE_SUI` / `ENABLE_SHOUTRRR` | `true`（`ENABLE_XUI` 在 `docker-compose.yml` 默认 `false`） | 小内存节点按需关闭可省 20–200 MB；x-ui 面板开箱默认不启用，需用时在 `docker-compose.yml` 改 `ENABLE_XUI=true`；`ENABLE_SUI` 已废弃（s-ui 不再内置） |

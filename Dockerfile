@@ -461,10 +461,6 @@ ENV NODE_SUFFIX=""
 # ISP proxy
 ENV DEFAULT_ISP="LA_ISP"
 
-# AI 服务路由配置
-# Gemini 访问策略: false=使用代理(推荐), true=强制直连(仅在验证可用后设置)
-ENV GEMINI_DIRECT=""
-
 # 新增provider
 ENV PROVIDERS=""
 

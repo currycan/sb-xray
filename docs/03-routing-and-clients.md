@@ -227,7 +227,6 @@ flowchart LR
 🔬 **统一判定顺序**（优先级从高到低，命中即短路，见 `media.py` 文件头）：
 
 ```text
-L0  仅 Gemini：GEMINI_DIRECT 覆盖 — true → direct，false → 回退
 L1  受限地区（is_restricted_region GEOIP_INFO）→ 回退        ← 顶层安全网
 L2  IP_TYPE == "isp"（家庭宽带）→ direct
 L3  非住宅 IP，按类别分流：
@@ -238,8 +237,6 @@ L3  非住宅 IP，按类别分流：
 > **L1 受限地区守卫刻意压在 L2 住宅短路之上**：一个恰好落在审查地区的家宽节点，绝不能把这些服务直连出去（审查 + 账号双重风险）。
 
 🔬 **B 类的正文指纹（`ContentSignature`）**：`HEAD 200` 会被封禁页/验证码页骗过，所以 B 类必须读 body。判定规则——`blocked_substrings` / `blocked_url_patterns` 命中优先于 `real_substrings`（封禁页里也可能含品牌词）；什么都不匹配 → `UNKNOWN`，调用方按 fail-safe 走住宅回退。**指纹错了也只会变慢、不会失守**（绝不 fail-open）。各服务的探测 URL 与指纹字面值集中登记在 `routing/service_spec.py`（见 §1.6 的中央注册表说明）。
-
-> **GEMINI_DIRECT 覆盖**（L0，仅 Gemini）：`GEMINI_DIRECT=true` 强制 Gemini 直连、`=false` 强制回退；留空则 Gemini 退回 A 类默认判定。用于运维侧针对 Gemini 单服务手动钉死走向。
 
 🔬 **GEMINI_OUT 宽域覆盖**：`_SERVICE_SPEC` 中 `GEMINI_OUT` 同时覆盖宽规则 `geosite:google`（整个 Google 属地）与窄规则 `geosite:google-gemini`（Gemini 专属），且宽规则在前。设计意图：让 Gemini API 与 Google 账号体系（登录/OAuth）共走同一出口，避免两者分流到不同节点后触发风控。如需将普通 Google 搜索/服务分到其他出口，需在此之前插入独立规则。
 

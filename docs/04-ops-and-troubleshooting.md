@@ -144,7 +144,6 @@ docker exec -it sb-xray bash
 | `LISTENING_PORT` | `443` | Nginx 主监听端口 |
 | `DEST_HOST` | `www.microsoft.com` | Reality SNI 伪装目标（建议改为 `speed.cloudflare.com`） |
 | `DEFAULT_ISP` | `LA_ISP` | ISP 出口模式：非空=锁定到指定前缀出口（跳过测速）；**显式置空=启用测速自动选路**。Dockerfile 默认 `LA_ISP`，不覆盖则永远锁定 LA 出口 |
-| `GEMINI_DIRECT` | `""` | Gemini 路由：`true`=强制直连，`false`=代理，空=自动判断 |
 | `NODE_SUFFIX` | `""` | 订阅节点名称后缀（如 ` ✈ 高速`） |
 | `PROVIDERS` | `""` | 外部订阅源，多行格式 |
 | `TZ` | `Asia/Singapore` | 容器时区 |

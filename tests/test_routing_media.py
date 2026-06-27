@@ -42,7 +42,7 @@ _ACCOUNT_SENSITIVE: list[Callable[[], str]] = [
 
 @pytest.fixture(autouse=True)
 def _clear_routing_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("IP_TYPE", "GEOIP_INFO", "GEOIP_CC", "HAS_ISP_NODES", "GEMINI_DIRECT"):
+    for var in ("IP_TYPE", "GEOIP_INFO", "GEOIP_CC", "HAS_ISP_NODES"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -183,22 +183,6 @@ def test_classify_network_failure_unreachable() -> None:
 
 def sbhttp_result(*, status: int, body: str, final_url: str) -> media.sbhttp.FetchResult:
     return media.sbhttp.FetchResult(status=status, body=body, final_url=final_url)
-
-
-# ---- gemini override (L0) --------------------------------------------------
-
-
-def test_gemini_override_true_beats_restricted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GEMINI_DIRECT", "true")
-    monkeypatch.setenv("GEOIP_INFO", "中国 CN|192.0.2.5")
-    assert media.check_gemini() == "direct"
-
-
-def test_gemini_override_false_beats_residential(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GEMINI_DIRECT", "false")
-    monkeypatch.setenv("IP_TYPE", "isp")
-    monkeypatch.setenv("HAS_ISP_NODES", "1")
-    assert media.check_gemini() == "isp-auto"
 
 
 # ---- check_all contract ----------------------------------------------------

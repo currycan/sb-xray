@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Removed（移除）
+
+- **删除 `GEMINI_DIRECT` 环境变量**：该变量是 A 类账号敏感路由里唯一的 per-service 手动覆盖开关（仅作用于 Gemini：`true`=强制直连、`false`=强制回退、空=走默认判定），ChatGPT/Claude/社交/TikTok 均无对应开关，属不对称特例。删除后 `check_gemini()` 与其余 A 类服务一致，统一走 `_account_sensitive()` 默认判定（住宅 IP→direct，其余→住宅代理回退）。落点：`scripts/sb_xray/routing/media.py`（移除 L0 覆盖分支与决策链 L0 注释，剩余短路链从 L1 起编号）、`Dockerfile` / `docker-compose.yml`（移除 env 默认）、`tests/test_routing_media.py`（移除两条覆盖专属用例，Gemini 仍由 A 类参数化测试全覆盖）、docs/01·03·04 与 readme 同步。**行为影响**：默认部署（`GEMINI_DIRECT` 空）零变化；仅对曾显式设 `true`/`false` 钉死 Gemini 走向的部署生效——覆盖失效，Gemini 退回自动判定。**watchtower 漂移契约（CLAUDE.md §2）**：变量原有镜像内默认兜底，删除后新镜像忽略容器残留的该 env，不触发崩溃；属镜像内默认生效，不需 `requires-compose-sync`。
+
 ## [26.6.22] — 2026-06-22 · OpenWrt/VPS 运维体系整合（openwrt-init 一键初始化 · gl-inet 统一工具箱 · cn-backup 配置备份 · 反向探活）+ secrets 热刷新 + 日志体积治理
 
 > 汇总自 26.6.11 以来的全部变更（90 次提交）。主线是 **OpenWrt / VPS 两侧运维体系大整合**：路由器侧把分散的手动操作收口为「填一份 config.env，跑一条命令」（`openwrt-init.sh` 一键初始化 + `gl-inet.sh` OpenClash 统一工具箱 + Tailscale 身份自恢复 + CDN 优选硬契约），VPS 侧把运维脚本集中到 `/usr/local/bin`、新增配置备份（`cn-backup`）与整机宕机反向探活（`cn-exit-watchdog`）；镜像内伴随 secrets 远端轮换热刷新、日志体积治理与多项稳定性修复。镜像版本与 Git Release tag 仍按 `YY.M.D-<短 sha>` 一一对应，生产节点经 watchtower 自动跟进 `:latest`；本版全部变更均**镜像内默认生效或属宿主侧脚本，不触发 `requires-compose-sync`（CLAUDE.md §2）**。
