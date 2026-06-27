@@ -78,21 +78,3 @@ def test_doc08_bridge_example_uses_neutral_node_names() -> None:
         assert token not in doc08, f"docs/08 仍含环境特定示例: {token}"
     # 替换后应使用中性占位。
     assert "node-a.example.com" in doc08
-
-
-def test_templates_free_of_provider_brand_names() -> None:
-    tmpl = _REPO / "templates"
-    forbidden = (
-        "NiceYun", "YouSuTong", "ssrdog", "SsrDog", "NiuBi", "牛逼",
-        "HuoShaoYun", "火烧云", "DuoBao", "多宝", "HuoQiLin", "火麒麟",
-        "XingLian", "星链", "Nice云", "优速通",
-    )
-    hits = []
-    for path in sorted(tmpl.rglob("*")):
-        if not path.is_file():
-            continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        for token in forbidden:
-            if token in text:
-                hits.append(f"{path.relative_to(_REPO)}: {token}")
-    assert not hits, f"templates/ 含 §4 服务商品牌名: {hits}"

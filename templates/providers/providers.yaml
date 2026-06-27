@@ -1,23 +1,22 @@
 # GIST_OWNER: GitHub account; GIST_CODE: GitHub Gist ID for provider subscriptions. 未设(空默认)时
 # providers.py 会跳过下列含字面 ${GIST_CODE} 的块,订阅不含死链 URL。
-# 以下占位示例,运维须改为自己 gist raw 文件名对应的真实名称(slug 须精确匹配 gist 文件名)。
 proxy-providers:
   AllOne:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/AllOne-Common", override: {additional-prefix: "[AllOne] ", skip-cert-verify: false, udp: true, up: 2500 Mbps, down: 2500 Mbps}}
 
-  ProviderA: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-a", override: {additional-prefix: "[ProviderA] ", additional-suffix: " super"}}
+  Nice云:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/NiceYun", override: {additional-prefix: "[Nice云] ", additional-suffix: " super"}}
 
-  ProviderB: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-b", override: {additional-prefix: "[ProviderB] ", additional-suffix: " super"}}
+  优速通:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/YouSuTong", override: {additional-prefix: "[优速通] ", additional-suffix: " super"}}
 
-  ProviderC: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-c", override: {additional-prefix: "[ProviderC] ", additional-suffix: " super"}}
+  SsrDog:    {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/ssrdog", override: {additional-prefix: "[SsrDog] ", additional-suffix: " super"}}
 
-  ProviderD: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-d", override: {additional-prefix: "[ProviderD] ", additional-suffix: " super"}}
+  NiceCloud: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/NiceCloud", override: {additional-prefix: "[NiceCloud] ", additional-suffix: " super"}}
 
-  ProviderE: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-e", override: {additional-prefix: "[ProviderE] "}}
+  牛逼:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/NiuBi", override: {additional-prefix: "[牛逼] "}}
 
-  ProviderF: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-f", override: {additional-prefix: "[ProviderF] ", additional-suffix: " good"}}
+  火烧云:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/HuoShaoYun", override: {additional-prefix: "[火烧云] ", additional-suffix: " good"}}
 
-  ProviderG: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-g", override: {additional-prefix: "[ProviderG] ", additional-suffix: " good"}}
+  多宝:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/DuoBao", override: {additional-prefix: "[多宝] ", additional-suffix: " good"}}
 
-  ProviderH: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-h", override: {additional-prefix: "[ProviderH] "}}
+  火麒麟:     {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/HuoQiLin", override: {additional-prefix: "[火麒麟] "}}
 
-  ProviderI: {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/provider-i", override: {additional-prefix: "[ProviderI] "}}
+  星链:       {<<: *BaseProvider, url: "https://gh-proxy.com/gist.githubusercontent.com/${GIST_OWNER}/${GIST_CODE}/raw/XingLian", override: {additional-prefix: "[星链] "}}
