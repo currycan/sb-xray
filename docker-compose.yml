@@ -13,6 +13,8 @@ services:
       - DOMAIN=$domain
       - CDNDOMAIN=$cdndomain
       - DECODE=$code
+      # 远程密钥库加密 blob 地址；镜像内默认空(P2-4/§4 去硬编码账号),启用 DECODE 解密的部署须在 .env 设 secrets_url。空默认时 decrypt 走 DECODE-gate SKIP,不触发空 URL fetch。
+      - SECRETS_URL=${secrets_url:-}
       - ACMESH_DEBUG=1
       # CA 候选（均支持 DNS-01 通配符证书）：
       #   letsencrypt  无需 EAB，50 cert/domain/week，默认推荐
