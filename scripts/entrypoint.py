@@ -490,6 +490,7 @@ def run_show_pipeline(env_file: Path) -> int:
     """End-to-end ``show`` subcommand pipeline (show-config.sh ``main``)."""
     import shutil
 
+    from sb_xray import config_builder as sbcfg
     from sb_xray.routing import providers as sbprov
 
     bootstrap(env_file)
@@ -507,7 +508,14 @@ def run_show_pipeline(env_file: Path) -> int:
     if _CLIENT_TEMPLATE_DIR.is_dir():
         for tpl in sorted(_CLIENT_TEMPLATE_DIR.iterdir()):
             if tpl.suffix == ".yaml" or tpl.name == "surge.conf":
-                _envsubst_render(tpl, subscribe_dir / tpl.name)
+                dst = subscribe_dir / tpl.name
+                _envsubst_render(tpl, dst)
+                # 渲染后清理死链:GIST_OWNER/ICON_REPO 未注入时丢弃坏 provider / icon,
+                # 不下发会令客户端 apply 失败的订阅(事故 2026-06-28)。
+                dst.write_text(
+                    sbcfg.sanitize_subscription(dst.read_text(encoding="utf-8")),
+                    encoding="utf-8",
+                )
 
     if os.environ.get("ENABLE_REVERSE", "false") == "true" and _REVERSE_BRIDGE_TEMPLATE.is_file():
         _envsubst_render(_REVERSE_BRIDGE_TEMPLATE, subscribe_dir / "reverse_bridge_client.json")

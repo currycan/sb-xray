@@ -100,6 +100,51 @@ def _render_flat(src: Path, dest: Path) -> None:
     dest.write_text(_envsubst(src.read_text(encoding="utf-8")), encoding="utf-8")
 
 
+# 订阅死链清理(事故 2026-06-28):GIST_OWNER / ICON_REPO 渲染为空(镜像默认且
+# 运维未注入)或保持未渲染时,gist provider URL 会塌成空 owner 段
+# (``gist.githubusercontent.com//``)、icon URL 塌成空 repo 段。客户端一旦遇到非法的
+# proxy-provider URL 会拒绝整份订阅 → "更新订阅失败"。此处丢弃坏 provider 行、剥离坏
+# icon 字段,不再下发会 apply 失败的订阅。
+#
+# **保留字面 ``${GIST_CODE}``**:客户端模板里 GIST_CODE 故意留作字面由客户端自行填充
+# (见 tests/test_subscription_render),只有 owner/repo 段为空或未渲染才是缺陷。
+#
+# 注:服务端 proxy-providers 路径另有 ``routing.providers._strip_unrendered_gist`` 守护;
+# 本函数补的是**客户端模板分发路径**(``entrypoint._envsubst_render`` 循环)从前缺失的同类保护。
+_BROKEN_GIST_OWNER = re.compile(r"gist\.githubusercontent\.com/(?:/|\$\{?GIST_OWNER\}?/)")
+_BROKEN_ICON_FIELD = re.compile(
+    r",\s*icon:\s*[^\s,}]*raw\.githubusercontent\.com/(?:/|\$\{?ICON_REPO\}?/)[^\s,}]*"
+)
+
+
+def sanitize_subscription(text: str) -> str:
+    """Strip dead-link gist providers / icons whose GitHub owner segment is empty.
+
+    Defends the client-template render path, which — unlike
+    ``routing.providers._strip_unrendered_gist`` — had no dead-link guard.
+    Drops any provider line whose gist URL owner is empty/unrendered, and
+    removes the ``icon:`` field from an entry whose icon repo is empty/unrendered
+    (keeping the entry itself). A literal ``${GIST_CODE}`` is left intact by
+    design. Idempotent and a no-op on text without broken GitHub URLs.
+    """
+    kept: list[str] = []
+    for line in text.splitlines():
+        if _BROKEN_GIST_OWNER.search(line):
+            name = line.split(":", 1)[0].strip(" -")
+            logger.warning(
+                "丢弃 owner 段为空/未渲染的 gist provider(GIST_OWNER 未注入): %s",
+                name or line.strip(),
+            )
+            continue
+        if _BROKEN_ICON_FIELD.search(line):
+            line = _BROKEN_ICON_FIELD.sub("", line)
+        kept.append(line)
+    out = "\n".join(kept)
+    if text.endswith("\n"):
+        out += "\n"
+    return out
+
+
 def _suspect_json_breaking_envs(template_text: str) -> list[str]:
     """模板中被引用、且当前值含 JSON-危险字符的 env 键名(J2 诊断用)。
 
