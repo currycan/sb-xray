@@ -143,14 +143,17 @@ def test_sanitize_noop_on_clean_text() -> None:
 # --- 集成:真实客户端模板成品不得含死链(此前缺失的"假绿灯"补强)-----------------
 
 
+# GIST_CODE 两种缺省态都要覆盖(清单 #7 边界):未设(safe_substitute 留字面)
+# 与空串(生产实况:容器 Config.Env 里 GIST_CODE= 空)。两者经空 owner 的 `//` 命中清理。
+@pytest.mark.parametrize("gist_code", [None, ""], ids=["code-unset", "code-empty"])
 @pytest.mark.parametrize("tpl", _YAML_TEMPLATES, ids=lambda p: p.name)
 def test_real_template_empty_env_no_dead_links(
-    tpl: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tpl: Path, gist_code: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """GIST_OWNER/ICON_REPO 空(镜像默认未注入)时,渲染+清理后的订阅无死链、无残留占位符。"""
     out = _render_then_sanitize(
         tpl,
-        {"GIST_OWNER": "", "ICON_REPO": "", "GIST_CODE": None},
+        {"GIST_OWNER": "", "ICON_REPO": "", "GIST_CODE": gist_code},
         monkeypatch,
         tmp_path,
     )
