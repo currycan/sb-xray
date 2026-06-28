@@ -339,9 +339,10 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 ENV ENABLE_REVERSE="false"
 ENV REVERSE_DOMAINS=""
 
-# 订阅 provider / icon 账号段（§4：不入库具体账号；运维经 compose/.env 注入实际值）
+# gist provider 账号段（§4：不入库具体账号；GIST_OWNER 经 compose/.env 注入实际值）。
+# 空默认是 §2a watchtower 兜底；空时客户端订阅死链由 sanitize_subscription 清理。
+# icon 仓库（公开 currycan/key）在模板内硬编码，无需 env。
 ENV GIST_OWNER=""
-ENV ICON_REPO=""
 
 # 回国出口模式开关（显式选择回国链路）：
 #   socks5   CN 流量经 SOCKS5（Tailscale/OpenClash，需 CN_EXIT_SOCKS5_HOST/PORT）

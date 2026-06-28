@@ -510,7 +510,7 @@ def run_show_pipeline(env_file: Path) -> int:
             if tpl.suffix == ".yaml" or tpl.name == "surge.conf":
                 dst = subscribe_dir / tpl.name
                 _envsubst_render(tpl, dst)
-                # 渲染后清理死链:GIST_OWNER/ICON_REPO 未注入时丢弃坏 provider / icon,
+                # 渲染后清理死链:GIST_OWNER 未注入时丢弃空 owner 的坏 gist provider,
                 # 不下发会令客户端 apply 失败的订阅(事故 2026-06-28)。
                 dst.write_text(
                     sbcfg.sanitize_subscription(dst.read_text(encoding="utf-8")),

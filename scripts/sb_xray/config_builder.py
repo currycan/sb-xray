@@ -100,32 +100,24 @@ def _render_flat(src: Path, dest: Path) -> None:
     dest.write_text(_envsubst(src.read_text(encoding="utf-8")), encoding="utf-8")
 
 
-# 订阅死链清理(事故 2026-06-28):GIST_OWNER / ICON_REPO 渲染为空(镜像默认且
-# 运维未注入)或保持未渲染时,gist provider URL 会塌成空 owner 段
-# (``gist.githubusercontent.com//``)、icon URL 塌成空 repo 段。客户端一旦遇到非法的
-# proxy-provider URL 会拒绝整份订阅 → "更新订阅失败"。此处丢弃坏 provider 行、剥离坏
-# icon 字段,不再下发会 apply 失败的订阅。
-#
-# **保留字面 ``${GIST_CODE}``**:客户端模板里 GIST_CODE 故意留作字面由客户端自行填充
-# (见 tests/test_subscription_render),只有 owner/repo 段为空或未渲染才是缺陷。
+# 订阅死链清理(事故 2026-06-28):GIST_OWNER 渲染为空(镜像空默认、运维未在 .env 注入)
+# 或保持未渲染时,gist provider URL 塌成空 owner 段(``gist.githubusercontent.com//``)。
+# 客户端遇到非法的 proxy-provider URL 会拒绝整份订阅 → "更新订阅失败"。此处丢弃这些坏
+# provider 行,不再下发会 apply 失败的订阅;GIST_OWNER 注入后正常渲染,本函数 no-op。
 #
 # 注:服务端 proxy-providers 路径另有 ``routing.providers._strip_unrendered_gist`` 守护;
 # 本函数补的是**客户端模板分发路径**(``entrypoint._envsubst_render`` 循环)从前缺失的同类保护。
+# GIST_CODE(私有 gist 订阅 ID)是敏感信息,来自加密 secret blob(SECRETS_URL 解密),非本函数
+# 职责。icon 仓库是公开 currycan/key,模板内硬编码,无死链风险。
 _BROKEN_GIST_OWNER = re.compile(r"gist\.githubusercontent\.com/(?:/|\$\{?GIST_OWNER\}?/)")
-_BROKEN_ICON_FIELD = re.compile(
-    r",\s*icon:\s*[^\s,}]*raw\.githubusercontent\.com/(?:/|\$\{?ICON_REPO\}?/)[^\s,}]*"
-)
 
 
 def sanitize_subscription(text: str) -> str:
-    """Strip dead-link gist providers / icons whose GitHub owner segment is empty.
+    """Drop gist provider lines whose GitHub owner segment is empty/unrendered.
 
     Defends the client-template render path, which — unlike
     ``routing.providers._strip_unrendered_gist`` — had no dead-link guard.
-    Drops any provider line whose gist URL owner is empty/unrendered, and
-    removes the ``icon:`` field from an entry whose icon repo is empty/unrendered
-    (keeping the entry itself). A literal ``${GIST_CODE}`` is left intact by
-    design. Idempotent and a no-op on text without broken GitHub URLs.
+    Idempotent and a no-op once GIST_OWNER is injected.
     """
     kept: list[str] = []
     for line in text.splitlines():
@@ -136,8 +128,6 @@ def sanitize_subscription(text: str) -> str:
                 name or line.strip(),
             )
             continue
-        if _BROKEN_ICON_FIELD.search(line):
-            line = _BROKEN_ICON_FIELD.sub("", line)
         kept.append(line)
     out = "\n".join(kept)
     if text.endswith("\n"):
