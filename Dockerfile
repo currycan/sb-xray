@@ -304,9 +304,13 @@ RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
   rm -rf /tmp/*
 
 ENV WORKDIR=/sb-xray
-# GIST_CODE 为 GitHub Gist 订阅 ID,空默认是安全状态：
+
+# GIST_CODE 为 GitHub Gist 订阅 ID：
 # 未设时 providers.py 跳过含字面 ${GIST_CODE} 的 provider 块(不渲染死链 URL)。
 ENV GIST_CODE=""
+# gist provider 账号段（§4：不入库具体账号；GIST_OWNER 经 compose/.env 注入实际值）。
+ENV GIST_OWNER=""
+
 ENV LOGDIR=/var/log/
 # Go 四件套(xray / sing-box / x-ui)共享 GC 软上限(§2b 镜像内默认生效)。
 # watchtower 用旧 env 集重建容器时不读 compose,无此默认则丢失针对 ≤512MB
@@ -338,11 +342,6 @@ ENV SHOUTRRR_TITLE_PREFIX="[sb-xray]"
 # ENABLE_REVERSE=true 时 show 命令会渲染并输出占位符已填充的 reverse_bridge_client.json 下载链接
 ENV ENABLE_REVERSE="false"
 ENV REVERSE_DOMAINS=""
-
-# gist provider 账号段（§4：不入库具体账号；GIST_OWNER 经 compose/.env 注入实际值）。
-# 空默认是 §2a watchtower 兜底；空时客户端订阅死链由 sanitize_subscription 清理。
-# icon 仓库（公开 currycan/key）在模板内硬编码，无需 env。
-ENV GIST_OWNER=""
 
 # 回国出口模式开关（显式选择回国链路）：
 #   socks5   CN 流量经 SOCKS5（Tailscale/OpenClash，需 CN_EXIT_SOCKS5_HOST/PORT）
