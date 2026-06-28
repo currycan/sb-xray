@@ -50,6 +50,12 @@ services:
       # # 配置provider，多个provider用换行分隔
       # - |
       #   PROVIDERS=第一个|https://<host>/api/v1/client/subscribe?token=c02d1e8f9cd19dcae0f146c4ed71541a&flag=clash.meta|优
+      # gist provider 的 GitHub 账号段。GIST_OWNER 只是 GitHub 账号(非敏感)→ 经节点 .env 注入。
+      # 缺此注册运维真值无通道进容器,镜像默认空 → 容器重建后订阅塌成空 owner 死链(事故 2026-06-28)。
+      # 空默认 §2a 安全:空时客户端模板死链由 config_builder.sanitize_subscription 清理,不下发坏订阅。
+      # GIST_CODE 是私有 gist 订阅 ID(敏感)→ 走加密 secret blob(SECRETS_URL 解密),不在此注册。
+      # icon 仓库是公开 currycan/key,模板内硬编码,无需 env。
+      - GIST_OWNER=${gist_owner:-}
       # Go 四件套(xray / sing-box / x-ui)共享 GC 软上限。
       # 镜像内已有默认(Dockerfile ENV GOMEMLIMIT/GOGC);此处仅为文档化覆盖,
       # 删除这两行不会丢失软上限保护(watchtower 重建也安全)。
