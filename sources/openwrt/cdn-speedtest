@@ -291,7 +291,7 @@ run_speedtest() {
     # ── 第二步:无门槛全量测速(单跑;分层在后处理)──
     rm -f result.csv
     ./cfst -n "$SPEED_TEST_THREADS" -t "$SPEED_TEST_TIME" -dt "$SPEED_TEST_DL_TIME" \
-        -dn "$SPEED_TEST_COUNT" -o result.csv
+        -dn "$SPEED_TEST_COUNT" -o result.csv || true
 
     # 单一恢复点(覆盖所有路径)
     restore_proxy_env

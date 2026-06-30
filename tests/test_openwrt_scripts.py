@@ -658,13 +658,26 @@ def test_embedded_speedtest_trap_recovery() -> None:
     assert "mkdir /tmp/.cdn-speedtest-oc-restore.lock" in embedded, "恢复缺原子锁"
     assert "/etc/init.d/openclash restart" in embedded, "恢复须用 restart（三态收敛）"
     assert "pgrep -f" not in embedded.split("restore_proxy_env()")[1].split("\n}")[0], "恢复不得用进程探测（拖尾/旁观假象）"
-    # 防陈旧结果:测速前必须清掉上一轮 result.csv
     # 防陈旧结果:run_speedtest 的批量测速前必须清掉上一轮 result.csv。
     # 注:_probe_ip 有更早的 ./cfst(写 /tmp/cdn-probe.csv),按整文件 .index 会误命中;
     # 故限定在 run_speedtest 函数体内判定批量测速的 rm 早于其 ./cfst。
     _rs_body = embedded[embedded.index("run_speedtest()"):]
     assert "rm -f result.csv" in _rs_body, "缺少测速前旧结果清理"
     assert _rs_body.index("rm -f result.csv") < _rs_body.index("./cfst"), "清理须在 cfst 之前"
+
+
+def test_embedded_main_cfst_guarded_against_set_e() -> None:
+    """set -eu 下主优选 cfst 若返回非零会跳过 _tier_select/_decide，造成有活缓存 IP 时误判 fail。
+    run_speedtest 函数体内的批量 cfst 调用须以 || true 收尾，让非零退出走空结果路径交 _decide 处理。
+    _probe_ip 内的 cfst（-ip 单 IP 体检）已位于 if 条件中，不在此断言范围内。"""
+    embedded = _CDN.read_text(encoding="utf-8")
+    # 限定在 run_speedtest 函数体内（不匹配 _probe_ip 里的 cfst）
+    _rs_body = embedded[embedded.index("run_speedtest()"):embedded.index("\n_decide(")]
+    assert "|| true" in _rs_body, "run_speedtest 的主 cfst 调用须加 || true 防 set -e 中断"
+    # 确认是批量测速那行，而非其它（通过 -o result.csv 锁定）
+    cfst_line_idx = _rs_body.index("-o result.csv")
+    true_guard_idx = _rs_body.index("|| true")
+    assert true_guard_idx > cfst_line_idx, "|| true 须紧跟主 cfst 调用（-o result.csv）之后"
 
 
 # ---- _probe_verdict 单 IP 体检 + _probe_ip 薄壳 --------------------------------
