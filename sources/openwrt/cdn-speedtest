@@ -227,8 +227,13 @@ _tier_select() {
     _ts_hit=$(awk -F, -v b="$_ts_softlat" -v s="$_ts_softspd" \
         'NR>1 && NF>=6 && $5<=b && $6>=s {print $1","$5","$6; exit}' "$_ts_csv")
     if [ -n "$_ts_hit" ]; then printf '%s\n' "$_ts_hit"; return 0; fi
-    # 最优层:第二行(速度降序后最高速者)
-    _ts_hit=$(awk -F, 'NR==2 && NF>=6 {print $1","$5","$6; exit}' "$_ts_csv")
+    # 最优层:取最高速;同速取最低延迟(全 0 速时 cfst 行序非延迟序,退化为按最低延迟挑,
+    # 避免盲取首个数据行——见 2026-06-30 canary:全 0 速误选高延迟行)
+    _ts_hit=$(awk -F, '
+        NR>1 && NF>=6 {
+            if (best=="" || $6>bs || ($6==bs && $5<bl)) { best=$1","$5","$6; bs=$6; bl=$5 }
+        }
+        END { if (best!="") print best }' "$_ts_csv")
     [ -n "$_ts_hit" ] && printf '%s\n' "$_ts_hit"
     return 0
 }

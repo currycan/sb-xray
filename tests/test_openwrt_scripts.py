@@ -778,7 +778,19 @@ def test_tier_select_best_available_when_no_soft(tmp_path: Path) -> None:
         "4.4.4.4,4,4,0.00,200,0.8\n"
     )
     out = _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1")
-    assert out == "3.3.3.3,180,1.2"  # 取第二行(speed 降序最高)
+    assert out == "3.3.3.3,180,1.2"  # 最高速(1.2 > 0.8)
+
+
+def test_tier_select_best_available_ties_prefer_lower_latency(tmp_path: Path) -> None:
+    """最优层 tie-break:全 0 速(CF 路径劣化)时 cfst 行序非延迟序,须按最低延迟挑,
+    不能盲取首个数据行。复刻 2026-06-30 canary 场景(全 0 速、首行延迟更高)。"""
+    csv = (
+        "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+        "1.1.1.1,4,4,0.00,158.95,0.00\n"  # cfst 行序在前,延迟更高
+        "2.2.2.2,4,4,0.00,151.89,0.00\n"  # 同速,延迟更低 → 应选它
+    )
+    out = _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1")
+    assert out == "2.2.2.2,151.89,0.00"
 
 
 def test_tier_select_empty_csv(tmp_path: Path) -> None:
