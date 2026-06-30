@@ -993,3 +993,50 @@ def test_check_ip_score_coerced_to_integer() -> None:
     for fnname in ("db_ip2location()", "db_abuseipdb()"):
         body = src[src.index(fnname):src.index("end_progress\n}", src.index(fnname))]
         assert "_int_or_zero" in body, f"{fnname} 的 score 须经 _int_or_zero 取整"
+
+
+# ---- should_update 纯函数参数化重构 -------------------------------------------
+
+
+def _drive_should_update(tmp_path: Path, args: str) -> str:
+    """切出 should_update，用 6 参驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    start = src.index("\nshould_update()") + 1
+    func = src[start:src.index("\n}\n", start) + 2]
+    f = tmp_path / "su.sh"
+    f.write_text(func, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\nshould_update {args}; echo \"rc=$?\""],
+        capture_output=True, text=True, timeout=30,
+    )
+    return proc.stdout.strip()
+
+
+def test_should_update_no_old_updates(tmp_path: Path) -> None:
+    assert "rc=0" in _drive_should_update(tmp_path, "1.1.1.1 5 60 '' '' ''")
+
+
+def test_should_update_same_ip_skips(tmp_path: Path) -> None:
+    assert "rc=1" in _drive_should_update(tmp_path, "1.1.1.1 5 60 1.1.1.1 5 60")
+
+
+def test_should_update_new_10pct_faster_updates(tmp_path: Path) -> None:
+    # new 6 vs old 5 → 6 > 5*1.1=5.5 → 换
+    assert "rc=0" in _drive_should_update(tmp_path, "2.2.2.2 6 60 1.1.1.1 5 60")
+
+
+def test_should_update_similar_speed_lower_latency_updates(tmp_path: Path) -> None:
+    # new 5.2 vs old 5(>=4.5 相当),new lat 40 < old 60 → 换
+    assert "rc=0" in _drive_should_update(tmp_path, "2.2.2.2 5.2 40 1.1.1.1 5 60")
+
+
+def test_should_update_new_worse_keeps(tmp_path: Path) -> None:
+    # new 3 vs old 5 → 3 < 5*0.9=4.5 → 留
+    assert "rc=1" in _drive_should_update(tmp_path, "2.2.2.2 3 60 1.1.1.1 5 60")
+
+
+def test_should_update_does_not_read_last_best_file() -> None:
+    """回归点:重构后 should_update 不再从 last_best.txt 读旧值。"""
+    src = _CDN.read_text(encoding="utf-8")
+    su = src[src.index("should_update()"):src.index("\n}\n", src.index("should_update()"))]
+    assert "LAST_RESULT_FILE" not in su, "should_update 不应再读 last_best.txt(基准应由调用方传入新鲜值)"

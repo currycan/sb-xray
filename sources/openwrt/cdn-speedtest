@@ -342,60 +342,21 @@ save_result() {
     log "已保存优选记录: IP=${ip}, 速度=${speed}MB/s, 延迟=${latency}ms"
 }
 
-# 比较新旧 IP，判断是否需要更新
+# 比较新旧 IP，判断是否需要更新（纯函数：基准由调用方传入，不读文件）
+# 参数: new_ip new_speed new_latency old_ip old_speed old_latency
 # 返回 0 = 需要更新，返回 1 = 跳过
 should_update() {
-    local new_ip="$1" new_speed="$2" new_latency="$3"
-
-    # 无历史记录，首次运行
-    if [ ! -f "$LAST_RESULT_FILE" ]; then
-        log "首次运行，无历史记录，直接更新"
-        return 0
+    _su_nip="$1"; _su_nspd="$2"; _su_nlat="$3"; _su_oip="$4"; _su_ospd="$5"; _su_olat="$6"
+    if [ -z "$_su_oip" ]; then log "无历史 IP,直接更新"; return 0; fi
+    if [ "$_su_nip" = "$_su_oip" ]; then log "优选 IP 未变化 (${_su_nip}),跳过更新"; return 1; fi
+    if awk -v n="$_su_nspd" -v o="$_su_ospd" 'BEGIN{exit !(n > o*1.1)}'; then
+        log "新 IP 速度提升超过 10% (${_su_nspd} vs ${_su_ospd}),更新"; return 0
     fi
-
-    local old_ip old_speed old_latency
-    old_ip=$(cut -d'|' -f1 "$LAST_RESULT_FILE")
-    old_speed=$(cut -d'|' -f2 "$LAST_RESULT_FILE")
-    old_latency=$(cut -d'|' -f3 "$LAST_RESULT_FILE")
-
-    log "对比: 新 IP ${new_ip} (速度: ${new_speed}MB/s, 延迟: ${new_latency}ms) vs 上次 IP ${old_ip} (速度: ${old_speed}MB/s, 延迟: ${old_latency}ms)"
-
-    # IP 相同
-    if [ "$new_ip" = "$old_ip" ]; then
-        log "优选 IP 未变化 (${new_ip})，跳过更新"
-        return 1
+    if awk -v n="$_su_nspd" -v o="$_su_ospd" 'BEGIN{exit !(n >= o*0.9)}' \
+       && awk -v n="$_su_nlat" -v o="$_su_olat" 'BEGIN{exit !(n < o)}'; then
+        log "速度相当但新 IP 延迟更低 (${_su_nlat}ms < ${_su_olat}ms),更新"; return 0
     fi
-
-    # 新 IP 速度超过上次 10% 则更新
-    local speed_better
-    speed_better=$(echo "$new_speed $old_speed" | awk '{if ($1 > $2 * 1.1) print "1"; else print "0"}')
-    if [ "$speed_better" = "1" ]; then
-        log "新 IP 速度提升超过 10% (${new_speed} vs ${old_speed})，更新"
-        return 0
-    fi
-
-    # 速度相当（差距在 10% 以内），比较延迟
-    local speed_similar
-    speed_similar=$(echo "$new_speed $old_speed" | awk '{if ($1 >= $2 * 0.9) print "1"; else print "0"}')
-    if [ "$speed_similar" = "1" ]; then
-        local latency_better
-        latency_better=$(echo "$new_latency $old_latency" | awk '{if ($1 < $2) print "1"; else print "0"}')
-        if [ "$latency_better" = "1" ]; then
-            log "速度相当但新 IP 延迟更低 (${new_latency}ms < ${old_latency}ms)，更新"
-            return 0
-        fi
-    fi
-
-    # 新 IP 速度明显更差
-    local speed_worse
-    speed_worse=$(echo "$new_speed $old_speed" | awk '{if ($1 < $2 * 0.9) print "1"; else print "0"}')
-    if [ "$speed_worse" = "1" ]; then
-        log "新 IP 速度更差 (${new_speed} vs ${old_speed})，保持当前 IP ${old_ip}"
-        return 1
-    fi
-
-    log "新旧 IP 质量相当，保持当前 IP ${old_ip} 不变"
-    return 1
+    log "新旧 IP 质量相当或更差,保持当前 IP ${_su_oip}"; return 1
 }
 
 update_hosts() {
@@ -539,7 +500,13 @@ main() {
             local best_speed best_latency
             best_speed=$(sed -n '2p' "${INSTALL_DIR}/result.csv" | cut -d',' -f6)
             best_latency=$(sed -n '2p' "${INSTALL_DIR}/result.csv" | cut -d',' -f5)
-            if should_update "$best_ip" "$best_speed" "$best_latency"; then
+            _old_ip=""; _old_spd=""; _old_lat=""
+            if [ -f "$LAST_RESULT_FILE" ]; then
+                _old_ip=$(cut -d'|' -f1 "$LAST_RESULT_FILE")
+                _old_spd=$(cut -d'|' -f2 "$LAST_RESULT_FILE")
+                _old_lat=$(cut -d'|' -f3 "$LAST_RESULT_FILE")
+            fi
+            if should_update "$best_ip" "$best_speed" "$best_latency" "$_old_ip" "$_old_spd" "$_old_lat"; then
                 update_hosts "$best_ip"
                 restart_dns
                 save_result "$best_ip" "$best_speed" "$best_latency"
