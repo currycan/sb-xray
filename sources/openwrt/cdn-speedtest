@@ -201,7 +201,6 @@ _probe_verdict() {
 
 # 体检缓存 IP(薄壳):单 IP 无门槛 cfst → _probe_verdict。须在 cd $INSTALL_DIR 后调用。
 _probe_ip() {
-    rm -f result.csv
     rm -f /tmp/cdn-probe.csv
     ./cfst -ip "$1" -n 200 -t 4 -dn 1 -dt 5 -o /tmp/cdn-probe.csv > /dev/null 2>&1
     _probe_verdict /tmp/cdn-probe.csv "$SPEED_TEST_ALIVE_MIN_SPEED"

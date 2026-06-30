@@ -653,8 +653,12 @@ def test_embedded_speedtest_trap_recovery() -> None:
     assert "/etc/init.d/openclash restart" in embedded, "恢复须用 restart（三态收敛）"
     assert "pgrep -f" not in embedded.split("restore_proxy_env()")[1].split("\n}")[0], "恢复不得用进程探测（拖尾/旁观假象）"
     # 防陈旧结果:测速前必须清掉上一轮 result.csv
-    assert "rm -f result.csv" in embedded, "缺少测速前旧结果清理"
-    assert embedded.index("rm -f result.csv") < embedded.index("./cfst"), "清理须在 cfst 之前"
+    # 防陈旧结果:run_speedtest 的批量测速前必须清掉上一轮 result.csv。
+    # 注:_probe_ip 有更早的 ./cfst(写 /tmp/cdn-probe.csv),按整文件 .index 会误命中;
+    # 故限定在 run_speedtest 函数体内判定批量测速的 rm 早于其 ./cfst。
+    _rs_body = embedded[embedded.index("run_speedtest()"):]
+    assert "rm -f result.csv" in _rs_body, "缺少测速前旧结果清理"
+    assert _rs_body.index("rm -f result.csv") < _rs_body.index("./cfst"), "清理须在 cfst 之前"
 
 
 # ---- _probe_verdict 单 IP 体检 + _probe_ip 薄壳 --------------------------------
