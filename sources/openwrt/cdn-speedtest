@@ -188,6 +188,30 @@ restore_proxy_env() {
     fi
 }
 
+# 从 result.csv 按层挑 IP。纯函数:只读 csv,不跑 cfst、不写文件。
+# 参数: csv lat_min lat_max loss_max min_speed soft_lat soft_speed cn_fallback
+# 输出: 选中行 "ip,latency,speed";无则空。result.csv 列 1=IP 4=丢包 5=延迟 6=速度。
+# result.csv 已按下载速度降序(cfst 默认),故每层「首个匹配」即该层最高速。
+_tier_select() {
+    _ts_csv="$1"; _ts_lmin="$2"; _ts_lmax="$3"; _ts_lossmax="$4"; _ts_smin="$5"
+    _ts_softlat="$6"; _ts_softspd="$7"; _ts_cnfb="$8"
+    [ -f "$_ts_csv" ] || return 0
+    # 严格层:lat_min<=lat<=lat_max 且 loss<=loss_max 且 speed>=min_speed
+    _ts_hit=$(awk -F, -v a="$_ts_lmin" -v b="$_ts_lmax" -v l="$_ts_lossmax" -v s="$_ts_smin" \
+        'NR>1 && NF>=6 && $5>=a && $5<=b && $4<=l && $6>=s {print $1","$5","$6; exit}' "$_ts_csv")
+    if [ -n "$_ts_hit" ]; then printf '%s\n' "$_ts_hit"; return 0; fi
+    # CN_FALLBACK=0:strict-or-nothing(逃生阀,向后兼容)
+    [ "$_ts_cnfb" = "1" ] || return 0
+    # 软层:lat<=soft_lat 且 speed>=soft_speed
+    _ts_hit=$(awk -F, -v b="$_ts_softlat" -v s="$_ts_softspd" \
+        'NR>1 && NF>=6 && $5<=b && $6>=s {print $1","$5","$6; exit}' "$_ts_csv")
+    if [ -n "$_ts_hit" ]; then printf '%s\n' "$_ts_hit"; return 0; fi
+    # 最优层:第二行(速度降序后最高速者)
+    _ts_hit=$(awk -F, 'NR==2 && NF>=6 {print $1","$5","$6; exit}' "$_ts_csv")
+    [ -n "$_ts_hit" ] && printf '%s\n' "$_ts_hit"
+    return 0
+}
+
 run_speedtest() {
     log "开始 Cloudflare IP 优选测速..."
     log "参数: 线程=${SPEED_TEST_THREADS} 延迟次数=${SPEED_TEST_TIME} 下载时长=${SPEED_TEST_DL_TIME}s 数量=${SPEED_TEST_COUNT} 延迟=${SPEED_TEST_LATENCY_MIN}-${SPEED_TEST_LATENCY_MAX}ms 丢包≤${SPEED_TEST_LOSS_MAX} 最低速度=${SPEED_TEST_MIN_SPEED}MB/s 回退=${SPEED_TEST_CN_FALLBACK}"

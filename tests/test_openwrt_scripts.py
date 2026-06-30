@@ -657,6 +657,67 @@ def test_embedded_speedtest_trap_recovery() -> None:
     assert embedded.index("rm -f result.csv") < embedded.index("./cfst"), "清理须在 cfst 之前"
 
 
+# ---- _tier_select 分层选择纯函数 -----------------------------------------------
+
+
+def _drive_tier(tmp_path: Path, csv_text: str, args: str) -> str:
+    """切出 _tier_select,用 canned CSV 驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    start = src.index("\n_tier_select()") + 1
+    func = src[start:src.index("\n}\n", start) + 2]
+    f = tmp_path / "tier.sh"
+    f.write_text(func, encoding="utf-8")
+    csv = tmp_path / "result.csv"
+    csv.write_text(csv_text, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\n_tier_select '{csv}' {args}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+# 表头 + 3 行(按速度降序):IP,发,收,丢包,延迟,速度
+_TIER_CSV = (
+    "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+    "1.1.1.1,4,4,0.00,60,9.0\n"   # 严格合格(40<=60<=100,loss0,>=5)
+    "2.2.2.2,4,4,0.00,130,3.0\n"  # 仅软层(<=150,>=2)
+    "3.3.3.3,4,4,0.00,180,0.5\n"  # 都不合格
+)
+
+
+def test_tier_select_strict_hit(tmp_path: Path) -> None:
+    # lat_min lat_max loss_max min_speed soft_lat soft_speed cn_fallback
+    out = _drive_tier(tmp_path, _TIER_CSV, "40 100 0.2 5 150 2 1")
+    assert out == "1.1.1.1,60,9.0"
+
+
+def test_tier_select_soft_when_no_strict(tmp_path: Path) -> None:
+    csv = _TIER_CSV.replace("1.1.1.1,4,4,0.00,60,9.0\n", "")  # 去掉严格合格行
+    out = _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1")
+    assert out == "2.2.2.2,130,3.0"
+
+
+def test_tier_select_best_available_when_no_soft(tmp_path: Path) -> None:
+    csv = (
+        "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+        "3.3.3.3,4,4,0.00,180,1.2\n"  # 最高速但都不达标
+        "4.4.4.4,4,4,0.00,200,0.8\n"
+    )
+    out = _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1")
+    assert out == "3.3.3.3,180,1.2"  # 取第二行(speed 降序最高)
+
+
+def test_tier_select_empty_csv(tmp_path: Path) -> None:
+    csv = "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+    assert _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1") == ""
+
+
+def test_tier_select_cn_fallback_off_strict_or_nothing(tmp_path: Path) -> None:
+    csv = _TIER_CSV.replace("1.1.1.1,4,4,0.00,60,9.0\n", "")  # 无严格合格
+    assert _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 0") == ""  # 不降级
+
+
 # ---- cn-backup 配置备份 / 恢复 ------------------------------------------------
 
 
