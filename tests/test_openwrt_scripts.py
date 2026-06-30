@@ -1094,3 +1094,20 @@ def test_decide_cached_dead_pick_present_force_update(tmp_path: Path) -> None:
 def test_decide_cached_dead_pick_empty_fails(tmp_path: Path) -> None:
     out = _drive_decide(tmp_path, "0", "", "")
     assert out == "fail|"
+
+
+# ---- Task 6: build_cdn_env 转发弹性选择 env + config.env.example 文档 --------
+
+
+def test_build_cdn_env_forwards_resilient_params() -> None:
+    """build_cdn_env 须转发 3 个新 env,使 config.env 覆盖能传到 cron 运行。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    body = src[src.index("build_cdn_env()"):src.index("\n}", src.index("build_cdn_env()"))]
+    for var in ("SPEED_TEST_SOFT_LATENCY_MAX", "SPEED_TEST_SOFT_MIN_SPEED", "SPEED_TEST_ALIVE_MIN_SPEED"):
+        assert var in body, f"build_cdn_env 未转发 {var}"
+
+
+def test_config_env_example_documents_resilient_params() -> None:
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in ("SPEED_TEST_SOFT_LATENCY_MAX", "SPEED_TEST_SOFT_MIN_SPEED", "SPEED_TEST_ALIVE_MIN_SPEED"):
+        assert var in src, f"config.env.example 缺新变量说明: {var}"

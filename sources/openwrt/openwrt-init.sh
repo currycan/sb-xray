@@ -1403,7 +1403,8 @@ build_cdn_env() {
     [ -n "$CDN_SUBDOMAINS" ] && _cdn_env="$_cdn_env CDN_SUBDOMAINS=$CDN_SUBDOMAINS"
     for _v in SPEED_TEST_THREADS SPEED_TEST_TIME SPEED_TEST_DL_TIME SPEED_TEST_COUNT \
               SPEED_TEST_LATENCY_MAX SPEED_TEST_LATENCY_MIN SPEED_TEST_LOSS_MAX \
-              SPEED_TEST_MIN_SPEED SPEED_TEST_CN_FALLBACK; do
+              SPEED_TEST_MIN_SPEED SPEED_TEST_CN_FALLBACK \
+              SPEED_TEST_SOFT_LATENCY_MAX SPEED_TEST_SOFT_MIN_SPEED SPEED_TEST_ALIVE_MIN_SPEED; do
         eval "_val=\$$_v"
         [ -n "$_val" ] && _cdn_env="$_cdn_env $_v=$_val"
     done
