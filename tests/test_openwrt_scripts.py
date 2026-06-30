@@ -1040,3 +1040,51 @@ def test_should_update_does_not_read_last_best_file() -> None:
     src = _CDN.read_text(encoding="utf-8")
     su = src[src.index("should_update()"):src.index("\n}\n", src.index("should_update()"))]
     assert "LAST_RESULT_FILE" not in su, "should_update 不应再读 last_best.txt(基准应由调用方传入新鲜值)"
+
+
+# ---- _decide 决策矩阵纯函数 -----------------------------------------------
+
+
+def _drive_decide(tmp_path: Path, alive: str, pick: str, cached: str) -> str:
+    """切出 _decide，依赖 should_update，用 3 参驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    # _decide 依赖 should_update,两者一并切出
+    chunks = []
+    for name in ("should_update()", "_decide()"):
+        s = src.index("\n" + name) + 1
+        chunks.append(src[s:src.index("\n}\n", s) + 2])
+    f = tmp_path / "decide.sh"
+    f.write_text("\n".join(chunks), encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\n_decide '{alive}' '{pick}' '{cached}'"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def test_decide_cached_alive_pick_better_updates(tmp_path: Path) -> None:
+    # cached 活(5MB/s) vs pick(9MB/s 严格层)→ update 到 pick
+    out = _drive_decide(tmp_path, "1", "1.1.1.1,60,9.0", "9.9.9.9,57,5.0")
+    assert out == "update|1.1.1.1|9.0|60"
+
+
+def test_decide_cached_alive_pick_not_better_keeps(tmp_path: Path) -> None:
+    # cached 活(9MB/s) vs pick(3MB/s)→ 留 cached
+    out = _drive_decide(tmp_path, "1", "1.1.1.1,130,3.0", "9.9.9.9,57,9.0")
+    assert out == "keep|"
+
+
+def test_decide_cached_alive_pick_empty_keeps(tmp_path: Path) -> None:
+    out = _drive_decide(tmp_path, "1", "", "9.9.9.9,57,9.0")
+    assert out == "keep|"
+
+
+def test_decide_cached_dead_pick_present_force_update(tmp_path: Path) -> None:
+    out = _drive_decide(tmp_path, "0", "1.1.1.1,130,3.0", "")
+    assert out == "update|1.1.1.1|3.0|130"
+
+
+def test_decide_cached_dead_pick_empty_fails(tmp_path: Path) -> None:
+    out = _drive_decide(tmp_path, "0", "", "")
+    assert out == "fail|"

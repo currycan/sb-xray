@@ -359,6 +359,35 @@ should_update() {
     log "新旧 IP 质量相当或更差,保持当前 IP ${_su_oip}"; return 1
 }
 
+# 决策矩阵。纯函数。参数:cached_alive(1/0) pick("ip,lat,speed"或空) cached("ip,lat,speed"或空)
+# 输出:"ACTION|ip|speed|latency",ACTION: update|keep|fail
+_decide() {
+    _de_alive="$1"; _de_pick="$2"; _de_cached="$3"
+    if [ -z "$_de_pick" ]; then
+        if [ "$_de_alive" = "1" ] && [ -n "$_de_cached" ]; then
+            printf 'keep|\n'
+        else
+            printf 'fail|\n'
+        fi
+        return 0
+    fi
+    _de_pip=$(printf '%s' "$_de_pick" | cut -d, -f1)
+    _de_plat=$(printf '%s' "$_de_pick" | cut -d, -f2)
+    _de_pspd=$(printf '%s' "$_de_pick" | cut -d, -f3)
+    if [ "$_de_alive" = "1" ] && [ -n "$_de_cached" ]; then
+        _de_cip=$(printf '%s' "$_de_cached" | cut -d, -f1)
+        _de_clat=$(printf '%s' "$_de_cached" | cut -d, -f2)
+        _de_cspd=$(printf '%s' "$_de_cached" | cut -d, -f3)
+        if should_update "$_de_pip" "$_de_pspd" "$_de_plat" "$_de_cip" "$_de_cspd" "$_de_clat"; then
+            printf 'update|%s|%s|%s\n' "$_de_pip" "$_de_pspd" "$_de_plat"
+        else
+            printf 'keep|\n'
+        fi
+    else
+        printf 'update|%s|%s|%s\n' "$_de_pip" "$_de_pspd" "$_de_plat"
+    fi
+}
+
 update_hosts() {
     local ip="$1"
     local count=0
