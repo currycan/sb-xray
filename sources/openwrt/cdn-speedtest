@@ -188,6 +188,25 @@ restore_proxy_env() {
     fi
 }
 
+# 读单 IP probe.csv,判活。纯函数。输出 "speed,latency,loss";rc=0 活/1 死。
+_probe_verdict() {
+    _pv_csv="$1"; _pv_min="$2"
+    [ -f "$_pv_csv" ] || return 1
+    _pv_row=$(awk -F, 'NR==2 && NF>=6 {print $6","$5","$4; exit}' "$_pv_csv")
+    [ -n "$_pv_row" ] || return 1
+    _pv_spd=${_pv_row%%,*}
+    awk -v s="$_pv_spd" -v m="$_pv_min" 'BEGIN{exit !(s>=m)}' || return 1
+    printf '%s\n' "$_pv_row"
+}
+
+# 体检缓存 IP(薄壳):单 IP 无门槛 cfst → _probe_verdict。须在 cd $INSTALL_DIR 后调用。
+_probe_ip() {
+    rm -f result.csv
+    rm -f /tmp/cdn-probe.csv
+    ./cfst -ip "$1" -n 200 -t 4 -dn 1 -dt 5 -o /tmp/cdn-probe.csv > /dev/null 2>&1
+    _probe_verdict /tmp/cdn-probe.csv "$SPEED_TEST_ALIVE_MIN_SPEED"
+}
+
 # 从 result.csv 按层挑 IP。纯函数:只读 csv,不跑 cfst、不写文件。
 # 参数: csv lat_min lat_max loss_max min_speed soft_lat soft_speed cn_fallback
 # 输出: 选中行 "ip,latency,speed";无则空。result.csv 列 1=IP 4=丢包 5=延迟 6=速度。

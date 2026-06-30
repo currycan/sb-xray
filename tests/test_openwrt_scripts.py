@@ -657,6 +657,56 @@ def test_embedded_speedtest_trap_recovery() -> None:
     assert embedded.index("rm -f result.csv") < embedded.index("./cfst"), "清理须在 cfst 之前"
 
 
+# ---- _probe_verdict 单 IP 体检 + _probe_ip 薄壳 --------------------------------
+
+
+def _drive_probe_verdict(tmp_path: Path, csv_text: str, alive_min: str) -> str:
+    """切出 _probe_verdict,用 canned CSV 驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    start = src.index("\n_probe_verdict()") + 1
+    func = src[start:src.index("\n}\n", start) + 2]
+    f = tmp_path / "pv.sh"
+    f.write_text(func, encoding="utf-8")
+    csv = tmp_path / "probe.csv"
+    csv.write_text(csv_text, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\n_probe_verdict '{csv}' {alive_min}; echo \"rc=$?\""],
+        capture_output=True, text=True, timeout=30,
+    )
+    return proc.stdout.strip()
+
+
+def test_probe_verdict_alive(tmp_path: Path) -> None:
+    """_probe_verdict 活时输出 speed,latency,loss；rc=0。"""
+    csv = ("IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+           "162.159.39.25,4,4,0.00,57,8.5\n")
+    out = _drive_probe_verdict(tmp_path, csv, "1")
+    assert "8.5,57,0.00" in out and "rc=0" in out
+
+
+def test_probe_verdict_dead_below_alive_min(tmp_path: Path) -> None:
+    """_probe_verdict 速度低于 alive_min 时死；rc=1。"""
+    csv = ("IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+           "162.159.39.25,4,4,0.00,57,0.3\n")
+    out = _drive_probe_verdict(tmp_path, csv, "1")
+    assert "rc=1" in out
+
+
+def test_probe_verdict_dead_no_row(tmp_path: Path) -> None:
+    """_probe_verdict 仅表头无数据行时死；rc=1。"""
+    csv = "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+    out = _drive_probe_verdict(tmp_path, csv, "1")
+    assert "rc=1" in out
+
+
+def test_probe_ip_is_thin_wrapper_present() -> None:
+    """_probe_ip 薄壳必须存在，含 cfst -ip 标记与路径、调用 _probe_verdict。"""
+    src = _CDN.read_text(encoding="utf-8")
+    assert "_probe_ip()" in src
+    assert "-ip " in src and "/tmp/cdn-probe.csv" in src
+    assert "_probe_verdict /tmp/cdn-probe.csv" in src
+
+
 # ---- _tier_select 分层选择纯函数 -----------------------------------------------
 
 
