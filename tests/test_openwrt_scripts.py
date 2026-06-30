@@ -537,30 +537,37 @@ def test_build_cdn_env_includes_subdomains() -> None:
     assert "CDN_SUBDOMAINS=$CDN_SUBDOMAINS" in body, "build_cdn_env 未注入 CDN_SUBDOMAINS"
 
 
-def test_cdn_speedtest_mainland_filter_params() -> None:
-    """大陆优选门槛：cfst 调用须支持 -tll(延迟下限)/-tlr(丢包率)/-dt(下载时长)，
-    且新 env 带偏向大陆的脚本内默认（开箱生效，不依赖 config.env 设置）。"""
+def test_cdn_speedtest_tiered_selection_replaces_inline_filters():
+    """门槛改由 _tier_select 后处理:cfst 主测速调用不再传 -tll/-tlr/-tl/-sl;
+    新 env 默认在位;严格/软/最优三层 + 判活线齐全。"""
     src = _CDN.read_text(encoding="utf-8")
-    assert "${SPEED_TEST_LATENCY_MIN:-40}" in src, "缺 -tll 大陆默认(SPEED_TEST_LATENCY_MIN=40)"
-    assert "${SPEED_TEST_LOSS_MAX:-0.2}" in src, "缺 -tlr 大陆默认(SPEED_TEST_LOSS_MAX=0.2)"
-    assert "${SPEED_TEST_DL_TIME:-10}" in src, "缺 -dt 下载时长(SPEED_TEST_DL_TIME=10)"
-    assert "${SPEED_TEST_CN_FALLBACK:-1}" in src, "缺筛空回退开关默认(SPEED_TEST_CN_FALLBACK=1)"
-    for flag in ("-tll", "-tlr", "-dt", "-tl", "-sl"):
-        assert f"{flag} " in src or f"{flag}=" in src, f"cfst 调用缺 {flag}"
-    # -t 注释纠正：标为「延迟测速次数」（原误标「下载测速时间」）
-    assert "延迟测速次数" in src, "-t 注释应纠正为「延迟测速次数」"
-
-
-def test_cdn_speedtest_empty_result_fallback() -> None:
-    """筛空回退兜底：严苛门槛(tll/tlr)未筛出 IP 时须放宽（无 tll/tlr）重测一轮，避免本轮无 IP
-    可用；SPEED_TEST_CN_FALLBACK=0 时不回退、直接失败。两轮共用抽出的 _run_cfst。"""
-    src = _CDN.read_text(encoding="utf-8")
-    assert "_run_cfst()" in src, "缺少抽出的 _run_cfst（供两轮复用）"
+    # 新 env 默认
+    assert "${SPEED_TEST_SOFT_LATENCY_MAX:-150}" in src
+    assert "${SPEED_TEST_SOFT_MIN_SPEED:-2}" in src
+    assert "${SPEED_TEST_ALIVE_MIN_SPEED:-1}" in src
+    # 沿用的大陆门槛 env 仍作为 _tier_select 入参保留
+    assert "${SPEED_TEST_LATENCY_MIN:-40}" in src
+    assert "${SPEED_TEST_LOSS_MAX:-0.2}" in src
+    assert "${SPEED_TEST_MIN_SPEED:-5}" in src
+    # 主测速 cfst 调用为无门槛单跑(不内联 -tll/-tlr/-sl/-tl)
     rs = src[src.index("run_speedtest()"):src.index("\n}\n", src.index("run_speedtest()"))]
-    assert "_run_cfst $_cn_filter" in rs, "第一轮须带大陆门槛 _cn_filter"
-    assert '[ "$SPEED_TEST_CN_FALLBACK" = "1" ] && _run_cfst' in rs, "回退须受 CN_FALLBACK 守卫并放宽重测"
-    assert '[ "$SPEED_TEST_LATENCY_MIN" != "0" ]' in rs, "tll=0 须视为关闭下限"
-    assert "restore_proxy_env" in rs, "两轮后须保留单一代理环境恢复点"
+    main_cfst = rs[rs.index("rm -f result.csv"):]
+    for flag in ("-tll", "-tlr", "-sl", "-tl "):
+        assert flag not in main_cfst.split("restore_proxy_env")[0], f"主测速不应内联 {flag}"
+    assert "_tier_select result.csv" in rs
+    assert "_probe_ip" in rs and "_decide" in rs
+
+
+def test_cdn_speedtest_never_empty_and_keep_cached():
+    """永不为空兜底:run 分支据 _decide 的 ACTION 落地(update/keep/fail);
+    历史 IP 活+测速空 → keep(不报错);均失效 → fail 保留 hosts。"""
+    src = _CDN.read_text(encoding="utf-8")
+    assert "_run_cfst" not in src, "旧两轮 _run_cfst 结构应已移除"
+    run_case = src[src.index("        run)"):src.index("        install)")]
+    for token in ("update_hosts", "ensure_hosts_present", "exit 1"):
+        assert token in run_case, f"run 分支缺 ACTION 落地:{token}"
+    assert "best_ip=$(run_speedtest) || exit 1" not in src, "失败语义改由 ACTION=fail 承载"
+    assert 'act=$(printf' in run_case or "cut -d'|' -f1" in run_case
 
 
 def test_build_cdn_env_forwards_mainland_params() -> None:
@@ -642,9 +649,8 @@ def test_embedded_speedtest_trap_recovery() -> None:
     # 子 shell 陷阱：run_speedtest 经 $() 执行，父进程必须有独立 trap（含杀残留 cfst）
     assert "测速父进程被中断" in embedded, "main() run 分支缺父进程 trap"
     assert "pkill -x cfst" in embedded, "父进程 trap 应清理残留 cfst"
-    # 用唯一的实际代码行（含 ``|| exit 1``）定位命令替换；裸字符串 best_ip=$(run_speedtest)
-    # 在上方 stderr 诊断注释里也出现，naive .index() 会误命中注释而非真正的命令替换。
-    assert embedded.index("测速父进程被中断") < embedded.index("best_ip=$(run_speedtest) || exit 1"), (
+    # action=$(run_speedtest) 在源文件中只出现一次(run 分支)，naive .index() 不会误命中。
+    assert embedded.index("测速父进程被中断") < embedded.index("action=$(run_speedtest)"), (
         "父 trap 须先于命令替换安装"
     )
     # 恢复函数不得依赖子 shell 局部变量；OpenClash 恢复须锁串行 + 无条件 restart
@@ -652,9 +658,149 @@ def test_embedded_speedtest_trap_recovery() -> None:
     assert "mkdir /tmp/.cdn-speedtest-oc-restore.lock" in embedded, "恢复缺原子锁"
     assert "/etc/init.d/openclash restart" in embedded, "恢复须用 restart（三态收敛）"
     assert "pgrep -f" not in embedded.split("restore_proxy_env()")[1].split("\n}")[0], "恢复不得用进程探测（拖尾/旁观假象）"
-    # 防陈旧结果:测速前必须清掉上一轮 result.csv
-    assert "rm -f result.csv" in embedded, "缺少测速前旧结果清理"
-    assert embedded.index("rm -f result.csv") < embedded.index("./cfst"), "清理须在 cfst 之前"
+    # 防陈旧结果:run_speedtest 的批量测速前必须清掉上一轮 result.csv。
+    # 注:_probe_ip 有更早的 ./cfst(写 /tmp/cdn-probe.csv),按整文件 .index 会误命中;
+    # 故限定在 run_speedtest 函数体内判定批量测速的 rm 早于其 ./cfst。
+    _rs_body = embedded[embedded.index("run_speedtest()"):]
+    assert "rm -f result.csv" in _rs_body, "缺少测速前旧结果清理"
+    assert _rs_body.index("rm -f result.csv") < _rs_body.index("./cfst"), "清理须在 cfst 之前"
+
+
+def test_embedded_main_cfst_guarded_against_set_e() -> None:
+    """set -eu 下主优选 cfst 若返回非零会跳过 _tier_select/_decide，造成有活缓存 IP 时误判 fail。
+    run_speedtest 函数体内的批量 cfst 调用须以 || true 收尾，让非零退出走空结果路径交 _decide 处理。
+    _probe_ip 内的 cfst（-ip 单 IP 体检）已位于 if 条件中，不在此断言范围内。"""
+    embedded = _CDN.read_text(encoding="utf-8")
+    # 限定在 run_speedtest 函数体内（不匹配 _probe_ip 里的 cfst）
+    _rs_body = embedded[embedded.index("run_speedtest()"):embedded.index("\n_decide(")]
+    assert "|| true" in _rs_body, "run_speedtest 的主 cfst 调用须加 || true 防 set -e 中断"
+    # 确认是批量测速那行，而非其它（通过 -o result.csv 锁定）
+    cfst_line_idx = _rs_body.index("-o result.csv")
+    true_guard_idx = _rs_body.index("|| true")
+    assert true_guard_idx > cfst_line_idx, "|| true 须紧跟主 cfst 调用（-o result.csv）之后"
+
+
+# ---- _probe_verdict 单 IP 体检 + _probe_ip 薄壳 --------------------------------
+
+
+def _drive_probe_verdict(tmp_path: Path, csv_text: str, alive_min: str) -> str:
+    """切出 _probe_verdict,用 canned CSV 驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    start = src.index("\n_probe_verdict()") + 1
+    func = src[start:src.index("\n}\n", start) + 2]
+    f = tmp_path / "pv.sh"
+    f.write_text(func, encoding="utf-8")
+    csv = tmp_path / "probe.csv"
+    csv.write_text(csv_text, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\n_probe_verdict '{csv}' {alive_min}; echo \"rc=$?\""],
+        capture_output=True, text=True, timeout=30,
+    )
+    return proc.stdout.strip()
+
+
+def test_probe_verdict_alive(tmp_path: Path) -> None:
+    """_probe_verdict 活时输出 speed,latency,loss；rc=0。"""
+    csv = ("IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+           "162.159.39.25,4,4,0.00,57,8.5\n")
+    out = _drive_probe_verdict(tmp_path, csv, "1")
+    assert "8.5,57,0.00" in out and "rc=0" in out
+
+
+def test_probe_verdict_dead_below_alive_min(tmp_path: Path) -> None:
+    """_probe_verdict 速度低于 alive_min 时死；rc=1。"""
+    csv = ("IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+           "162.159.39.25,4,4,0.00,57,0.3\n")
+    out = _drive_probe_verdict(tmp_path, csv, "1")
+    assert "rc=1" in out
+
+
+def test_probe_verdict_dead_no_row(tmp_path: Path) -> None:
+    """_probe_verdict 仅表头无数据行时死；rc=1。"""
+    csv = "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+    out = _drive_probe_verdict(tmp_path, csv, "1")
+    assert "rc=1" in out
+
+
+def test_probe_ip_is_thin_wrapper_present() -> None:
+    """_probe_ip 薄壳必须存在，含 cfst -ip 标记与路径、调用 _probe_verdict。"""
+    src = _CDN.read_text(encoding="utf-8")
+    assert "_probe_ip()" in src
+    assert "-ip " in src and "/tmp/cdn-probe.csv" in src
+    assert "_probe_verdict /tmp/cdn-probe.csv" in src
+
+
+# ---- _tier_select 分层选择纯函数 -----------------------------------------------
+
+
+def _drive_tier(tmp_path: Path, csv_text: str, args: str) -> str:
+    """切出 _tier_select,用 canned CSV 驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    start = src.index("\n_tier_select()") + 1
+    func = src[start:src.index("\n}\n", start) + 2]
+    f = tmp_path / "tier.sh"
+    f.write_text(func, encoding="utf-8")
+    csv = tmp_path / "result.csv"
+    csv.write_text(csv_text, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\n_tier_select '{csv}' {args}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+# 表头 + 3 行(按速度降序):IP,发,收,丢包,延迟,速度
+_TIER_CSV = (
+    "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+    "1.1.1.1,4,4,0.00,60,9.0\n"   # 严格合格(40<=60<=100,loss0,>=5)
+    "2.2.2.2,4,4,0.00,130,3.0\n"  # 仅软层(<=150,>=2)
+    "3.3.3.3,4,4,0.00,180,0.5\n"  # 都不合格
+)
+
+
+def test_tier_select_strict_hit(tmp_path: Path) -> None:
+    # lat_min lat_max loss_max min_speed soft_lat soft_speed cn_fallback
+    out = _drive_tier(tmp_path, _TIER_CSV, "40 100 0.2 5 150 2 1")
+    assert out == "1.1.1.1,60,9.0"
+
+
+def test_tier_select_soft_when_no_strict(tmp_path: Path) -> None:
+    csv = _TIER_CSV.replace("1.1.1.1,4,4,0.00,60,9.0\n", "")  # 去掉严格合格行
+    out = _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1")
+    assert out == "2.2.2.2,130,3.0"
+
+
+def test_tier_select_best_available_when_no_soft(tmp_path: Path) -> None:
+    csv = (
+        "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+        "3.3.3.3,4,4,0.00,180,1.2\n"  # 最高速但都不达标
+        "4.4.4.4,4,4,0.00,200,0.8\n"
+    )
+    out = _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1")
+    assert out == "3.3.3.3,180,1.2"  # 最高速(1.2 > 0.8)
+
+
+def test_tier_select_best_available_ties_prefer_lower_latency(tmp_path: Path) -> None:
+    """最优层 tie-break:全 0 速(CF 路径劣化)时 cfst 行序非延迟序,须按最低延迟挑,
+    不能盲取首个数据行。复刻 2026-06-30 canary 场景(全 0 速、首行延迟更高)。"""
+    csv = (
+        "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+        "1.1.1.1,4,4,0.00,158.95,0.00\n"  # cfst 行序在前,延迟更高
+        "2.2.2.2,4,4,0.00,151.89,0.00\n"  # 同速,延迟更低 → 应选它
+    )
+    out = _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1")
+    assert out == "2.2.2.2,151.89,0.00"
+
+
+def test_tier_select_empty_csv(tmp_path: Path) -> None:
+    csv = "IP 地址,已发送,已接收,丢包率,平均延迟,下载速度 (MB/s)\n"
+    assert _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 1") == ""
+
+
+def test_tier_select_cn_fallback_off_strict_or_nothing(tmp_path: Path) -> None:
+    csv = _TIER_CSV.replace("1.1.1.1,4,4,0.00,60,9.0\n", "")  # 无严格合格
+    assert _drive_tier(tmp_path, csv, "40 100 0.2 5 150 2 0") == ""  # 不降级
 
 
 # ---- cn-backup 配置备份 / 恢复 ------------------------------------------------
@@ -878,3 +1024,115 @@ def test_check_ip_score_coerced_to_integer() -> None:
     for fnname in ("db_ip2location()", "db_abuseipdb()"):
         body = src[src.index(fnname):src.index("end_progress\n}", src.index(fnname))]
         assert "_int_or_zero" in body, f"{fnname} 的 score 须经 _int_or_zero 取整"
+
+
+# ---- should_update 纯函数参数化重构 -------------------------------------------
+
+
+def _drive_should_update(tmp_path: Path, args: str) -> str:
+    """切出 should_update，用 6 参驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    start = src.index("\nshould_update()") + 1
+    func = src[start:src.index("\n}\n", start) + 2]
+    f = tmp_path / "su.sh"
+    f.write_text(func, encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\nshould_update {args}; echo \"rc=$?\""],
+        capture_output=True, text=True, timeout=30,
+    )
+    return proc.stdout.strip()
+
+
+def test_should_update_no_old_updates(tmp_path: Path) -> None:
+    assert "rc=0" in _drive_should_update(tmp_path, "1.1.1.1 5 60 '' '' ''")
+
+
+def test_should_update_same_ip_skips(tmp_path: Path) -> None:
+    assert "rc=1" in _drive_should_update(tmp_path, "1.1.1.1 5 60 1.1.1.1 5 60")
+
+
+def test_should_update_new_10pct_faster_updates(tmp_path: Path) -> None:
+    # new 6 vs old 5 → 6 > 5*1.1=5.5 → 换
+    assert "rc=0" in _drive_should_update(tmp_path, "2.2.2.2 6 60 1.1.1.1 5 60")
+
+
+def test_should_update_similar_speed_lower_latency_updates(tmp_path: Path) -> None:
+    # new 5.2 vs old 5(>=4.5 相当),new lat 40 < old 60 → 换
+    assert "rc=0" in _drive_should_update(tmp_path, "2.2.2.2 5.2 40 1.1.1.1 5 60")
+
+
+def test_should_update_new_worse_keeps(tmp_path: Path) -> None:
+    # new 3 vs old 5 → 3 < 5*0.9=4.5 → 留
+    assert "rc=1" in _drive_should_update(tmp_path, "2.2.2.2 3 60 1.1.1.1 5 60")
+
+
+def test_should_update_does_not_read_last_best_file() -> None:
+    """回归点:重构后 should_update 不再从 last_best.txt 读旧值。"""
+    src = _CDN.read_text(encoding="utf-8")
+    su = src[src.index("should_update()"):src.index("\n}\n", src.index("should_update()"))]
+    assert "LAST_RESULT_FILE" not in su, "should_update 不应再读 last_best.txt(基准应由调用方传入新鲜值)"
+
+
+# ---- _decide 决策矩阵纯函数 -----------------------------------------------
+
+
+def _drive_decide(tmp_path: Path, alive: str, pick: str, cached: str) -> str:
+    """切出 _decide，依赖 should_update，用 3 参驱动。"""
+    src = _CDN.read_text(encoding="utf-8")
+    # _decide 依赖 should_update,两者一并切出
+    chunks = []
+    for name in ("should_update()", "_decide()"):
+        s = src.index("\n" + name) + 1
+        chunks.append(src[s:src.index("\n}\n", s) + 2])
+    f = tmp_path / "decide.sh"
+    f.write_text("\n".join(chunks), encoding="utf-8")
+    proc = subprocess.run(
+        ["sh", "-c", f"log(){{ :;}}\n. '{f}'\n_decide '{alive}' '{pick}' '{cached}'"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def test_decide_cached_alive_pick_better_updates(tmp_path: Path) -> None:
+    # cached 活(5MB/s) vs pick(9MB/s 严格层)→ update 到 pick
+    out = _drive_decide(tmp_path, "1", "1.1.1.1,60,9.0", "9.9.9.9,57,5.0")
+    assert out == "update|1.1.1.1|9.0|60"
+
+
+def test_decide_cached_alive_pick_not_better_keeps(tmp_path: Path) -> None:
+    # cached 活(9MB/s) vs pick(3MB/s)→ 留 cached
+    out = _drive_decide(tmp_path, "1", "1.1.1.1,130,3.0", "9.9.9.9,57,9.0")
+    assert out == "keep|"
+
+
+def test_decide_cached_alive_pick_empty_keeps(tmp_path: Path) -> None:
+    out = _drive_decide(tmp_path, "1", "", "9.9.9.9,57,9.0")
+    assert out == "keep|"
+
+
+def test_decide_cached_dead_pick_present_force_update(tmp_path: Path) -> None:
+    out = _drive_decide(tmp_path, "0", "1.1.1.1,130,3.0", "")
+    assert out == "update|1.1.1.1|3.0|130"
+
+
+def test_decide_cached_dead_pick_empty_fails(tmp_path: Path) -> None:
+    out = _drive_decide(tmp_path, "0", "", "")
+    assert out == "fail|"
+
+
+# ---- Task 6: build_cdn_env 转发弹性选择 env + config.env.example 文档 --------
+
+
+def test_build_cdn_env_forwards_resilient_params() -> None:
+    """build_cdn_env 须转发 3 个新 env,使 config.env 覆盖能传到 cron 运行。"""
+    src = _SETUP.read_text(encoding="utf-8")
+    body = src[src.index("build_cdn_env()"):src.index("\n}", src.index("build_cdn_env()"))]
+    for var in ("SPEED_TEST_SOFT_LATENCY_MAX", "SPEED_TEST_SOFT_MIN_SPEED", "SPEED_TEST_ALIVE_MIN_SPEED"):
+        assert var in body, f"build_cdn_env 未转发 {var}"
+
+
+def test_config_env_example_documents_resilient_params() -> None:
+    src = (_OPENWRT / "config.env.example").read_text(encoding="utf-8")
+    for var in ("SPEED_TEST_SOFT_LATENCY_MAX", "SPEED_TEST_SOFT_MIN_SPEED", "SPEED_TEST_ALIVE_MIN_SPEED"):
+        assert var in src, f"config.env.example 缺新变量说明: {var}"

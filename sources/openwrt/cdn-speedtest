@@ -26,6 +26,9 @@ SPEED_TEST_LATENCY_MIN="${SPEED_TEST_LATENCY_MIN:-40}"   # 延迟下限(ms) (-tl
 SPEED_TEST_LOSS_MAX="${SPEED_TEST_LOSS_MAX:-0.2}"       # 丢包率上限 (-tlr)，0.00-1.00，控大陆链路丢包
 SPEED_TEST_MIN_SPEED="${SPEED_TEST_MIN_SPEED:-5}"        # 最低下载速度(MB/s) (-sl)，低于此值视为失败
 SPEED_TEST_CN_FALLBACK="${SPEED_TEST_CN_FALLBACK:-1}"    # 大陆门槛(tll/tlr)筛空时回退放宽重测（1=开，0=关则直接失败）
+SPEED_TEST_SOFT_LATENCY_MAX="${SPEED_TEST_SOFT_LATENCY_MAX:-150}"  # 软层延迟上限(ms):严格层筛空时的放宽线
+SPEED_TEST_SOFT_MIN_SPEED="${SPEED_TEST_SOFT_MIN_SPEED:-2}"        # 软层最低下载(MB/s)
+SPEED_TEST_ALIVE_MIN_SPEED="${SPEED_TEST_ALIVE_MIN_SPEED:-1}"      # 历史 IP 体检判活线(MB/s)
 
 # 安装目录
 INSTALL_DIR="/etc/CloudflareST"
@@ -37,10 +40,10 @@ LAST_RESULT_FILE="${INSTALL_DIR}/last_best.txt"
 
 log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-    # 诊断写 stderr（不写 stdout）：run_speedtest 经 best_ip=$(run_speedtest) 命令替换
-    # 调用，若 log 写 stdout 会被 $() 捕获——前台看不到 OpenClash 停/启与测速进度，
-    # 且污染返回值（靠 tail -1 捞 IP）。改 stderr 后 $() 只收 run_speedtest 末尾的
-    # echo "$BEST_IP"，前台诊断照常可见，日志文件不受影响。
+    # 诊断写 stderr（不写 stdout）：run_speedtest 经命令替换调用（main 的 run 分支），
+    # 若 log 写 stdout 会被 $() 捕获——前台看不到 OpenClash 停/启与测速进度，
+    # 且污染返回值（靠 tail -1 捞 ACTION 行）。改 stderr 后 $() 只收 run_speedtest
+    # 末尾的 echo "$_action"，前台诊断照常可见，日志文件不受影响。
     echo "$msg" >&2
     echo "$msg" >> "$LOG_FILE"
 }
@@ -188,6 +191,53 @@ restore_proxy_env() {
     fi
 }
 
+# 读单 IP probe.csv,判活。纯函数。输出 "speed,latency,loss";rc=0 活/1 死。
+_probe_verdict() {
+    _pv_csv="$1"; _pv_min="$2"
+    [ -f "$_pv_csv" ] || return 1
+    _pv_row=$(awk -F, 'NR==2 && NF>=6 {print $6","$5","$4; exit}' "$_pv_csv")
+    [ -n "$_pv_row" ] || return 1
+    _pv_spd=${_pv_row%%,*}
+    awk -v s="$_pv_spd" -v m="$_pv_min" 'BEGIN{exit !(s>=m)}' || return 1
+    printf '%s\n' "$_pv_row"
+}
+
+# 体检缓存 IP(薄壳):单 IP 无门槛 cfst → _probe_verdict。须在 cd $INSTALL_DIR 后调用。
+_probe_ip() {
+    rm -f /tmp/cdn-probe.csv
+    ./cfst -ip "$1" -n 200 -t 4 -dn 1 -dt 5 -o /tmp/cdn-probe.csv > /dev/null 2>&1
+    _probe_verdict /tmp/cdn-probe.csv "$SPEED_TEST_ALIVE_MIN_SPEED"
+}
+
+# 从 result.csv 按层挑 IP。纯函数:只读 csv,不跑 cfst、不写文件。
+# 参数: csv lat_min lat_max loss_max min_speed soft_lat soft_speed cn_fallback
+# 输出: 选中行 "ip,latency,speed";无则空。result.csv 列 1=IP 4=丢包 5=延迟 6=速度。
+# result.csv 已按下载速度降序(cfst 默认),故每层「首个匹配」即该层最高速。
+_tier_select() {
+    _ts_csv="$1"; _ts_lmin="$2"; _ts_lmax="$3"; _ts_lossmax="$4"; _ts_smin="$5"
+    _ts_softlat="$6"; _ts_softspd="$7"; _ts_cnfb="$8"
+    [ -f "$_ts_csv" ] || return 0
+    # 严格层:lat_min<=lat<=lat_max 且 loss<=loss_max 且 speed>=min_speed
+    _ts_hit=$(awk -F, -v a="$_ts_lmin" -v b="$_ts_lmax" -v l="$_ts_lossmax" -v s="$_ts_smin" \
+        'NR>1 && NF>=6 && $5>=a && $5<=b && $4<=l && $6>=s {print $1","$5","$6; exit}' "$_ts_csv")
+    if [ -n "$_ts_hit" ]; then printf '%s\n' "$_ts_hit"; return 0; fi
+    # CN_FALLBACK=0:strict-or-nothing(逃生阀,向后兼容)
+    [ "$_ts_cnfb" = "1" ] || return 0
+    # 软层:lat<=soft_lat 且 speed>=soft_speed
+    _ts_hit=$(awk -F, -v b="$_ts_softlat" -v s="$_ts_softspd" \
+        'NR>1 && NF>=6 && $5<=b && $6>=s {print $1","$5","$6; exit}' "$_ts_csv")
+    if [ -n "$_ts_hit" ]; then printf '%s\n' "$_ts_hit"; return 0; fi
+    # 最优层:取最高速;同速取最低延迟(全 0 速时 cfst 行序非延迟序,退化为按最低延迟挑,
+    # 避免盲取首个数据行——见 2026-06-30 canary:全 0 速误选高延迟行)
+    _ts_hit=$(awk -F, '
+        NR>1 && NF>=6 {
+            if (best=="" || $6>bs || ($6==bs && $5<bl)) { best=$1","$5","$6; bs=$6; bl=$5 }
+        }
+        END { if (best!="") print best }' "$_ts_csv")
+    [ -n "$_ts_hit" ] && printf '%s\n' "$_ts_hit"
+    return 0
+}
+
 run_speedtest() {
     log "开始 Cloudflare IP 优选测速..."
     log "参数: 线程=${SPEED_TEST_THREADS} 延迟次数=${SPEED_TEST_TIME} 下载时长=${SPEED_TEST_DL_TIME}s 数量=${SPEED_TEST_COUNT} 延迟=${SPEED_TEST_LATENCY_MIN}-${SPEED_TEST_LATENCY_MAX}ms 丢包≤${SPEED_TEST_LOSS_MAX} 最低速度=${SPEED_TEST_MIN_SPEED}MB/s 回退=${SPEED_TEST_CN_FALLBACK}"
@@ -224,73 +274,57 @@ run_speedtest() {
 
     cd "$INSTALL_DIR"
 
-    # cfst 跑一轮，$@=附加门槛参数；产出含合格 IP 的 result.csv 返 0。
-    # 每轮先清旧榜：cfst 在严苛参数下可能产不出任何合格 IP（不写 csv），残留旧榜会被
-    # 静默当作本轮结果（真机实测：门槛收紧后整轮白测、对比的还是上轮数据）。
-    _run_cfst() {
-        rm -f result.csv
-        ./cfst \
-            -n "$SPEED_TEST_THREADS" \
-            -t "$SPEED_TEST_TIME" \
-            -dt "$SPEED_TEST_DL_TIME" \
-            -dn "$SPEED_TEST_COUNT" \
-            -tl "$SPEED_TEST_LATENCY_MAX" \
-            -sl "$SPEED_TEST_MIN_SPEED" \
-            "$@" \
-            -o result.csv
-        [ -f result.csv ] && [ -n "$(sed -n '2p' result.csv | cut -d',' -f1)" ]
-    }
-
-    # 第一轮：大陆优选门槛（-tll 滤「延迟极低但带宽烂」的香港假快 IP + -tlr 控丢包）。
-    # tll=0 视为关闭下限，只加 -tlr。
-    _cn_filter="-tlr $SPEED_TEST_LOSS_MAX"
-    if [ "$SPEED_TEST_LATENCY_MIN" != "0" ]; then
-        _cn_filter="-tll $SPEED_TEST_LATENCY_MIN $_cn_filter"
+    # ── 第一步:体检历史 IP(只判活不判优)──
+    _cached_ip=""; _cached_line=""; _cached_alive=0
+    if [ -f "$LAST_RESULT_FILE" ]; then
+        _cached_ip=$(cut -d'|' -f1 "$LAST_RESULT_FILE")
+    fi
+    if [ -n "$_cached_ip" ]; then
+        log "体检历史 IP ${_cached_ip}..."
+        if _pv=$(_probe_ip "$_cached_ip"); then
+            # _pv = "speed,latency,loss" → 组装 cached_line "ip,lat,speed"
+            _c_spd=$(printf '%s' "$_pv" | cut -d, -f1)
+            _c_lat=$(printf '%s' "$_pv" | cut -d, -f2)
+            _cached_alive=1
+            _cached_line="${_cached_ip},${_c_lat},${_c_spd}"
+            log "历史 IP 活:${_cached_ip} (${_c_spd}MB/s, ${_c_lat}ms)"
+        else
+            log "历史 IP ${_cached_ip} 已不可用(低于判活线 ${SPEED_TEST_ALIVE_MIN_SPEED}MB/s),本轮须替换"
+        fi
     fi
 
-    # shellcheck disable=SC2086  # $_cn_filter 须分词成多个 cfst 参数（-tll 40 -tlr 0.2），加引号会当成单参
-    if _run_cfst $_cn_filter; then
-        _ok=1
-        log "大陆优选门槛命中 (tll=${SPEED_TEST_LATENCY_MIN} tlr=${SPEED_TEST_LOSS_MAX})"
-    elif [ "$SPEED_TEST_CN_FALLBACK" = "1" ] && _run_cfst; then
-        # 严苛门槛筛空 → 放宽（不带 tll/tlr）重测，保证仍有可用 IP，避免本轮无 IP 可用
-        _ok=1
-        log "WARN: 大陆门槛 (tll=${SPEED_TEST_LATENCY_MIN}/tlr=${SPEED_TEST_LOSS_MAX}) 未筛出合格 IP，已回退放宽门槛重测并命中"
-    else
-        _ok=0
-    fi
+    # ── 第二步:无门槛全量测速(单跑;分层在后处理)──
+    rm -f result.csv
+    ./cfst -n "$SPEED_TEST_THREADS" -t "$SPEED_TEST_TIME" -dt "$SPEED_TEST_DL_TIME" \
+        -dn "$SPEED_TEST_COUNT" -o result.csv || true
 
-    # 单一恢复点：覆盖命中/回退/失败所有路径，两轮测速跑完后只恢复一次代理环境。
+    # 单一恢复点(覆盖所有路径)
     restore_proxy_env
     trap - HUP INT TERM EXIT
-
     log "测速完成"
 
-    if [ "${_ok:-0}" != 1 ]; then
-        log "ERROR: 未找到满足条件的优选 IP（大陆门槛与回退均未产出；可放宽 SPEED_TEST_LATENCY_MIN/SPEED_TEST_LOSS_MAX，或确认 SPEED_TEST_CN_FALLBACK=1）"
-        return 1
+    # ── 分层挑 + 决策 ──
+    _pick=$(_tier_select result.csv "$SPEED_TEST_LATENCY_MIN" "$SPEED_TEST_LATENCY_MAX" \
+        "$SPEED_TEST_LOSS_MAX" "$SPEED_TEST_MIN_SPEED" \
+        "$SPEED_TEST_SOFT_LATENCY_MAX" "$SPEED_TEST_SOFT_MIN_SPEED" "$SPEED_TEST_CN_FALLBACK")
+    if [ -n "$_pick" ]; then
+        log "分层选中:${_pick}(ip,lat,speed)"
+    else
+        log "本轮无任何可选 IP(result.csv 空)"
     fi
 
-    # 取最优 IP（第二行第一列）
-    BEST_IP=$(sed -n '2p' result.csv | cut -d',' -f1)
-
-    if [ -z "$BEST_IP" ]; then
-        log "ERROR: 未找到满足条件的优选 IP"
-        return 1
+    # 打印 Top 10(若有结果)
+    if [ -s result.csv ]; then
+        log "测速结果 Top 10:"
+        log "  IP 地址          | 延迟(ms) | 速度(MB/s)"
+        sed -n '2,11p' result.csv | while IFS=',' read -r ip _ _ _ latency speed; do
+            log "  ${ip} | ${latency} | ${speed}"
+        done
     fi
 
-    # 打印 Top 10 结果
-    log "测速结果 Top 10:"
-    log "  IP 地址          | 延迟(ms) | 速度(MB/s)"
-    sed -n '2,11p' result.csv | while IFS=',' read -r ip _ _ _ latency speed; do
-        log "  ${ip} | ${latency} | ${speed}"
-    done
-
-    BEST_LATENCY=$(sed -n '2p' result.csv | cut -d',' -f5)
-    BEST_SPEED=$(sed -n '2p' result.csv | cut -d',' -f6)
-    log "最优 IP: ${BEST_IP} (延迟: ${BEST_LATENCY}ms, 速度: ${BEST_SPEED}MB/s)"
-
-    echo "$BEST_IP"
+    _action=$(_decide "$_cached_alive" "$_pick" "$_cached_line")
+    log "决策:${_action}"
+    echo "$_action"
 }
 
 # 保存本次优选结果
@@ -300,60 +334,50 @@ save_result() {
     log "已保存优选记录: IP=${ip}, 速度=${speed}MB/s, 延迟=${latency}ms"
 }
 
-# 比较新旧 IP，判断是否需要更新
+# 比较新旧 IP，判断是否需要更新（纯函数：基准由调用方传入，不读文件）
+# 参数: new_ip new_speed new_latency old_ip old_speed old_latency
 # 返回 0 = 需要更新，返回 1 = 跳过
 should_update() {
-    local new_ip="$1" new_speed="$2" new_latency="$3"
-
-    # 无历史记录，首次运行
-    if [ ! -f "$LAST_RESULT_FILE" ]; then
-        log "首次运行，无历史记录，直接更新"
-        return 0
+    _su_nip="$1"; _su_nspd="$2"; _su_nlat="$3"; _su_oip="$4"; _su_ospd="$5"; _su_olat="$6"
+    if [ -z "$_su_oip" ]; then log "无历史 IP,直接更新"; return 0; fi
+    if [ "$_su_nip" = "$_su_oip" ]; then log "优选 IP 未变化 (${_su_nip}),跳过更新"; return 1; fi
+    if awk -v n="$_su_nspd" -v o="$_su_ospd" 'BEGIN{exit !(n > o*1.1)}'; then
+        log "新 IP 速度提升超过 10% (${_su_nspd} vs ${_su_ospd}),更新"; return 0
     fi
-
-    local old_ip old_speed old_latency
-    old_ip=$(cut -d'|' -f1 "$LAST_RESULT_FILE")
-    old_speed=$(cut -d'|' -f2 "$LAST_RESULT_FILE")
-    old_latency=$(cut -d'|' -f3 "$LAST_RESULT_FILE")
-
-    log "对比: 新 IP ${new_ip} (速度: ${new_speed}MB/s, 延迟: ${new_latency}ms) vs 上次 IP ${old_ip} (速度: ${old_speed}MB/s, 延迟: ${old_latency}ms)"
-
-    # IP 相同
-    if [ "$new_ip" = "$old_ip" ]; then
-        log "优选 IP 未变化 (${new_ip})，跳过更新"
-        return 1
+    if awk -v n="$_su_nspd" -v o="$_su_ospd" 'BEGIN{exit !(n >= o*0.9)}' \
+       && awk -v n="$_su_nlat" -v o="$_su_olat" 'BEGIN{exit !(n < o)}'; then
+        log "速度相当但新 IP 延迟更低 (${_su_nlat}ms < ${_su_olat}ms),更新"; return 0
     fi
+    log "新旧 IP 质量相当或更差,保持当前 IP ${_su_oip}"; return 1
+}
 
-    # 新 IP 速度超过上次 10% 则更新
-    local speed_better
-    speed_better=$(echo "$new_speed $old_speed" | awk '{if ($1 > $2 * 1.1) print "1"; else print "0"}')
-    if [ "$speed_better" = "1" ]; then
-        log "新 IP 速度提升超过 10% (${new_speed} vs ${old_speed})，更新"
-        return 0
-    fi
-
-    # 速度相当（差距在 10% 以内），比较延迟
-    local speed_similar
-    speed_similar=$(echo "$new_speed $old_speed" | awk '{if ($1 >= $2 * 0.9) print "1"; else print "0"}')
-    if [ "$speed_similar" = "1" ]; then
-        local latency_better
-        latency_better=$(echo "$new_latency $old_latency" | awk '{if ($1 < $2) print "1"; else print "0"}')
-        if [ "$latency_better" = "1" ]; then
-            log "速度相当但新 IP 延迟更低 (${new_latency}ms < ${old_latency}ms)，更新"
-            return 0
+# 决策矩阵。纯函数。参数:cached_alive(1/0) pick("ip,lat,speed"或空) cached("ip,lat,speed"或空)
+# 输出:"ACTION|ip|speed|latency",ACTION: update|keep|fail
+_decide() {
+    _de_alive="$1"; _de_pick="$2"; _de_cached="$3"
+    if [ -z "$_de_pick" ]; then
+        if [ "$_de_alive" = "1" ] && [ -n "$_de_cached" ]; then
+            printf 'keep|\n'
+        else
+            printf 'fail|\n'
         fi
+        return 0
     fi
-
-    # 新 IP 速度明显更差
-    local speed_worse
-    speed_worse=$(echo "$new_speed $old_speed" | awk '{if ($1 < $2 * 0.9) print "1"; else print "0"}')
-    if [ "$speed_worse" = "1" ]; then
-        log "新 IP 速度更差 (${new_speed} vs ${old_speed})，保持当前 IP ${old_ip}"
-        return 1
+    _de_pip=$(printf '%s' "$_de_pick" | cut -d, -f1)
+    _de_plat=$(printf '%s' "$_de_pick" | cut -d, -f2)
+    _de_pspd=$(printf '%s' "$_de_pick" | cut -d, -f3)
+    if [ "$_de_alive" = "1" ] && [ -n "$_de_cached" ]; then
+        _de_cip=$(printf '%s' "$_de_cached" | cut -d, -f1)
+        _de_clat=$(printf '%s' "$_de_cached" | cut -d, -f2)
+        _de_cspd=$(printf '%s' "$_de_cached" | cut -d, -f3)
+        if should_update "$_de_pip" "$_de_pspd" "$_de_plat" "$_de_cip" "$_de_cspd" "$_de_clat"; then
+            printf 'update|%s|%s|%s\n' "$_de_pip" "$_de_pspd" "$_de_plat"
+        else
+            printf 'keep|\n'
+        fi
+    else
+        printf 'update|%s|%s|%s\n' "$_de_pip" "$_de_pspd" "$_de_plat"
     fi
-
-    log "新旧 IP 质量相当，保持当前 IP ${old_ip} 不变"
-    return 1
 }
 
 update_hosts() {
@@ -486,25 +510,34 @@ main() {
             local arch
             arch=$(detect_arch)
             install_cloudflarest "$arch"
-            local best_ip
+            local action
             # 父进程 trap：run_speedtest 经 $() 在子 shell 跑，单独 TERM 父进程时子
             # shell 的 trap 收不到信号（且子 shell 事后向已死父进程管道写日志会
             # SIGPIPE 猝死）——父进程必须自带恢复：杀残留 cfst，再按磁盘状态恢复。
-            trap 'log "测速父进程被中断，恢复代理环境..."; pkill -x cfst 2>/dev/null; sleep 1; restore_proxy_env; trap - HUP INT TERM; exit 130' HUP INT TERM
-            best_ip=$(run_speedtest) || exit 1
+            trap 'log "测速父进程被中断,恢复代理环境..."; pkill -x cfst 2>/dev/null; sleep 1; restore_proxy_env; trap - HUP INT TERM; exit 130' HUP INT TERM
+            action=$(run_speedtest)
             trap - HUP INT TERM
-            best_ip=$(echo "$best_ip" | tail -1)
-            local best_speed best_latency
-            best_speed=$(sed -n '2p' "${INSTALL_DIR}/result.csv" | cut -d',' -f6)
-            best_latency=$(sed -n '2p' "${INSTALL_DIR}/result.csv" | cut -d',' -f5)
-            if should_update "$best_ip" "$best_speed" "$best_latency"; then
-                update_hosts "$best_ip"
-                restart_dns
-                save_result "$best_ip" "$best_speed" "$best_latency"
-            else
-                # 保持缓存 IP，但 /etc/hosts 必须真有条目（缓存在、条目缺 → 回填自愈）
-                ensure_hosts_present
-            fi
+            action=$(echo "$action" | tail -1)
+            local act ip spd lat
+            act=$(printf '%s' "$action" | cut -d'|' -f1)
+            ip=$(printf '%s' "$action" | cut -d'|' -f2)
+            spd=$(printf '%s' "$action" | cut -d'|' -f3)
+            lat=$(printf '%s' "$action" | cut -d'|' -f4)
+            case "$act" in
+                update)
+                    update_hosts "$ip"
+                    restart_dns
+                    save_result "$ip" "$spd" "$lat"
+                    ;;
+                keep)
+                    log "保持历史优选 IP,确保 /etc/hosts 条目就位"
+                    ensure_hosts_present
+                    ;;
+                *)
+                    log "ERROR: 本轮无任何可用 IP(历史 IP 已失效且测速无结果);保留 /etc/hosts 原状,等待下轮"
+                    exit 1
+                    ;;
+            esac
             show_status
             ;;
         install)
