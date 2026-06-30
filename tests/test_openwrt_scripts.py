@@ -537,30 +537,37 @@ def test_build_cdn_env_includes_subdomains() -> None:
     assert "CDN_SUBDOMAINS=$CDN_SUBDOMAINS" in body, "build_cdn_env 未注入 CDN_SUBDOMAINS"
 
 
-def test_cdn_speedtest_mainland_filter_params() -> None:
-    """大陆优选门槛：cfst 调用须支持 -tll(延迟下限)/-tlr(丢包率)/-dt(下载时长)，
-    且新 env 带偏向大陆的脚本内默认（开箱生效，不依赖 config.env 设置）。"""
+def test_cdn_speedtest_tiered_selection_replaces_inline_filters():
+    """门槛改由 _tier_select 后处理:cfst 主测速调用不再传 -tll/-tlr/-tl/-sl;
+    新 env 默认在位;严格/软/最优三层 + 判活线齐全。"""
     src = _CDN.read_text(encoding="utf-8")
-    assert "${SPEED_TEST_LATENCY_MIN:-40}" in src, "缺 -tll 大陆默认(SPEED_TEST_LATENCY_MIN=40)"
-    assert "${SPEED_TEST_LOSS_MAX:-0.2}" in src, "缺 -tlr 大陆默认(SPEED_TEST_LOSS_MAX=0.2)"
-    assert "${SPEED_TEST_DL_TIME:-10}" in src, "缺 -dt 下载时长(SPEED_TEST_DL_TIME=10)"
-    assert "${SPEED_TEST_CN_FALLBACK:-1}" in src, "缺筛空回退开关默认(SPEED_TEST_CN_FALLBACK=1)"
-    for flag in ("-tll", "-tlr", "-dt", "-tl", "-sl"):
-        assert f"{flag} " in src or f"{flag}=" in src, f"cfst 调用缺 {flag}"
-    # -t 注释纠正：标为「延迟测速次数」（原误标「下载测速时间」）
-    assert "延迟测速次数" in src, "-t 注释应纠正为「延迟测速次数」"
-
-
-def test_cdn_speedtest_empty_result_fallback() -> None:
-    """筛空回退兜底：严苛门槛(tll/tlr)未筛出 IP 时须放宽（无 tll/tlr）重测一轮，避免本轮无 IP
-    可用；SPEED_TEST_CN_FALLBACK=0 时不回退、直接失败。两轮共用抽出的 _run_cfst。"""
-    src = _CDN.read_text(encoding="utf-8")
-    assert "_run_cfst()" in src, "缺少抽出的 _run_cfst（供两轮复用）"
+    # 新 env 默认
+    assert "${SPEED_TEST_SOFT_LATENCY_MAX:-150}" in src
+    assert "${SPEED_TEST_SOFT_MIN_SPEED:-2}" in src
+    assert "${SPEED_TEST_ALIVE_MIN_SPEED:-1}" in src
+    # 沿用的大陆门槛 env 仍作为 _tier_select 入参保留
+    assert "${SPEED_TEST_LATENCY_MIN:-40}" in src
+    assert "${SPEED_TEST_LOSS_MAX:-0.2}" in src
+    assert "${SPEED_TEST_MIN_SPEED:-5}" in src
+    # 主测速 cfst 调用为无门槛单跑(不内联 -tll/-tlr/-sl/-tl)
     rs = src[src.index("run_speedtest()"):src.index("\n}\n", src.index("run_speedtest()"))]
-    assert "_run_cfst $_cn_filter" in rs, "第一轮须带大陆门槛 _cn_filter"
-    assert '[ "$SPEED_TEST_CN_FALLBACK" = "1" ] && _run_cfst' in rs, "回退须受 CN_FALLBACK 守卫并放宽重测"
-    assert '[ "$SPEED_TEST_LATENCY_MIN" != "0" ]' in rs, "tll=0 须视为关闭下限"
-    assert "restore_proxy_env" in rs, "两轮后须保留单一代理环境恢复点"
+    main_cfst = rs[rs.index("rm -f result.csv"):]
+    for flag in ("-tll", "-tlr", "-sl", "-tl "):
+        assert flag not in main_cfst.split("restore_proxy_env")[0], f"主测速不应内联 {flag}"
+    assert "_tier_select result.csv" in rs
+    assert "_probe_ip" in rs and "_decide" in rs
+
+
+def test_cdn_speedtest_never_empty_and_keep_cached():
+    """永不为空兜底:run 分支据 _decide 的 ACTION 落地(update/keep/fail);
+    历史 IP 活+测速空 → keep(不报错);均失效 → fail 保留 hosts。"""
+    src = _CDN.read_text(encoding="utf-8")
+    assert "_run_cfst" not in src, "旧两轮 _run_cfst 结构应已移除"
+    run_case = src[src.index("        run)"):src.index("        install)")]
+    for token in ("update_hosts", "ensure_hosts_present", "exit 1"):
+        assert token in run_case, f"run 分支缺 ACTION 落地:{token}"
+    assert "best_ip=$(run_speedtest) || exit 1" not in src, "失败语义改由 ACTION=fail 承载"
+    assert 'act=$(printf' in run_case or "cut -d'|' -f1" in run_case
 
 
 def test_build_cdn_env_forwards_mainland_params() -> None:
@@ -642,9 +649,8 @@ def test_embedded_speedtest_trap_recovery() -> None:
     # 子 shell 陷阱：run_speedtest 经 $() 执行，父进程必须有独立 trap（含杀残留 cfst）
     assert "测速父进程被中断" in embedded, "main() run 分支缺父进程 trap"
     assert "pkill -x cfst" in embedded, "父进程 trap 应清理残留 cfst"
-    # 用唯一的实际代码行（含 ``|| exit 1``）定位命令替换；裸字符串 best_ip=$(run_speedtest)
-    # 在上方 stderr 诊断注释里也出现，naive .index() 会误命中注释而非真正的命令替换。
-    assert embedded.index("测速父进程被中断") < embedded.index("best_ip=$(run_speedtest) || exit 1"), (
+    # action=$(run_speedtest) 在源文件中只出现一次(run 分支)，naive .index() 不会误命中。
+    assert embedded.index("测速父进程被中断") < embedded.index("action=$(run_speedtest)"), (
         "父 trap 须先于命令替换安装"
     )
     # 恢复函数不得依赖子 shell 局部变量；OpenClash 恢复须锁串行 + 无条件 restart
