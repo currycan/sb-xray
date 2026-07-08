@@ -1,6 +1,6 @@
 {
   "shoutrrr": "0.8.0",
-  "mihomo": "1.19.27",
+  "mihomo": "1.19.28",
   "http_meta": "1.1.0",
   "sub_store_frontend": "2.28.5",
   "sub_store_frontend_sha": "95b064b135582d6ce1ec1af54e5fabcb1818c32a",
@@ -15,8 +15,8 @@
   "acme_sh": "3.1.3",
   "acme_sh_sha256": "efd12b265252f8875269960b6b31830731ccce2b3e6ff8e7ecfbee21fde35ab4",
   "digests": {
-    "mihomo_amd64_sha256": "36850c946615f5c712946b62dbbbd06f6941d6d8a7543b315198bcb24ada3ea9",
-    "mihomo_arm64_sha256": "87db0c6660a9557a901b5750f997967e71d8c0af07ea1d1dd4d04c28da7f7e6f",
+    "mihomo_amd64_sha256": "70d01cfb8cb7bf7a92fd1af16cb4b9553d90bb4eecde3b5c4849103e27c80ddb",
+    "mihomo_arm64_sha256": "2474450cd1c41dfa53036a54a4e85579f493d3af524d86c3d4b8e2b240b56cd2",
     "http_meta_bundle_sha256": "9d2201d3c56c8aba404315ffdecd773dc7be6bd46e61d8cdf568d081d234acf2",
     "http_meta_tpl_sha256": "6f3ecf199ae9a5014b0090a46b0dfc16c64e4fc45350880726a56ecb652dd16c",
     "sub_store_backend_sha256": "0e938f3f5010011cf06a145e56b6ddef3ed9cc8473fea3f77545c634e0e3efee",
