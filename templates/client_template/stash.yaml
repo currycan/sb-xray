@@ -22,7 +22,7 @@ BaseCH:         &BaseCH   {type: load-balance, interval: 180, tolerance: 300,  l
 BaseCR:         &BaseCR   {type: load-balance, interval: 180, tolerance: 300,  lazy: true, url: "https://www.gstatic.com/generate_204", strategy: round-robin, hidden: true}
 BaseUT:         &BaseUT   {type: url-test,     interval: 180, tolerance: 300,  lazy: true, url: "https://www.gstatic.com/generate_204"}
 MediaUT:        &MediaUT  {type: url-test,     interval: 180, tolerance: 1000, lazy: true, url: "https://www.gstatic.com/generate_204"}
-StableUT:       &StableUT {type: url-test,     interval: 180, tolerance: 800,  lazy: true, url: "https://www.gstatic.com/generate_204"}
+StableUT:       &StableUT {type: url-test,     interval: 180, tolerance: 2500,  lazy: true, url: "https://www.gstatic.com/generate_204"}
 
 # 全部节点筛选正则表达式 - 所有节点
 FilterALL:      &FilterALL "^(?!.*(❗|群(?!岛)|邀请|返利|循环|官网|客服|网站|网址|获取|订阅|流量|到期|机场|下次|版本|官址|过期|已用|联系|邮箱|工单|贩卖|通知|倒卖|防止|国内|地址|频道|无法|说明|使用|提示|特别|访问|支持|教程|关注|更新|作者|加入|套餐|有效|剩余|失联|测试|官方|学术|更快|如果|客户|距离|Traffic|Reset|Days|Left|TEST|USE|USED|TOTAL|EXPIRE|EMAIL|Panel|Channel|Author|\\d+\\s*GB))"
