@@ -9,7 +9,7 @@
   "cloudflared": "2026.10.7",
   "x_ui": "3.11.0",
   "sing_box": "1.14.4",
-  "xray": "26.10.29",
+  "xray": "26.10.31",
   "crypctl": "v26.2.6+fe6a800",
   "crypctl_sha": "fe6a8008124474f9c85f9375358e3cc8ee3489e4",
   "acme_sh": "3.1.3",
