@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -948,11 +949,10 @@ def test_cn_exit_mode_balance_noop_without_host(env: Path, tmp_path: Path) -> No
     assert cn_ip["outboundTag"] == "block"
 
 
-def test_resolve_dufs_permissions_defaults_fail_closed(
+def test_resolve_dufs_permissions_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A4: 未设 DUFS_ALLOW_* 时必须 fail-closed(全 false),
-    避免渲染出字面量 ${DUFS_ALLOW_UPLOAD} 这种非法 yaml,也避免默认放开。"""
+    """未设 DUFS_* 时:认证后可上传/删除/打包;allow-all、symlink、CORS 保持关闭。"""
     for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_UPLOAD", "DUFS_ALLOW_DELETE",
               "DUFS_ALLOW_SEARCH", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE",
               "DUFS_ENABLE_CORS", "DUFS_RENDER_INDEX", "DUFS_RENDER_TRY_INDEX",
@@ -960,10 +960,11 @@ def test_resolve_dufs_permissions_defaults_fail_closed(
         monkeypatch.delenv(k, raising=False)
     cb._resolve_dufs_permissions()
     assert os.environ["DUFS_ALLOW_ALL"] == "false"
-    assert os.environ["DUFS_ALLOW_UPLOAD"] == "false"
-    assert os.environ["DUFS_ALLOW_DELETE"] == "false"
+    assert os.environ["DUFS_ALLOW_UPLOAD"] == "true"
+    assert os.environ["DUFS_ALLOW_DELETE"] == "true"
     assert os.environ["DUFS_ALLOW_SYMLINK"] == "false"
-    assert os.environ["DUFS_ALLOW_ARCHIVE"] == "false"
+    assert os.environ["DUFS_ALLOW_ARCHIVE"] == "true"
+    assert os.environ["DUFS_ENABLE_CORS"] == "false"
     # 只读浏览必需项保持安全的可用默认
     assert os.environ["DUFS_ALLOW_SEARCH"] == "true"
     assert os.environ["DUFS_COMPRESS"] == "low"
@@ -972,28 +973,28 @@ def test_resolve_dufs_permissions_defaults_fail_closed(
 def test_resolve_dufs_permissions_respects_explicit_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """显式设置必须原样保留(运维可按需放开);未设键必须仍 fail-closed(防进程级 env 渗漏)。"""
+    """显式设置必须原样保留(运维可收紧);未设键取镜像默认。"""
     # 明确清除未显式设置的权限键,防止进程级 env 渗漏干扰断言
     for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE", "DUFS_ENABLE_CORS"):
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("DUFS_ALLOW_UPLOAD", "true")
-    monkeypatch.setenv("DUFS_ALLOW_DELETE", "true")
+    monkeypatch.setenv("DUFS_ALLOW_UPLOAD", "false")
+    monkeypatch.setenv("DUFS_ALLOW_DELETE", "false")
     cb._resolve_dufs_permissions()
     # 显式设置的键保留原值
-    assert os.environ["DUFS_ALLOW_UPLOAD"] == "true"
-    assert os.environ["DUFS_ALLOW_DELETE"] == "true"
-    # 未显式设置的写权限必须 fail-closed,不受其他测试 env 渗漏影响
+    assert os.environ["DUFS_ALLOW_UPLOAD"] == "false"
+    assert os.environ["DUFS_ALLOW_DELETE"] == "false"
+    # 未显式设置的键取镜像默认,不受其他测试 env 渗漏影响
     assert os.environ["DUFS_ALLOW_ALL"] == "false"
     assert os.environ["DUFS_ALLOW_SYMLINK"] == "false"
-    assert os.environ["DUFS_ALLOW_ARCHIVE"] == "false"
+    assert os.environ["DUFS_ALLOW_ARCHIVE"] == "true"
     assert os.environ["DUFS_ENABLE_CORS"] == "false"
 
 
-def test_dufs_conf_renders_fail_closed_defaults(
+def test_dufs_conf_renders_defaults(
     env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """conf.yml 模板经 _resolve_dufs_permissions + _envsubst 渲染后,
-    写权限全 false,且无残留字面量 ${...} 占位符。"""
+    可上传/删除/打包、高危项关闭、只监听回环,且无残留字面量 ${...} 占位符。"""
     for k in ("DUFS_ALLOW_ALL", "DUFS_ALLOW_UPLOAD", "DUFS_ALLOW_DELETE",
               "DUFS_ALLOW_SEARCH", "DUFS_ALLOW_SYMLINK", "DUFS_ALLOW_ARCHIVE",
               "DUFS_ENABLE_CORS", "DUFS_RENDER_INDEX", "DUFS_RENDER_TRY_INDEX",
@@ -1003,13 +1004,29 @@ def test_dufs_conf_renders_fail_closed_defaults(
     cb._resolve_dufs_permissions()
     src = Path("templates/dufs/conf.yml")
     rendered = cb._envsubst(src.read_text(encoding="utf-8"))
-    assert "allow-upload: false" in rendered
-    assert "allow-delete: false" in rendered
+    assert "allow-upload: true" in rendered
+    assert "allow-delete: true" in rendered
+    assert "allow-archive: true" in rendered
+    assert "bind: 127.0.0.1" in rendered
     assert "allow-symlink: false" in rendered
     assert "allow-all: false" in rendered
     # 无残留未解析占位符
     assert "${DUFS_ALLOW" not in rendered
     assert "${DUFS_RENDER" not in rendered
+
+
+def test_dufs_dockerfile_env_matches_python_defaults() -> None:
+    """dufs 原生读 DUFS_* 且 env 优先于 conf.yml:Dockerfile ENV 必须与
+    Python 兜底一致,且绑定回环,否则 conf.yml 的 bind 被覆盖、端口暴露公网。"""
+    dockerfile = Path(__file__).parent.parent / "Dockerfile"
+    image_env = dict(
+        re.findall(r'^ENV (DUFS_\w+)="(.*)"$', dockerfile.read_text(encoding="utf-8"), re.M)
+    )
+    assert image_env["DUFS_BIND"] == "127.0.0.1"
+    for key, default in cb._DUFS_PERMISSION_DEFAULTS.items():
+        # 空 ENV 由 Python 兜底填充(DUFS_LOG_FORMAT)
+        if image_env[key]:
+            assert image_env[key] == default, key
 
 
 def test_dufs_conf_logformat_tokens_survive_literally(

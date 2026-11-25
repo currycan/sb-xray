@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed（变更）
+
+- **Dufs 默认可管理文件，且只监听回环**：镜像内默认 `DUFS_ALLOW_UPLOAD` / `DUFS_ALLOW_DELETE` / `DUFS_ALLOW_ARCHIVE` 由 `false` 改为 `true`，认证后可直接上传、删除、打包下载；`DUFS_ALLOW_ALL` / `DUFS_ALLOW_SYMLINK` / `DUFS_ENABLE_CORS` 仍为 `false`。`DUFS_BIND` 由 `0.0.0.0` 改为 `127.0.0.1`：原值会压过 `conf.yml` 的 `bind`，使随机端口可绕过 nginx 以明文 HTTP 直连。无需修改 compose；需只读时显式设对应变量为 `false`。
+
 ### Removed（移除）
 
 - **删除 `GEMINI_DIRECT` 环境变量**：该变量是 A 类账号敏感路由里唯一的 per-service 手动覆盖开关（仅作用于 Gemini：`true`=强制直连、`false`=强制回退、空=走默认判定），ChatGPT/Claude/社交/TikTok 均无对应开关，属不对称特例。删除后 `check_gemini()` 与其余 A 类服务一致，统一走 `_account_sensitive()` 默认判定（住宅 IP→direct，其余→住宅代理回退）。落点：`scripts/sb_xray/routing/media.py`（移除 L0 覆盖分支与决策链 L0 注释，剩余短路链从 L1 起编号）、`Dockerfile` / `docker-compose.yml`（移除 env 默认）、`tests/test_routing_media.py`（移除两条覆盖专属用例，Gemini 仍由 A 类参数化测试全覆盖）、docs/01·03·04 与 readme 同步。**行为影响**：默认部署（`GEMINI_DIRECT` 空）零变化；仅对曾显式设 `true`/`false` 钉死 Gemini 走向的部署生效——覆盖失效，Gemini 退回自动判定。**watchtower 漂移契约（CLAUDE.md §2）**：变量原有镜像内默认兜底，删除后新镜像忽略容器残留的该 env，不触发崩溃；属镜像内默认生效，不需 `requires-compose-sync`。

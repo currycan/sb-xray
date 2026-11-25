@@ -198,45 +198,26 @@ docker exec -it sb-xray bash
 |:---|:---|:---|
 | `DUFS_PATH_PREFIX` | `/dufs` | URL 前缀 |
 | `DUFS_SERVE_PATH` | `/data` | 文件存储根目录 |
-| `DUFS_ALLOW_UPLOAD` | `false` | 允许上传文件（注：clap 布尔 `false` 被当「未提供」、被 `conf.yml` 的 `allow-all: true` 盖过 → 实际不生效，详见下方 dufs 深挖）；dufs 由 `-a` HTTP Basic Auth（`PUBLIC_USER`/`PUBLIC_PASSWORD`）把守，访问面收紧见 docs/02 §1.15 |
-| `DUFS_ALLOW_DELETE` | `false` | 允许删除文件；**镜像内默认关闭** |
-| `DUFS_ALLOW_SYMLINK` | `false` | 允许跟随符号链接；**镜像内默认关闭**（防止 serve-path 内的 symlink 越界读取宿主文件） |
-| `DUFS_ALLOW_ARCHIVE` | `false` | 允许打包下载目录；**镜像内默认关闭** |
+| `DUFS_BIND` | `127.0.0.1` | 监听地址；仅供同容器 nginx 反代访问，端口不对公网暴露 |
+| `DUFS_ALLOW_ALL` | `false` | 一次性放开全部操作；**镜像内默认关闭**，由下列细分开关控制 |
+| `DUFS_ALLOW_UPLOAD` | `true` | 允许上传文件 |
+| `DUFS_ALLOW_DELETE` | `true` | 允许删除文件；与上传同时开启时可移动/重命名/覆盖 |
+| `DUFS_ALLOW_ARCHIVE` | `true` | 允许打包下载目录 |
+| `DUFS_ALLOW_SEARCH` | `true` | 允许搜索文件 |
+| `DUFS_ALLOW_SYMLINK` | `false` | 允许跟随指向根目录之外的符号链接；**镜像内默认关闭**（防止越界读取） |
 | `DUFS_ENABLE_CORS` | `false` | 放开跨域（CORS）；**镜像内默认关闭**（开启后任意网页可发起跨源请求） |
+
+> 📘 **默认姿态**：所有请求须经 HTTP Basic Auth（`PUBLIC_USER` / `PUBLIC_PASSWORD`）。认证后可直接管理文件，因此面板凭据泄漏意味着 `DUFS_SERVE_PATH` 下的文件可被读取、修改和删除。
+
+> 🔧 **改回只读**：在 compose 的 `environment` 中显式设 `DUFS_ALLOW_UPLOAD=false`、`DUFS_ALLOW_DELETE=false`（按需加 `DUFS_ALLOW_ARCHIVE=false`），再执行 `docker compose up -d`。仅 `restart` 不会载入新环境变量。
 
 🔬 **深挖：Dufs 配置来源与 `DUFS_*` env 优先级**
 
-Dufs 进程由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USER}:${PUBLIC_PASSWORD}@/:rw` 启动（`templates/supervisord/daemon.ini`），既加载 `templates/dufs/conf.yml` 配置文件，又（dufs 二进制原生）读取 `DUFS_` 前缀环境变量。`conf.yml` 里若干开关**硬编码为 `true`**，有明确安全含义：
+Dufs 由 supervisord 用 `dufs -c ${WORKDIR}/dufs/conf.yml -a ${PUBLIC_USER}:${PUBLIC_PASSWORD}@/:rw` 启动（`templates/supervisord/daemon.ini`），既加载 `conf.yml`，又原生读取 `DUFS_` 前缀环境变量。`@/:rw` 授予账号读写资格，具体操作仍受 `DUFS_ALLOW_*` 限制。
 
-| `conf.yml` 字段 | 值 | 安全含义 |
-|:---|:---|:---|
-| `allow-all` | `true` | 同时放开上传/删除/搜索/打包等全部操作 |
-| `allow-symlink` | `true` | 允许跟随符号链接 —— 若 `serve-path` 内存在指向 `serve-path` 之外的 symlink，访问者可越界读取宿主文件 |
-| `enable-cors` | `true` | 放开跨域，任意网页可发起跨源请求访问该文件服务 |
-| `render-spa` | `true` | 以单页应用方式渲染目录 |
-
-> ⚠️ **优先级实测结论(生产容器内 dufs 0.46.0,受控 A/B + 控制组 + bind 双向交叉验证):dufs 取 `命令行 > 环境变量 > config 文件 > 内置默认`,`DUFS_` 环境变量严格优先于 `conf.yml`。** 用 `bind` 字段可干净判决:`conf=0.0.0.0 + env DUFS_BIND=127.0.0.1` → 实际监听 `127.0.0.1`;反向 `conf=127.0.0.1 + env=0.0.0.0` → 监听 `0.0.0.0`——两向均 **env 赢、conf 让位**。
->
-> **但 `allow-all` 这个布尔 flag 是例外表象**:在 clap 里 `false` 等同「未提供该 flag」,无法与「显式 false」区分,于是 `false` 一方自动让位给 `true` 一方,表现得像「任一为 `true` 即放开」。实测:`env=false + conf=true` 放开、`env=true + conf=false` 放开、`env=false + conf=false`(及均缺省)拒绝(`403` 基线)。**底层仍是 env 优先,只是布尔 false 不算「提供值」**。
->
-> 因此镜像 `Dockerfile` 的 `ENV DUFS_ALLOW_ALL="false"` **关不掉 allow-all**——它给的 `false` 被当「未提供」,`conf.yml` 硬编码的 `allow-all: true` 生效,effective 值恒为 `true`。**生产 dufs 的 `allow-all` 实际处于开启状态**,前述「保守假设」由实测坐实为既成事实。
->
-> `allow-all` 只管**操作权限**(上传/删除/搜索/打包),不放开**身份认证**:启动行的 `-a ${PUBLIC_USER}:${PUBLIC_PASSWORD}@/:rw` 仍强制 HTTP Basic 认证——实测对运行实例发未认证请求,落在 `DUFS_PATH_PREFIX` 下返回 `401`。真正兜底暴露面的是「随机前缀 + Basic 认证」(见 §1.1),而非 `DUFS_ALLOW_ALL=false`。**运维结论**:① 不要依赖 `DUFS_ALLOW_ALL=false` 收紧权限(它被当「未提供」、被 conf 的 `true` 盖过),要收紧须改 `conf.yml` 的 `allow-all` 并保留 `-a` 认证 + 随机前缀;② 留意 `DUFS_BIND` env 严格压过 `conf.yml bind`——host 网络模式下若 env 设 `0.0.0.0` 会让文件服务监听全网卡(实测如此),暴露面以「随机端口 + 随机前缀 + Basic 认证」三重兜底。
->
-> <details><summary>实测方法(可复现)</summary>
->
-> 在跑着 sb-xray 容器的节点上,用容器内同一 dufs 二进制 `docker exec` 起隔离实例(绑 `127.0.0.1` 测试端口、唯一探针文件、`env -i` 精确控制变量),实验后清理:
->
-> `allow-all`(未认证 `PUT`/`DELETE` 响应码):
-> - `env=false + conf=true` → `201 / 204`(放开);`env 未设 + conf=true` → `201`(放开,证 conf 被读)
-> - `env=true + conf=false` → `201 / 204`(放开);`env 未设 + conf=false` → `403`(拒绝)
-> - `env=false + conf=false`(及均缺省)→ `403 / 403`(拒绝,基线,证 `403` 是真实拒绝而非「总是允许」)
->
-> `bind`(实际监听地址):
-> - `conf=0.0.0.0 + env=127.0.0.1` → 监听 `127.0.0.1`;`conf=127.0.0.1 + env=0.0.0.0` → 监听 `0.0.0.0`(两向 env 赢)
->
-> 判读:`bind` 双向证明 **env 严格优先**;`allow-all` 的「任一 true 即放开」是布尔 `false ≡ 未提供` 的假象,非真正的并集语义。
-> </details>
+- `conf.yml` 的权限字段由 `${DUFS_*}` 占位符渲染，两个来源同值；`config_builder._DUFS_PERMISSION_DEFAULTS` 为缺失值兜底，且与 `Dockerfile` 的 `ENV` 保持一致。
+- 优先级为 `命令行 > 环境变量 > conf.yml > 内置默认`。`DUFS_BIND` 会压过 `conf.yml` 的 `bind`，因此镜像 `ENV` 必须同样是回环地址。
+- 布尔 `false` 等同「未提供」：env 或 `conf.yml` 任一为 `true` 即放开。
 
 #### Entrypoint 日志（Python stdlib logging）
 

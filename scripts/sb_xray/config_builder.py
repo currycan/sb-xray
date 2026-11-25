@@ -597,17 +597,17 @@ def _apply_access_log_env() -> None:
     )
 
 
-# --- dufs 权限解析(A4: fail-closed 默认) ---------------------------------
+# --- dufs 权限解析 -------------------------------------------------------
 
-# 未设时的安全默认:写操作全关,只读浏览相关保持可用。Dockerfile 已声明
-# 同名 ENV(watchtower 旧 env 集也带,§2 向后兼容),此处是镜像内二次兜底,
-# 保证任何 reload 路径都不会渲染出字面量 ${DUFS_ALLOW_*} 或默认放开权限。
+# 未设时的默认:经 Basic Auth 后可上传/删除/打包;allow-all、symlink、CORS
+# 保持关闭。必须与 Dockerfile 同名 ENV 一致(dufs 原生读 env 且优先于
+# conf.yml),此处是镜像内二次兜底,避免渲染出字面量 ${DUFS_ALLOW_*}。
 _DUFS_PERMISSION_DEFAULTS: dict[str, str] = {
     "DUFS_ALLOW_ALL": "false",
-    "DUFS_ALLOW_UPLOAD": "false",
-    "DUFS_ALLOW_DELETE": "false",
+    "DUFS_ALLOW_UPLOAD": "true",
+    "DUFS_ALLOW_DELETE": "true",
     "DUFS_ALLOW_SYMLINK": "false",
-    "DUFS_ALLOW_ARCHIVE": "false",
+    "DUFS_ALLOW_ARCHIVE": "true",
     "DUFS_ALLOW_SEARCH": "true",
     "DUFS_ENABLE_CORS": "false",
     "DUFS_RENDER_INDEX": "true",
@@ -619,11 +619,11 @@ _DUFS_PERMISSION_DEFAULTS: dict[str, str] = {
 
 
 def _resolve_dufs_permissions() -> None:
-    """Fill missing ``DUFS_*`` permission vars with fail-closed defaults.
+    """Fill missing ``DUFS_*`` permission vars with image defaults.
 
     conf.yml 用 ``${DUFS_ALLOW_*}`` 占位符;``_envsubst`` 对未设变量保留
-    字面量(产出非法 yaml),且默认不应放开写权限。此处保证渲染前每个键
-    都有安全值。显式设置优先(运维可放开)。
+    字面量(产出非法 yaml)。此处保证渲染前每个键
+    都有值。显式设置优先(运维可收紧或放开)。
     """
     for key, default in _DUFS_PERMISSION_DEFAULTS.items():
         if not os.environ.get(key, "").strip():
